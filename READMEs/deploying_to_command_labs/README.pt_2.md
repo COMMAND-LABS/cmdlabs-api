@@ -26,3 +26,6 @@ gcloud beta run domain-mappings describe \
   --format="yaml(status.conditions)"
 ```
 
+## Hitting the desired domain should return a successful response if successful. 
+
+curl -I https://api.cmdlabs.io
