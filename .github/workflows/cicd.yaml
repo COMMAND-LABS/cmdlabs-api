@@ -71,9 +71,14 @@ jobs:
           gcloud auth configure-docker us-central1-docker.pkg.dev
 
       - name: Build and Push Container
+        # service.yaml references the image untagged, which Cloud Run resolves as
+        # :latest — so push that tag alongside the immutable :sha one.
         run: |-
-          docker build -f Dockerfile.prod -t "${{ env.ARTIFACTORY_URL }}:${{ github.sha }}" ./
+          docker build -f Dockerfile.prod \
+            -t "${{ env.ARTIFACTORY_URL }}:${{ github.sha }}" \
+            -t "${{ env.ARTIFACTORY_URL }}:latest" ./
           docker push "${{ env.ARTIFACTORY_URL }}:${{ github.sha }}"
+          docker push "${{ env.ARTIFACTORY_URL }}:latest"
 
       # END - Docker auth and build
 
