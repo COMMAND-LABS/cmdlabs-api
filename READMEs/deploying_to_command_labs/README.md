@@ -28,3 +28,11 @@ git push --set-upstream origin main --force
 ## Create the artifact registry for storing the built docker images
 
 - `gcloud artifacts repositories create cmdlabs-api --repository-format docker --project command-labs --location us-central1`
+
+## Add `Artifact Registry - Writer` permissions
+
+``` sh
+gcloud projects add-iam-policy-binding command-labs \
+  --member="serviceAccount:command-labs-api-cicd@command-labs.iam.gserviceaccount.com" \
+  --role="roles/artifactregistry.writer"
+```
