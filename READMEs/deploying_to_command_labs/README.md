@@ -18,4 +18,10 @@ git push --set-upstream origin main --force
 - Create a "Service Account"
 - Download JSON associated with the "Service Account"
 - Add a Repository secret called `GCP_SA` with the Service Account JSON as the value
-- 
+
+## Enable `Artifact Registry` in GCP project
+
+- `gcloud projects list`
+- `gcloud config set project command-labs`
+- `gcloud services enable artifactregistry.googleapis.com`
+
