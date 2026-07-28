@@ -26,15 +26,17 @@ if [ ! -f "$SERVICE_YAML" ]; then
 fi
 
 # Pull the secret names straight out of the spec so this can't drift from it.
-mapfile -t SECRETS < <(
+# Newline-delimited string rather than `mapfile`, which macOS bash 3.2 lacks.
+SECRETS="$(
     grep -A2 'secretKeyRef' "$SERVICE_YAML" \
-        | grep -E '^\s+name:' \
-        | sed -E 's/.*name:\s*//' \
+        | grep -E '^[[:space:]]+name:' \
+        | sed -E 's/.*name:[[:space:]]*//' \
         | tr -d '"' \
         | sort -u
-)
+)"
+SECRET_COUNT="$(printf '%s\n' "$SECRETS" | grep -c . || true)"
 
-if [ "${#SECRETS[@]}" -eq 0 ]; then
+if [ "$SECRET_COUNT" -eq 0 ]; then
     echo "ERROR: no secretKeyRef entries parsed from service.yaml" >&2
     exit 1
 fi
@@ -42,13 +44,15 @@ fi
 echo "Source project : $SRC_PROJECT"
 echo "Dest project   : $DST_PROJECT"
 echo "Runtime SA     : $RUNTIME_SA"
-echo "Secrets found  : ${#SECRETS[@]}"
+echo "Secrets found  : $SECRET_COUNT"
 [ "$DRY_RUN" = "1" ] && echo "MODE           : DRY RUN (no writes)"
 echo
 
 created=0; skipped=0; failed=0
 
-for name in "${SECRETS[@]}"; do
+while IFS= read -r name; do
+    [ -n "$name" ] || continue
+
     if gcloud secrets describe "$name" --project="$DST_PROJECT" >/dev/null 2>&1; then
         echo "  SKIP    $name (already exists in $DST_PROJECT)"
         skipped=$((skipped + 1))
@@ -74,7 +78,9 @@ for name in "${SECRETS[@]}"; do
         --data-file=- >/dev/null
     echo "  CREATED $name (${#value} bytes)"
     created=$((created + 1))
-done
+done <<EOF
+$SECRETS
+EOF
 
 echo
 echo "created=$created skipped=$skipped missing=$failed"

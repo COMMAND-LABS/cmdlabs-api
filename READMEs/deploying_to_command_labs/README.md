@@ -57,3 +57,7 @@ gcloud iam service-accounts add-iam-policy-binding 382688591561-compute@develope
   --member="serviceAccount:command-labs-api-cicd@command-labs.iam.gserviceaccount.com" \
   --role="roles/iam.serviceAccountUser"
 ```
+
+## Enable Google Secret Manager
+
+- `gcloud services enable secretmanager.googleapis.com --project=command-labs`
