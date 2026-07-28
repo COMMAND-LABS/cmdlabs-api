@@ -1,12 +1,12 @@
 apiVersion: serving.knative.dev/v1
 kind: Service
 metadata:
-  name: kalygo-fastapi-service
+  name: cmdlabs-api-service
 spec:
   template:
     spec:
       containers:
-        - image: us-central1-docker.pkg.dev/kalygo-436411/kalygo-fastapi/kalygo-fastapi
+        - image: us-central1-docker.pkg.dev/command-labs/cmdlabs-api/cmdlabs-api
           resources:
             limits:
               memory: "4Gi" # Sufficient for 100 concurrent requests with LLM operations
@@ -180,7 +180,7 @@ spec:
               value: "kalygo-kb-ingest-storage"
 
             - name: GOOGLE_CLOUD_PROJECT
-              value: "kalygo-436411"
+              value: "command-labs"
 
             # Stripe
 
