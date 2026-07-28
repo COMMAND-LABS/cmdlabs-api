@@ -50,3 +50,10 @@ gcloud projects add-iam-policy-binding command-labs \
   --role="roles/run.admin"
 ```
 
+## Add perms for SA to assume "default compute" permissions
+
+```sh
+gcloud iam service-accounts add-iam-policy-binding 382688591561-compute@developer.gserviceaccount.com \
+  --member="serviceAccount:command-labs-api-cicd@command-labs.iam.gserviceaccount.com" \
+  --role="roles/iam.serviceAccountUser"
+```
