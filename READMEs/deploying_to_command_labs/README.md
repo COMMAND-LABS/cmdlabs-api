@@ -36,3 +36,8 @@ gcloud projects add-iam-policy-binding command-labs \
   --member="serviceAccount:command-labs-api-cicd@command-labs.iam.gserviceaccount.com" \
   --role="roles/artifactregistry.writer"
 ```
+
+## Enable `Cloud Run` permissions
+
+- `gcloud services enable run.googleapis.com`
+- 
