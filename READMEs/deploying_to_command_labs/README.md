@@ -25,3 +25,6 @@ git push --set-upstream origin main --force
 - `gcloud config set project command-labs`
 - `gcloud services enable artifactregistry.googleapis.com`
 
+## Create the artifact registry for storing the built docker images
+
+- `gcloud artifacts repositories create cmdlabs-api --repository-format docker --project command-labs --location us-central1`
