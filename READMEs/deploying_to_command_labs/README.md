@@ -40,6 +40,13 @@ gcloud projects add-iam-policy-binding command-labs \
 ## Enable `Cloud Run` permissions
 
 - `gcloud services enable run.googleapis.com`
-- `gcloud projects add-iam-policy-binding command-labs \
+
+
+## Add Cloud Run Admin perms to the CICD Service Account
+
+```sh
+gcloud projects add-iam-policy-binding command-labs \
   --member="serviceAccount:command-labs-api-cicd@command-labs.iam.gserviceaccount.com" \
-  --role="roles/run.admin"`
+  --role="roles/run.admin"
+```
+
