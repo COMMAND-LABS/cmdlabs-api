@@ -129,6 +129,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 jwt_allowed_origins = [
     "https://kalygo.io",
     "https://bolay.kalygo.io",
+    "https://cmdlabs.io",
     "http://127.0.0.1:3000",
     "http://127.0.0.1:3001",
     "http://127.0.0.1:3002",
