@@ -7,6 +7,14 @@ from .service_name import ServiceName
 import datetime
 import uuid
 
+# Roles an Account can hold, ordered most → least privileged.
+# 'admin' manages the account/org, 'member' is a plain user. Enforced by a
+# CHECK constraint (not a PG enum) so the set can evolve with a plain UPDATE
+# to the constraint rather than an enum migration.
+ACCOUNT_ROLES = ('admin', 'member')
+DEFAULT_ACCOUNT_ROLE = 'member'
+
+
 class Account(Base):
     __tablename__ = 'accounts'
     id = Column(Integer, primary_key=True, index=True)
@@ -15,6 +23,10 @@ class Account(Base):
     reset_token = Column(String)
     stripe_customer_id = Column(String, nullable=True)
     newsletter_subscribed = Column(Boolean, default=False, nullable=False)
+    # See ACCOUNT_ROLES. Never settable by the account holder — role changes go
+    # through an admin path, not PUT /accounts/me.
+    role = Column(String(20), nullable=False, default=DEFAULT_ACCOUNT_ROLE,
+                  server_default=DEFAULT_ACCOUNT_ROLE, index=True)
     login_otp = Column(String, nullable=True)
     login_otp_expires_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
@@ -39,6 +51,10 @@ class Account(Base):
     email_templates = relationship('EmailTemplate', back_populates='account', cascade='all, delete-orphan')
     email_campaigns = relationship('EmailCampaign', back_populates='account', cascade='all, delete-orphan')
     email_campaign_ratings = relationship('EmailCampaignRating', back_populates='account', cascade='all, delete-orphan')
+
+    __table_args__ = (
+        CheckConstraint("role IN ('admin','member')", name='ck_accounts_role'),
+    )
 
     def __repr__(self):
         return f'<Account {self.email}>'

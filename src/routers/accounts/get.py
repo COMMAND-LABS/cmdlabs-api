@@ -28,7 +28,8 @@ async def get_account(
             id=account.id,
             email=account.email,
             newsletter_subscribed=account.newsletter_subscribed,
-            stripe_customer_id=account.stripe_customer_id
+            stripe_customer_id=account.stripe_customer_id,
+            role=account.role
         )
         
     except HTTPException:

@@ -11,6 +11,17 @@ async def test_get_me_returns_account(authed_client: AsyncClient):
     assert body["email"] == "test@example.com"
     assert body["id"] == 1
     assert "newsletter_subscribed" in body
+    assert body["role"] == "member"
+
+
+async def test_role_is_not_self_updatable(authed_client: AsyncClient):
+    """Sending a role must not change it — role is not an updatable field."""
+    response = await authed_client.put(
+        "/api/accounts/me",
+        json={"newsletter_subscribed": True, "role": "admin"},
+    )
+    assert response.status_code == 200
+    assert response.json()["role"] == "member"
 
 
 async def test_get_me_unauthenticated(client: AsyncClient):
