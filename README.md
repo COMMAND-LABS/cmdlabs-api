@@ -1,6 +1,6 @@
 # TLDR
 
-Kalygo 3.0 A.I. API (powered by FastAPI)
+COMMAND LABS API (powered by FastAPI)
 
 ## Initial setup
 
@@ -90,4 +90,4 @@ git commit --no-verify -m "..." — the standard git flag that skips all hooks
 
 ## For triggering CICD
 
-17
+18
