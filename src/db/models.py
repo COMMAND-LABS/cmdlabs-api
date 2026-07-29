@@ -8,11 +8,45 @@ import datetime
 import uuid
 
 # Roles an Account can hold, ordered most → least privileged.
-# 'admin' manages the account/org, 'member' is a plain user. Enforced by a
-# CHECK constraint (not a PG enum) so the set can evolve with a plain UPDATE
-# to the constraint rather than an enum migration.
-ACCOUNT_ROLES = ('admin', 'member')
-DEFAULT_ACCOUNT_ROLE = 'member'
+#
+#   admin   - staff. The full CRM dashboard. Never billed, and never promoted
+#             or demoted by billing.
+#   premium - a paying subscriber on the Premium plan. Held for exactly as long
+#             as Stripe reports an entitling subscription.
+#   free    - signed up, not paying. The default for every new account.
+#
+# NOTE: distinct from AccessGroupMember.role ('admin' | 'member'), which is a
+# per-group relationship and has nothing to do with billing.
+#
+# Enforced by a CHECK constraint (not a PG enum) so the set can evolve with a
+# plain UPDATE to the constraint rather than an enum migration.
+ROLE_ADMIN = 'admin'
+ROLE_PREMIUM = 'premium'
+ROLE_FREE = 'free'
+ACCOUNT_ROLES = (ROLE_ADMIN, ROLE_PREMIUM, ROLE_FREE)
+DEFAULT_ACCOUNT_ROLE = ROLE_FREE
+
+# Stripe subscription statuses that mean "this account has paid and is entitled
+# to the Premium features". Deliberately excludes past_due/unpaid/incomplete:
+# an attached card that was never successfully charged is not a paying member.
+ACTIVE_SUBSCRIPTION_STATUSES = ('active', 'trialing')
+
+
+def role_for_subscription(subscription_status: str | None, current_role: str) -> str:
+    """
+    The role an account should hold given what Stripe last said about it.
+
+    free <-> premium is derived from the subscription, never set by hand, so the
+    two can never drift: one function decides it, the webhook and the backfill
+    script both call it. Admins are staff and pass through untouched — billing
+    must never be able to demote them.
+
+    Note that a subscription set to cancel at period end is still 'active' until
+    it actually ends, so a downgrade keeps premium access for the paid-up time.
+    """
+    if current_role == ROLE_ADMIN:
+        return ROLE_ADMIN
+    return ROLE_PREMIUM if subscription_status in ACTIVE_SUBSCRIPTION_STATUSES else ROLE_FREE
 
 
 class Account(Base):
@@ -23,10 +57,25 @@ class Account(Base):
     reset_token = Column(String)
     stripe_customer_id = Column(String, nullable=True)
     newsletter_subscribed = Column(Boolean, default=False, nullable=False)
-    # See ACCOUNT_ROLES. Never settable by the account holder — role changes go
-    # through an admin path, not PUT /accounts/me.
+    # See ACCOUNT_ROLES. Never settable by the account holder: free <-> member
+    # is derived from the subscription by role_for_subscription(), and admin is
+    # granted out of band. Not settable through PUT /accounts/me either way.
     role = Column(String(20), nullable=False, default=DEFAULT_ACCOUNT_ROLE,
                   server_default=DEFAULT_ACCOUNT_ROLE, index=True)
+    # Subscription state, owned entirely by the Stripe webhook — nothing else
+    # writes these. Entitlement is read from subscription_status, never from
+    # "the customer has a payment method attached".
+    #
+    # No CHECK constraint on the status: the vocabulary belongs to Stripe and a
+    # status they add later must not start rejecting webhook writes.
+    stripe_subscription_id = Column(String, nullable=True, index=True)
+    subscription_status = Column(String(30), nullable=True, index=True)
+    subscription_current_period_end = Column(DateTime(timezone=True), nullable=True)
+    # A downgrade that has been requested but not yet taken effect: the
+    # subscription stays 'active' (and the account stays premium) until the
+    # paid-up period ends, at which point Stripe cancels it for real.
+    subscription_cancel_at_period_end = Column(Boolean, nullable=False, default=False,
+                                               server_default='false')
     login_otp = Column(String, nullable=True)
     login_otp_expires_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
@@ -53,8 +102,13 @@ class Account(Base):
     email_campaign_ratings = relationship('EmailCampaignRating', back_populates='account', cascade='all, delete-orphan')
 
     __table_args__ = (
-        CheckConstraint("role IN ('admin','member')", name='ck_accounts_role'),
+        CheckConstraint("role IN ('admin','premium','free')", name='ck_accounts_role'),
     )
+
+    @property
+    def has_active_subscription(self) -> bool:
+        """Whether this account is entitled to the paid Member features."""
+        return self.subscription_status in ACTIVE_SUBSCRIPTION_STATUSES
 
     def __repr__(self):
         return f'<Account {self.email}>'

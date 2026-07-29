@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict
 from typing import Literal, Optional
 
 
-AccountRole = Literal['admin', 'member']
+AccountRole = Literal['admin', 'premium', 'free']
 
 
 class AccountResponse(BaseModel):
@@ -15,6 +15,10 @@ class AccountResponse(BaseModel):
     newsletter_subscribed: bool
     stripe_customer_id: Optional[str] = None
     role: AccountRole
+    # Written only by the Stripe webhook. `subscription_active` is the field to
+    # gate paid features on — `subscription_status` is for display.
+    subscription_status: Optional[str] = None
+    subscription_active: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

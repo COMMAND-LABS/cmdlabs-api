@@ -74,7 +74,9 @@ async def update_account(
             email=account.email,
             newsletter_subscribed=account.newsletter_subscribed,
             stripe_customer_id=account.stripe_customer_id,
-            role=account.role
+            role=account.role,
+            subscription_status=account.subscription_status,
+            subscription_active=account.has_active_subscription
         )
         
     except HTTPException:

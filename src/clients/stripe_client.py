@@ -28,160 +28,122 @@ def create_stripe_customer(email: str) -> str:
         raise
 
 
-def get_payment_methods(customer_id: str) -> list:
-    """
-    Retrieve all payment methods for a Stripe customer.
-    
-    Args:
-        customer_id: The Stripe customer ID (e.g., 'cus_xxxxx')
-        
-    Returns:
-        List of payment method dictionaries with relevant information
-        
-    Raises:
-        stripe.error.StripeError: If Stripe API call fails
-    """
-    try:
-        payment_methods = stripe.PaymentMethod.list(
-            customer=customer_id,
-            type='card'
-        )
-        
-        formatted_methods = []
-        for pm in payment_methods.data:
-            formatted_methods.append({
-                "id": pm.id,
-                "type": pm.type,
-                "card": {
-                    "brand": pm.card.brand if pm.card else None,
-                    "last4": pm.card.last4 if pm.card else None,
-                    "exp_month": pm.card.exp_month if pm.card else None,
-                    "exp_year": pm.card.exp_year if pm.card else None,
-                } if pm.card else None,
-                "created": pm.created,
-            })
-        
-        return formatted_methods
-    except stripe.error.StripeError:
-        logger.exception("Stripe error retrieving payment methods for %s", customer_id)
-        raise
+# ---------------------------------------------------------------------------
+# Checkout + subscriptions
+#
+# Card details never reach this server: Checkout is hosted by Stripe, so the
+# API only ever handles ids. That is what keeps this service in PCI SAQ A.
+# ---------------------------------------------------------------------------
+
+MEMBER_PRICE_ID = os.getenv("STRIPE_MEMBER_PRICE_ID")
+WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 
 
-def attach_payment_method(customer_id: str, payment_method_id: str) -> dict:
-    """
-    Attach a payment method to a Stripe customer.
-    
-    Args:
-        customer_id: The Stripe customer ID (e.g., 'cus_xxxxx')
-        payment_method_id: The Stripe payment method ID (e.g., 'pm_xxxxx')
-        
-    Returns:
-        Dictionary with payment method information
-        
-    Raises:
-        stripe.error.StripeError: If Stripe API call fails
-    """
-    try:
-        payment_method = stripe.PaymentMethod.attach(
-            payment_method_id,
-            customer=customer_id,
-        )
-        
-        return {
-            "id": payment_method.id,
-            "type": payment_method.type,
-            "card": {
-                "brand": payment_method.card.brand if payment_method.card else None,
-                "last4": payment_method.card.last4 if payment_method.card else None,
-                "exp_month": payment_method.card.exp_month if payment_method.card else None,
-                "exp_year": payment_method.card.exp_year if payment_method.card else None,
-            } if payment_method.card else None,
-            "created": payment_method.created,
-        }
-    except stripe.error.StripeError:
-        logger.exception("Stripe error attaching payment method %s to %s", payment_method_id, customer_id)
-        raise
-
-
-def create_payment_method_from_card(
-    card_number: str,
-    exp_month: int,
-    exp_year: int,
-    cvv: str,
-    cardholder_name: str = None,
-    billing_zip: str = None
+def create_subscription_checkout_session(
+    customer_id: str,
+    account_id: int,
+    success_url: str,
+    cancel_url: str,
+    price_id: str = None,
 ) -> dict:
     """
-    Create a Stripe payment method from card details.
-    
+    Open a Stripe Checkout session in subscription mode for one account.
+
     Args:
-        card_number: The card number (without spaces)
-        exp_month: Expiration month (1-12)
-        exp_year: Expiration year (4 digits)
-        cvv: Card security code
-        cardholder_name: Name on the card (optional)
-        billing_zip: Billing ZIP code (optional)
-        
+        customer_id: The account's Stripe customer ('cus_xxxxx'), so the
+            subscription attaches to the customer we already created at signup
+        account_id: Our account id, echoed back on the webhook as
+            client_reference_id — this is how the webhook finds the account
+        success_url / cancel_url: Where Stripe returns the buyer
+        price_id: Recurring price to bill; defaults to STRIPE_MEMBER_PRICE_ID
+
     Returns:
-        Dictionary with payment method information including the payment method ID
-        
+        {"id": <session id>, "url": <hosted checkout url>}
+
     Raises:
-        stripe.error.StripeError: If Stripe API call fails
+        ValueError: If no price id is configured
+        stripe.error.StripeError: If the Stripe API call fails
     """
+    price = price_id or MEMBER_PRICE_ID
+    if not price:
+        raise ValueError("STRIPE_MEMBER_PRICE_ID is not configured")
+
     try:
-        payment_method_data = {
-            "type": "card",
-            "card": {
-                "number": card_number,
-                "exp_month": exp_month,
-                "exp_year": exp_year,
-                "cvc": cvv,
-            }
-        }
-        
-        billing_details = {}
-        if cardholder_name:
-            billing_details["name"] = cardholder_name
-        if billing_zip:
-            billing_details["address"] = {"postal_code": billing_zip}
-        
-        if billing_details:
-            payment_method_data["billing_details"] = billing_details
-        
-        payment_method = stripe.PaymentMethod.create(**payment_method_data)
-        
-        return {
-            "id": payment_method.id,
-            "type": payment_method.type,
-            "card": {
-                "brand": payment_method.card.brand if payment_method.card else None,
-                "last4": payment_method.card.last4 if payment_method.card else None,
-                "exp_month": payment_method.card.exp_month if payment_method.card else None,
-                "exp_year": payment_method.card.exp_year if payment_method.card else None,
-            } if payment_method.card else None,
-            "created": payment_method.created,
-        }
+        session = stripe.checkout.Session.create(
+            mode="subscription",
+            customer=customer_id,
+            line_items=[{"price": price, "quantity": 1}],
+            # Echoed back on checkout.session.completed. Carried in both places
+            # so the webhook can resolve the account from the session *or* from
+            # the subscription it creates.
+            client_reference_id=str(account_id),
+            subscription_data={"metadata": {"account_id": str(account_id)}},
+            success_url=success_url,
+            cancel_url=cancel_url,
+            allow_promotion_codes=True,
+        )
+        return {"id": session.id, "url": session.url}
     except stripe.error.StripeError:
-        logger.exception("Stripe error creating payment method")
+        logger.exception("Stripe error creating checkout session for account %s", account_id)
         raise
 
 
-def detach_payment_method(payment_method_id: str) -> bool:
+def construct_webhook_event(payload: bytes, signature_header: str):
     """
-    Detach a payment method from a customer.
-    
-    Args:
-        payment_method_id: The Stripe payment method ID (e.g., 'pm_xxxxx')
-        
-    Returns:
-        True if successful
-        
+    Verify a webhook payload against STRIPE_WEBHOOK_SECRET and return the event.
+
+    Verification is mandatory: the webhook endpoint is unauthenticated and
+    grants paid access, so an unverified payload is an open door to free
+    memberships.
+
     Raises:
-        stripe.error.StripeError: If Stripe API call fails
+        ValueError: If the secret is missing or the payload is malformed
+        stripe.error.SignatureVerificationError: If the signature does not match
+    """
+    if not WEBHOOK_SECRET:
+        raise ValueError("STRIPE_WEBHOOK_SECRET is not configured")
+    return stripe.Webhook.construct_event(payload, signature_header, WEBHOOK_SECRET)
+
+
+def get_subscription(subscription_id: str):
+    """Retrieve one subscription. Raises stripe.error.StripeError on failure."""
+    try:
+        return stripe.Subscription.retrieve(subscription_id)
+    except stripe.error.StripeError:
+        logger.exception("Stripe error retrieving subscription %s", subscription_id)
+        raise
+
+
+def create_billing_portal_session(customer_id: str, return_url: str) -> str:
+    """
+    Open a Stripe billing-portal session so a member can update their card or
+    cancel without any subscription-management UI existing here.
     """
     try:
-        stripe.PaymentMethod.detach(payment_method_id)
-        return True
+        session = stripe.billing_portal.Session.create(
+            customer=customer_id,
+            return_url=return_url,
+        )
+        return session.url
     except stripe.error.StripeError:
-        logger.exception("Stripe error detaching payment method %s", payment_method_id)
+        logger.exception("Stripe error creating billing portal session for %s", customer_id)
+        raise
+
+
+def set_subscription_cancel_at_period_end(subscription_id: str, cancel: bool):
+    """
+    Schedule (or call off) a downgrade at the end of the paid-up period.
+
+    Deliberately not an immediate cancellation: the member has paid through the
+    end of the cycle, so they keep Premium until then. Stripe reports the
+    subscription as 'active' the whole time and emits
+    customer.subscription.deleted when it actually ends, which is what demotes
+    the account to free.
+    """
+    try:
+        return stripe.Subscription.modify(subscription_id, cancel_at_period_end=cancel)
+    except stripe.error.StripeError:
+        logger.exception(
+            "Stripe error setting cancel_at_period_end=%s on %s", cancel, subscription_id
+        )
         raise
