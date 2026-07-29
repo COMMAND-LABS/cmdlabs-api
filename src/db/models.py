@@ -41,8 +41,8 @@ def role_for_subscription(subscription_status: str | None, current_role: str) ->
     script both call it. Admins are staff and pass through untouched — billing
     must never be able to demote them.
 
-    Note that a subscription set to cancel at period end is still 'active' until
-    it actually ends, so a downgrade keeps premium access for the paid-up time.
+    Cancellation is immediate rather than at period end, so a downgrade demotes
+    on the same request — entitlement never waits on a later webhook.
     """
     if current_role == ROLE_ADMIN:
         return ROLE_ADMIN
@@ -71,11 +71,6 @@ class Account(Base):
     stripe_subscription_id = Column(String, nullable=True, index=True)
     subscription_status = Column(String(30), nullable=True, index=True)
     subscription_current_period_end = Column(DateTime(timezone=True), nullable=True)
-    # A downgrade that has been requested but not yet taken effect: the
-    # subscription stays 'active' (and the account stays premium) until the
-    # paid-up period ends, at which point Stripe cancels it for real.
-    subscription_cancel_at_period_end = Column(Boolean, nullable=False, default=False,
-                                               server_default='false')
     login_otp = Column(String, nullable=True)
     login_otp_expires_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)

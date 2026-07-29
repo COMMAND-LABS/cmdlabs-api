@@ -217,12 +217,12 @@ async def test_checkout_session_without_price_configured(
 # Downgrade / resume
 # ---------------------------------------------------------------------------
 
-async def test_downgrade_schedules_cancellation_at_period_end(
+async def test_downgrade_cancels_immediately(
     authed_client: AsyncClient, test_account: Account, db: Session
 ):
     """
-    A downgrade must not revoke access immediately — they paid through the end
-    of the cycle, so the role stays premium until Stripe actually ends it.
+    Cancelling demotes in this request, not on a later webhook — a dropped
+    event must never leave someone on Premium for free.
     """
     test_account.role = "premium"
     test_account.stripe_subscription_id = "sub_test1"
@@ -230,44 +230,66 @@ async def test_downgrade_schedules_cancellation_at_period_end(
     db.flush()
 
     with patch(
-        "src.routers.billing.checkout.set_subscription_cancel_at_period_end",
-        return_value={"id": "sub_test1", "cancel_at_period_end": True},
+        "src.routers.billing.checkout.cancel_subscription_now",
+        return_value={"id": "sub_test1", "status": "canceled"},
     ) as mock_cancel:
         response = await authed_client.post("/api/billing/downgrade")
 
     assert response.status_code == 200
     body = response.json()
-    assert body["cancel_at_period_end"] is True
-    assert body["active"] is True
-    mock_cancel.assert_called_once_with("sub_test1", True)
+    assert body["active"] is False
+    assert body["status"] == "canceled"
+    mock_cancel.assert_called_once_with("sub_test1")
     db.refresh(test_account)
-    assert test_account.subscription_cancel_at_period_end is True
-    # Still premium — the downgrade has been scheduled, not applied.
-    assert test_account.role == "premium"
-    assert test_account.has_active_subscription is True
+    assert test_account.role == "free"
+    assert test_account.has_active_subscription is False
 
 
-async def test_resume_calls_off_a_scheduled_downgrade(
+async def test_downgrade_never_demotes_an_admin(
     authed_client: AsyncClient, test_account: Account, db: Session
 ):
-    test_account.role = "premium"
+    """Staff keep the CRM dashboard even after cancelling a subscription."""
+    test_account.role = "admin"
     test_account.stripe_subscription_id = "sub_test1"
     test_account.subscription_status = "active"
-    test_account.subscription_cancel_at_period_end = True
     db.flush()
 
     with patch(
-        "src.routers.billing.checkout.set_subscription_cancel_at_period_end",
-        return_value={"id": "sub_test1", "cancel_at_period_end": False},
-    ) as mock_resume:
-        response = await authed_client.post("/api/billing/resume")
+        "src.routers.billing.checkout.cancel_subscription_now",
+        return_value={"id": "sub_test1", "status": "canceled"},
+    ):
+        response = await authed_client.post("/api/billing/downgrade")
 
     assert response.status_code == 200
-    assert response.json()["cancel_at_period_end"] is False
-    mock_resume.assert_called_once_with("sub_test1", False)
     db.refresh(test_account)
-    assert test_account.subscription_cancel_at_period_end is False
-    assert test_account.role == "premium"
+    assert test_account.role == "admin"
+
+
+async def test_downgrade_then_resubscribe(
+    authed_client: AsyncClient, test_account: Account, db: Session
+):
+    """After cancelling, checkout must be available again straight away."""
+    test_account.role = "premium"
+    test_account.stripe_customer_id = "cus_test123"
+    test_account.stripe_subscription_id = "sub_test1"
+    test_account.subscription_status = "active"
+    db.flush()
+
+    # While subscribed, checkout is refused.
+    assert (await authed_client.post("/api/billing/checkout-session")).status_code == 409
+
+    with patch(
+        "src.routers.billing.checkout.cancel_subscription_now",
+        return_value={"id": "sub_test1", "status": "canceled"},
+    ):
+        await authed_client.post("/api/billing/downgrade")
+
+    with patch(
+        "src.routers.billing.checkout.create_subscription_checkout_session",
+        return_value={"id": "cs_2", "url": "https://checkout.stripe.com/c/pay/cs_2"},
+    ):
+        again = await authed_client.post("/api/billing/checkout-session")
+    assert again.status_code == 200
 
 
 async def test_downgrade_without_a_subscription_is_rejected(
@@ -277,49 +299,8 @@ async def test_downgrade_without_a_subscription_is_rejected(
     assert response.status_code == 409
 
 
-async def test_resume_without_a_subscription_is_rejected(
-    authed_client: AsyncClient, test_account: Account
-):
-    response = await authed_client.post("/api/billing/resume")
-    assert response.status_code == 409
-
-
 async def test_downgrade_requires_auth(client: AsyncClient):
     assert (await client.post("/api/billing/downgrade")).status_code == 401
-
-
-async def test_downgrade_then_period_end_demotes_to_free(
-    client: AsyncClient, authed_client: AsyncClient, test_account: Account, db: Session
-):
-    """The full downgrade path: schedule it, then let the period actually end."""
-    test_account.role = "premium"
-    test_account.stripe_subscription_id = "sub_test1"
-    test_account.subscription_status = "active"
-    db.flush()
-
-    with patch(
-        "src.routers.billing.checkout.set_subscription_cancel_at_period_end",
-        return_value={"id": "sub_test1", "cancel_at_period_end": True},
-    ):
-        await authed_client.post("/api/billing/downgrade")
-
-    db.refresh(test_account)
-    assert test_account.role == "premium"  # still paid up
-
-    # Stripe ends it when the period runs out.
-    with patch(
-        "src.routers.billing.webhook.construct_webhook_event",
-        return_value=_subscription_event(
-            "customer.subscription.deleted", test_account.id, "canceled"
-        ),
-    ):
-        await client.post(
-            "/api/billing/webhook", content=b"{}", headers={"stripe-signature": "ok"}
-        )
-
-    db.refresh(test_account)
-    assert test_account.role == "free"
-    assert test_account.subscription_cancel_at_period_end is False
 
 
 # ---------------------------------------------------------------------------

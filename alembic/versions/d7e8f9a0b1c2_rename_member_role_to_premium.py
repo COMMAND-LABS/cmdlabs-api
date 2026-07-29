@@ -1,4 +1,4 @@
-"""Rename the 'member' account role to 'premium' and track pending downgrades
+"""Rename the 'member' account role to 'premium'
 
 Revision ID: d7e8f9a0b1c2
 Revises: c6d7e8f9a0b1
@@ -40,19 +40,8 @@ def upgrade() -> None:
     # NOTE: accounts.role only. access_group_members.role is a different
     # concept ('admin' | 'member' within one group) and is left alone.
 
-    # Whether a downgrade is scheduled. Stripe keeps the subscription 'active'
-    # until the paid-up period ends, so this is the only way to tell "premium"
-    # from "premium, but leaving".
-    op.add_column(
-        'accounts',
-        sa.Column('subscription_cancel_at_period_end', sa.Boolean(),
-                  nullable=False, server_default='false'),
-    )
-
 
 def downgrade() -> None:
-    op.drop_column('accounts', 'subscription_cancel_at_period_end')
-
     op.drop_constraint('ck_accounts_role', 'accounts', type_='check')
     op.create_check_constraint(
         'ck_accounts_role',

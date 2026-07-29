@@ -21,7 +21,5 @@ class SubscriptionResponse(BaseModel):
     status: Optional[str] = None
     active: bool
     current_period_end: Optional[str] = None
-    # A downgrade is scheduled: still Premium, but ending at current_period_end.
-    cancel_at_period_end: bool = False
 
     model_config = ConfigDict(from_attributes=True)

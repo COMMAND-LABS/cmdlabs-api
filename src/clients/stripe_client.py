@@ -130,20 +130,18 @@ def create_billing_portal_session(customer_id: str, return_url: str) -> str:
         raise
 
 
-def set_subscription_cancel_at_period_end(subscription_id: str, cancel: bool):
+def cancel_subscription_now(subscription_id: str):
     """
-    Schedule (or call off) a downgrade at the end of the paid-up period.
+    Cancel a subscription immediately.
 
-    Deliberately not an immediate cancellation: the member has paid through the
-    end of the cycle, so they keep Premium until then. Stripe reports the
-    subscription as 'active' the whole time and emits
-    customer.subscription.deleted when it actually ends, which is what demotes
-    the account to free.
+    Deliberately immediate rather than at period end: the account demotes in
+    the same request the member made, so entitlement never depends on a webhook
+    arriving weeks later. The trade-off is that unused paid time is not
+    refunded — Stripe does not refund on cancellation, so that would have to be
+    issued separately.
     """
     try:
-        return stripe.Subscription.modify(subscription_id, cancel_at_period_end=cancel)
+        return stripe.Subscription.cancel(subscription_id)
     except stripe.error.StripeError:
-        logger.exception(
-            "Stripe error setting cancel_at_period_end=%s on %s", cancel, subscription_id
-        )
+        logger.exception("Stripe error cancelling subscription %s", subscription_id)
         raise

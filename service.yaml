@@ -183,12 +183,39 @@ spec:
               value: "command-labs"
 
             # Stripe
+            #
+            # All three of these must come from the SAME Stripe account and the
+            # same mode (live, here). A key from one account with a price from
+            # another fails at checkout with "No such price"; a webhook secret
+            # from elsewhere fails signature verification, which means customers
+            # pay and are never upgraded.
 
             - name: STRIPE_SECRET_KEY
               valueFrom:
                 secretKeyRef:
                   name: STRIPE_SECRET_KEY
                   key: latest
+
+            # The live recurring price for the Premium plan (price_...). Must
+            # match the amount shown in cmdlabs-ui/src/lib/pricing.ts.
+            - name: STRIPE_MEMBER_PRICE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: STRIPE_MEMBER_PRICE_ID
+                  key: latest
+
+            # Signing secret of the live webhook endpoint registered at
+            # https://api.cmdlabs.io/api/billing/webhook (whsec_...).
+            - name: STRIPE_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: STRIPE_WEBHOOK_SECRET
+                  key: latest
+
+            # Public origin of the UI. Used to build Stripe Checkout's return
+            # URLs, so it must be the site the buyer is actually on.
+            - name: APP_BASE_URL
+              value: "https://cmdlabs.io"
 
             # Reranker
 

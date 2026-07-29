@@ -12,11 +12,12 @@ from fastapi import APIRouter, HTTPException, Request, status
 import stripe
 
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
+from src.db.models import role_for_subscription
 from src.clients.stripe_client import (
     create_billing_portal_session,
     create_stripe_customer,
     create_subscription_checkout_session,
-    set_subscription_cancel_at_period_end,
+    cancel_subscription_now,
 )
 from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
@@ -191,7 +192,6 @@ async def get_subscription_status(
             status=account.subscription_status,
             active=account.has_active_subscription,
             current_period_end=period_end.isoformat() if period_end else None,
-            cancel_at_period_end=bool(account.subscription_cancel_at_period_end),
         )
 
     except HTTPException:
@@ -208,12 +208,15 @@ async def downgrade_to_free(
     request: Request,
 ):
     """
-    Downgrade from Premium to Free at the end of the paid-up period.
+    Cancel the membership and drop to Free immediately.
 
-    Not an immediate cancellation — they paid through the end of the cycle, so
-    they keep Premium until then and the account demotes itself when Stripe
-    emits customer.subscription.deleted. Reversible until it lands, via
-    /upgrade below.
+    The role changes in this request rather than waiting for a webhook, so a
+    dropped or undelivered event can never leave someone on Premium for free.
+    Stripe also emits customer.subscription.deleted, which the webhook applies
+    on top — the same values, so it is a harmless second write and a safety net
+    if the write below failed.
+
+    Note: unused paid time is NOT refunded. Coming back is a fresh checkout.
     """
     try:
         account_id = account_id_from_claims(jwt)
@@ -222,92 +225,34 @@ async def downgrade_to_free(
         if not account.stripe_subscription_id or not account.has_active_subscription:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="This account does not have an active membership to downgrade",
+                detail="This account does not have an active membership to cancel",
             )
 
         try:
-            subscription = set_subscription_cancel_at_period_end(
-                account.stripe_subscription_id, True
-            )
+            subscription = cancel_subscription_now(account.stripe_subscription_id)
         except stripe.error.StripeError as e:
-            raise handle_db_error(e, "[STRIPE ERROR SCHEDULING DOWNGRADE]")
+            raise handle_db_error(e, "[STRIPE ERROR CANCELLING SUBSCRIPTION]")
 
-        # Mirror Stripe's answer rather than assuming it took.
-        account.subscription_cancel_at_period_end = bool(
-            subscription.get("cancel_at_period_end")
-        )
+        # Mirror what Stripe reports, then re-derive the role from it so this
+        # path and the webhook can never disagree.
+        account.subscription_status = subscription.get("status") or "canceled"
+        account.role = role_for_subscription(account.subscription_status, account.role)
         db.commit()
         db.refresh(account)
 
         logger.info(
-            "[BILLING] Account %s scheduled downgrade on subscription %s",
-            account.id, account.stripe_subscription_id,
+            "[BILLING] Account %s cancelled subscription %s -> role %s",
+            account.id, account.stripe_subscription_id, account.role,
         )
         period_end = account.subscription_current_period_end
         return SubscriptionResponse(
             status=account.subscription_status,
             active=account.has_active_subscription,
             current_period_end=period_end.isoformat() if period_end else None,
-            cancel_at_period_end=bool(account.subscription_cancel_at_period_end),
         )
 
     except HTTPException:
         raise
     except Exception as e:
         db.rollback()
-        raise handle_db_error(e, "[ERROR SCHEDULING DOWNGRADE]")
-
-
-@router.post("/resume", response_model=SubscriptionResponse)
-@limiter.limit("10/minute")
-async def resume_subscription(
-    db: db_dependency,
-    jwt: jwt_dependency,
-    request: Request,
-):
-    """
-    Call off a scheduled downgrade, keeping the existing subscription running.
-
-    Only valid while the subscription is still alive; once it has actually
-    ended, coming back is a fresh checkout rather than a resume.
-    """
-    try:
-        account_id = account_id_from_claims(jwt)
-        account = ensure_account(db, account_id)
-
-        if not account.stripe_subscription_id or not account.has_active_subscription:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="This account has no membership to resume — subscribe instead",
-            )
-
-        try:
-            subscription = set_subscription_cancel_at_period_end(
-                account.stripe_subscription_id, False
-            )
-        except stripe.error.StripeError as e:
-            raise handle_db_error(e, "[STRIPE ERROR RESUMING SUBSCRIPTION]")
-
-        account.subscription_cancel_at_period_end = bool(
-            subscription.get("cancel_at_period_end")
-        )
-        db.commit()
-        db.refresh(account)
-
-        logger.info(
-            "[BILLING] Account %s resumed subscription %s",
-            account.id, account.stripe_subscription_id,
-        )
-        period_end = account.subscription_current_period_end
-        return SubscriptionResponse(
-            status=account.subscription_status,
-            active=account.has_active_subscription,
-            current_period_end=period_end.isoformat() if period_end else None,
-            cancel_at_period_end=bool(account.subscription_cancel_at_period_end),
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[ERROR RESUMING SUBSCRIPTION]")
+        raise handle_db_error(e, "[ERROR CANCELLING SUBSCRIPTION]")

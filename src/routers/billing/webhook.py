@@ -90,9 +90,6 @@ def _apply_subscription(account: Account, subscription) -> None:
     account.subscription_current_period_end = _to_datetime(
         subscription.get("current_period_end")
     )
-    account.subscription_cancel_at_period_end = bool(
-        subscription.get("cancel_at_period_end")
-    )
     account.role = role_for_subscription(account.subscription_status, account.role)
 
 
@@ -189,8 +186,6 @@ async def stripe_webhook(
                 # — and re-derive the role from the pinned status.
                 account.subscription_status = "canceled"
                 account.role = role_for_subscription("canceled", account.role)
-                # The downgrade has landed; there is nothing left to schedule.
-                account.subscription_cancel_at_period_end = False
             db.commit()
             logger.info(
                 "[STRIPE WEBHOOK] Account %s subscription %s -> %s",
