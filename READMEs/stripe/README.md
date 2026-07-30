@@ -23,3 +23,15 @@ docker run --rm -it --network agent-network stripe/stripe-cli \
   --enabled-events customer.subscription.created \
   --enabled-events customer.subscription.updated \
   --enabled-events customer.subscription.deleted
+
+  ##
+
+  gcloud secrets add-iam-policy-binding STRIPE_MEMBER_PRICE_ID \
+  --member="serviceAccount:382688591561-compute@developer.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+
+  ##
+
+  gcloud secrets add-iam-policy-binding STRIPE_WEBHOOK_SECRET \
+  --member="serviceAccount:382688591561-compute@developer.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
