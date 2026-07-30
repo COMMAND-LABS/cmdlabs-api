@@ -1,5 +1,5 @@
 {
-  "name": "Kalygo3 AI API Dev Container",
+  "name": "COMMAND LABS API Dev Container",
   "image": "kalygo3-ai-api:latest",
   "workspaceFolder": "/code",
   "workspaceMount": "source=${localWorkspaceFolder},target=/code,type=bind,consistency=delegated",

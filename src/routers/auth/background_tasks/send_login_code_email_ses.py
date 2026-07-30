@@ -18,7 +18,7 @@ def send_login_code_email_ses(to_email: str, code: str) -> None:
             Source="noreply@kalygo.io",
             Destination={"ToAddresses": [to_email]},
             Message={
-                "Subject": {"Data": "Your Kalygo sign-in code"},
+                "Subject": {"Data": "Your COMMAND LABS sign-in code"},
                 "Body": {
                     "Html": {
                         "Data": (
@@ -30,7 +30,7 @@ def send_login_code_email_ses(to_email: str, code: str) -> None:
                     },
                     "Text": {
                         "Data": (
-                            f"Your Kalygo sign-in code is: {code}\n\n"
+                            f"Your COMMAND LABS sign-in code is: {code}\n\n"
                             f"This code expires in 10 minutes.\n"
                             f"If you did not request this, you can safely ignore this email."
                         )

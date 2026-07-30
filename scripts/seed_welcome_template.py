@@ -131,7 +131,7 @@ HTML_TEMPLATE = """\
 VARIABLES = [
     {"name": "subject",       "label": "Email subject",      "default": "Welcome to {{company_name}}"},
     {"name": "preheader",     "label": "Preheader text",     "default": "We're glad to have you here."},
-    {"name": "company_name",  "label": "Company name",       "default": "Kalygo"},
+    {"name": "company_name",  "label": "Company name",       "default": "COMMAND"},
     {"name": "first_name",    "label": "Recipient first name","default": "there"},
     {"name": "body",          "label": "Main body copy",     "default": "We're thrilled to have you with us. Click the button below to get started and explore everything we have to offer."},
     {"name": "cta_url",       "label": "CTA button URL",     "default": "https://kalygo.io"},
