@@ -15,7 +15,7 @@ def send_login_code_email_ses(to_email: str, code: str) -> None:
         )
 
         client.send_email(
-            Source="noreply@kalygo.io",
+            Source="noreply@cmdlabs.io",
             Destination={"ToAddresses": [to_email]},
             Message={
                 "Subject": {"Data": "Your COMMAND LABS sign-in code"},

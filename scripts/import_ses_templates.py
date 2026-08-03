@@ -18,8 +18,7 @@ Usage (from the kalygo3-ai-api directory):
     # Dry-run (print what would be imported without writing to DB)
     python -m scripts.import_ses_templates --all --account-id 1 --dry-run
 
-AWS credentials are read from the environment (AWS_ACCESS_KEY_ID /
-AWS_SECRET_ACCESS_KEY / AWS_DEFAULT_REGION) or from ~/.aws/credentials,
+AWS credentials are read from the environment (AWS_ACCESS_KEY_ID / AWS_DEFAULT_REGION) or from ~/.aws/credentials,
 exactly as the rest of the application expects them.
 """
 
