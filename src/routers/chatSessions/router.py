@@ -1,7 +1,7 @@
 import logging
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, status, Request, Query
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims
 from src.db.models import ChatSession, ChatMessage, Contact
 from src.services.agent_access import can_access_agent
@@ -24,7 +24,9 @@ class ChatSessionCreate(BaseModel):
     contactId: Optional[int] = None
 
 class ChatSessionUpdate(BaseModel):
-    title: Optional[str] = None
+    # Bounded so a pathological title cannot break the sidebar / list rendering.
+    # The column itself is an unbounded String; this is the product-level cap.
+    title: Optional[str] = Field(default=None, max_length=200)
 
 def to_camel(s: str) -> str:
     parts = s.split('_')
@@ -269,6 +271,66 @@ async def get_session(
         raise
     except Exception as e:
         raise handle_db_error(e, "[OPERATION]")
+
+@router.patch("/sessions/{session_id}", response_model=ChatSessionResponse)
+@limiter.limit("30/minute")
+async def update_session(
+    session_id: str,
+    payload: ChatSessionUpdate,
+    db: db_dependency,
+    jwt: jwt_dependency,
+    request: Request
+):
+    """Rename a session.
+
+    Titles are what make a session list human-readable — without one the UI can
+    only fall back to "Agent #<id>". A blank/whitespace-only title clears the
+    field back to NULL so the fallback chain takes over again, rather than
+    persisting an empty string that renders as a nameless row.
+
+    Rate-limited above the other mutations (30/min vs 10/min) because renaming
+    is a title-only UPDATE and the sessions list invites several in a row.
+    """
+    try:
+        try:
+            session_uuid = uuid.UUID(session_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid session ID format"
+            )
+
+        session = db.query(ChatSession).filter(
+            ChatSession.session_id == session_uuid,
+            ChatSession.account_id == jwt['id']
+        ).first()
+
+        if not session:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Session not found"
+            )
+
+        title = payload.title.strip() if payload.title is not None else None
+        session.title = title or None
+
+        db.commit()
+        db.refresh(session)
+
+        return {
+            "id": session.id,
+            "sessionId": session.session_id,
+            "agentId": session.agent_id,
+            "accountId": session.account_id,
+            "createdAt": session.created_at,
+            "title": session.title,
+            "contactId": session.contact_id
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise handle_db_error(e, "[UPDATE SESSION]")
 
 @router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
 @limiter.limit("10/minute")
