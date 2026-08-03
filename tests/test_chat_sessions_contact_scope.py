@@ -8,6 +8,8 @@ Covers:
   them only when an explicit contact_id is requested.
 """
 
+import uuid
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.orm import Session
@@ -87,10 +89,15 @@ async def test_get_sessions_hides_contact_bound_by_default(
 
     resp = await authed_client.get(SESSIONS_URL)
     assert resp.status_code == 200
-    sessions = resp.json()
+    body = resp.json()
+    sessions = body["sessions"]
     assert len(sessions) == 1
     assert sessions[0]["contactId"] is None
     assert sessions[0]["title"] == "general chat"
+    # The count must reflect the same scoping as the rows: the contact-bound
+    # session is excluded from `total`, not just from the returned page.
+    assert body["total"] == 1
+    assert body["has_more"] is False
 
 
 async def test_get_sessions_returns_contact_bound_when_filtered(
@@ -101,6 +108,42 @@ async def test_get_sessions_returns_contact_bound_when_filtered(
 
     resp = await authed_client.get(SESSIONS_URL, params={"contact_id": owned_contact.id})
     assert resp.status_code == 200
-    sessions = resp.json()
+    body = resp.json()
+    sessions = body["sessions"]
     assert len(sessions) == 1
     assert sessions[0]["contactId"] == owned_contact.id
+    assert body["total"] == 1
+
+
+async def test_get_sessions_paginates_with_total_and_has_more(
+    authed_client: AsyncClient, db: Session, test_account: Account
+):
+    """The envelope carries the pre-pagination total so the UI can render
+    numbered pages ("51–75 of N") instead of guessing from the page length."""
+    # Seeded directly rather than via POST: create_session is rate-limited to
+    # 10/minute and the suite shares one client address.
+    for i in range(5):
+        db.add(
+            ChatSession(
+                session_id=str(uuid.uuid4()),
+                account_id=test_account.id,
+                title=f"session {i}",
+            )
+        )
+    db.flush()
+
+    resp = await authed_client.get(SESSIONS_URL, params={"limit": 2, "offset": 0})
+    assert resp.status_code == 200
+    first = resp.json()
+    assert len(first["sessions"]) == 2
+    assert first["total"] == 5
+    assert first["limit"] == 2
+    assert first["offset"] == 0
+    assert first["has_more"] is True
+
+    resp = await authed_client.get(SESSIONS_URL, params={"limit": 2, "offset": 4})
+    assert resp.status_code == 200
+    last = resp.json()
+    assert len(last["sessions"]) == 1
+    assert last["total"] == 5
+    assert last["has_more"] is False

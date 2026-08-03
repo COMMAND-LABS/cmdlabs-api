@@ -1,6 +1,6 @@
 import logging
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, status, Request
+from fastapi import APIRouter, HTTPException, status, Request, Query
 from pydantic import BaseModel, ConfigDict
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims
 from src.db.models import ChatSession, ChatMessage, Contact
@@ -45,6 +45,19 @@ class ChatSessionResponse(BaseModel):
     createdAt: datetime
     title: Optional[str] = None
     contactId: Optional[int] = None
+
+class ChatSessionListResponse(BaseModel):
+    """Paginated envelope for the sessions list.
+
+    Mirrors the contacts/deals contract ({items, total, limit, offset,
+    has_more}) so the frontend can drive the shared PaginationFooter with a
+    real total instead of guessing from a bare array's length.
+    """
+    sessions: List[ChatSessionResponse]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
 
 class ChatSessionWithMessagesResponse(BaseModel):
     id: int
@@ -127,7 +140,7 @@ async def create_session(
         db.rollback()
         raise handle_db_error(e, "[OPERATION]")
 
-@router.get("/sessions", response_model=List[ChatSessionResponse])
+@router.get("/sessions", response_model=ChatSessionListResponse)
 @limiter.limit("30/minute")
 async def get_sessions(
     db: db_dependency,
@@ -135,15 +148,18 @@ async def get_sessions(
     request: Request,
     agent_id: Optional[int] = None,
     contact_id: Optional[int] = None,
-    limit: int = 50,
-    offset: int = 0
+    limit: int = Query(50, ge=1, le=500, description="Number of sessions to return"),
+    offset: int = Query(0, ge=0, description="Number of sessions to skip")
 ):
-    """Get sessions for the authenticated user.
+    """Get sessions for the authenticated user (server-side paginated).
 
     Contact-bound sessions are scoped artifacts of the contact drawer, not
     general chat history: they are excluded by default and returned only when
     an explicit ``contact_id`` is requested. This keeps them out of the global
     agent-chat history (where they would render with no agent).
+
+    Returns a paginated envelope ({sessions, total, limit, offset, has_more});
+    ``total`` counts the filtered set before pagination.
     """
     try:
         query = db.query(ChatSession).filter(ChatSession.account_id == jwt['id'])
@@ -158,7 +174,9 @@ async def get_sessions(
         else:
             query = query.filter(ChatSession.contact_id.is_(None))
 
-        sessions = query.order_by(ChatSession.created_at.desc()).offset(offset).limit(limit).all()
+        # Total before pagination, then the requested slice.
+        total = query.count()
+        rows = query.order_by(ChatSession.created_at.desc()).offset(offset).limit(limit).all()
 
         sessions = [{
             "id": s.id,
@@ -168,9 +186,15 @@ async def get_sessions(
             "createdAt": s.created_at,
             "title": s.title,
             "contactId": s.contact_id
-        } for s in sessions]
+        } for s in rows]
 
-        return sessions
+        return {
+            "sessions": sessions,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": (offset + limit) < total,
+        }
     except Exception as e:
         raise handle_db_error(e, "[OPERATION]")
 
