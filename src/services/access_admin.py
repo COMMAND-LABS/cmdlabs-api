@@ -70,8 +70,22 @@ def upsert_grant(
     resource_type: str,
     resource_id: int,
     role: str,
+    org_id: int,
 ) -> AccessGrant:
-    """Create the grant, or update its role if one already exists. Caller commits."""
+    """Create the grant, or update its role if one already exists. Caller commits.
+
+    The ONLY place AccessGrant rows are written, which is why the same-org
+    check lives here: one chokepoint to guard rather than one per endpoint.
+    """
+    try:
+        access.assert_same_org(db, org_id, principal_type, principal_id,
+                               resource_type, resource_id)
+    except access.CrossOrgGrantError as exc:
+        # 404 rather than 403: confirming that a resource exists in another org
+        # is itself a small leak.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="Resource not found") from exc
+
     grant = (
         db.query(AccessGrant)
         .filter(
@@ -86,6 +100,7 @@ def upsert_grant(
         grant.role = role
     else:
         grant = AccessGrant(
+            org_id=org_id,
             principal_type=principal_type,
             principal_id=principal_id,
             resource_type=resource_type,
@@ -148,9 +163,22 @@ def record_access_event(
     """
     Append an immutable audit event for a grant create/revoke/role_change,
     snapshotting actor email + principal/resource labels. Caller commits.
+
+    org_id is derived from the RESOURCE rather than taken as a parameter. That
+    keeps every call site unchanged and, more importantly, works on the revoke
+    path too, where the grant row carrying the org is about to be deleted. A
+    resource's org is the org the access change happened in, by definition.
+
+    Credentials resolve to None on purpose: they are portable identity rather
+    than tenant data, so a credential grant belongs to no single org.
     """
     actor_row = db.query(Account.email).filter(Account.id == actor_account_id).first()
     event = AccessGrantEvent(
+        # Without this, grant events were the only rows in the log with a NULL
+        # org while every services/audit.py row carried one — so the first
+        # org-scoped view of the audit log would have silently omitted exactly
+        # the events the table was built for.
+        org_id=access._resource_org(db, resource_type, resource_id),
         event_type=event_type,
         resource_type=resource_type,
         resource_id=resource_id,

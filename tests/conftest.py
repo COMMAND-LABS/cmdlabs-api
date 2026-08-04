@@ -47,7 +47,13 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 
 from src.db.database import Base
-from src.db.models import Account
+from src.config.modules_registry import MODULE_KEYS
+from src.db.models import (
+    Account,
+    Organization,
+    OrganizationMember,
+    OrganizationTier,
+)
 from src.deps import get_db
 from src.main import app
 
@@ -192,11 +198,71 @@ def make_token(email: str = "test@example.com", user_id: int = 1, hours: int = 1
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
+# Every tenant row needs an org now that org_id is NOT NULL, and suites that
+# seed models directly reference this id as a constant. Pinned rather than
+# sequence-assigned because Postgres sequences do NOT roll back with the
+# surrounding transaction — an auto-assigned id would drift upward from test
+# to test and any constant would go stale after the first one.
+ROOT_ORG_ID = 1
+
+
+@pytest.fixture(autouse=True)
+def test_org(db: Session) -> Organization:
+    """The root organization, as migration e8f9a0b1c2d3 creates it.
+
+    autouse because org_id is NOT NULL on ten tables: a test that seeds a
+    Contact without having asked for an org would otherwise fail on a foreign
+    key rather than on whatever it meant to assert.
+
+    data_scope='personal' matches production root: many unrelated signups
+    share the org, and each still sees only rows it created. Tests that need
+    a real shared team create their own org with data_scope='shared' — see
+    tests/org_isolation.make_tenant.
+    """
+    org = db.query(Organization).filter(Organization.slug == "root").first()
+    if org is None:
+        org = Organization(
+            id=ROOT_ORG_ID,
+            slug="root",
+            name="CMD LABS",
+            data_scope="personal",
+            # Every module enabled. Module gating is enforced for real now, so
+            # a fixture org with an empty ceiling would 404 every gated route
+            # and every suite would be testing entitlement instead of its own
+            # subject. Tests that care about gating set their own ceiling.
+            granted_modules=list(MODULE_KEYS),
+            status="active",
+        )
+        db.add(org)
+        db.flush()
+        for tier_key, label in (("free", "Free"), ("premium", "Premium"),
+                                ("org_owner", "Org Owner")):
+            db.add(OrganizationTier(org_id=org.id, tier_key=tier_key, label=label,
+                                    modules=list(MODULE_KEYS)))
+        db.flush()
+        # An explicit id does NOT advance the sequence, so the next org created
+        # without one would collide on the primary key. Tests that build a
+        # second org (org_isolation.make_tenant) hit this immediately.
+        db.execute(text(
+            "SELECT setval('organizations_id_seq', "
+            "GREATEST((SELECT COALESCE(MAX(id), 1) FROM organizations), 1))"
+        ))
+    return org
+
+
 @pytest.fixture()
-def test_account(db: Session) -> Account:
-    """Insert a test account and return it."""
-    account = Account(id=1, email="test@example.com")
+def test_account(db: Session, test_org: Organization) -> Account:
+    """Insert a test account, placed in the root org like a real signup."""
+    account = Account(id=1, email="test@example.com", default_org_id=test_org.id)
     db.add(account)
+    db.flush()
+    db.add(OrganizationMember(
+        org_id=test_org.id,
+        account_id=account.id,
+        tier_key="free",
+        granted_by="grant",
+        is_owner=False,
+    ))
     db.flush()
     return account
 

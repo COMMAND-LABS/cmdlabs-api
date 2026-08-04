@@ -2,7 +2,8 @@
 Delete agent endpoint.
 """
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims, ensure_account
+from src.services.org_scope import AGENT, VECTOR_STORE, resource_predicate, scoped_resources
 from src.db.models import Agent
 from src.services import access
 from src.services.access_admin import revoke_resource_grants_logged
@@ -17,6 +18,7 @@ async def delete_agent(
     agent_id: int,
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request
 ):
     """
@@ -30,7 +32,7 @@ async def delete_agent(
         # Query agent by ID and account_id to ensure it belongs to the user
         agent = db.query(Agent).filter(
             Agent.id == agent_id,
-            Agent.account_id == account_id
+            resource_predicate(Agent, org)
         ).first()
         
         if not agent:

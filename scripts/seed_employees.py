@@ -27,6 +27,7 @@ import sys
 
 from src.db.database import SessionLocal
 from src.db.models import Account, UsageCredits
+from src.services.organizations import ensure_membership
 
 DEFAULT_EMAILS = [
     "ceo@acme.com",
@@ -67,6 +68,11 @@ def seed(emails: list[str]) -> None:
                 db.add(UsageCredits(account_id=account.id, amount=1.00))
             except Exception:
                 pass
+
+            # Also mirror signup's org placement, so seeded accounts are not
+            # the one kind of account with no organization. No-op if the org
+            # migration has not been applied yet.
+            ensure_membership(db, account)
 
             created.append(email)
         db.commit()

@@ -2,7 +2,8 @@
 List contacts endpoint.
 """
 from fastapi import APIRouter, HTTPException, status, Request, Query
-from src.deps import db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.services.org_scope import tenant_predicate
 from src.db.models import Contact
 
 from .models import ContactListResponse
@@ -16,6 +17,7 @@ router = APIRouter()
 async def list_contacts(
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
     status_filter: str | None = Query(default=None, alias="status"),
     search: str | None = Query(default=None),
@@ -34,7 +36,7 @@ async def list_contacts(
         account_id = account_id_from_claims(auth)
         account = ensure_account(db, account_id)
 
-        query = db.query(Contact).filter(Contact.account_id == account_id)
+        query = db.query(Contact).filter(tenant_predicate(Contact, org))
 
         if status_filter:
             query = query.filter(Contact.status == status_filter)

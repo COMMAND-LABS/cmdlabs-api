@@ -3,7 +3,8 @@ List deals endpoint (account-scoped, server-side paginated).
 """
 from fastapi import APIRouter, HTTPException, status, Request, Query
 from sqlalchemy.orm import joinedload
-from src.deps import db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.services.org_scope import tenant_predicate
 from src.db.models import Deal
 
 from .models import DealListResponse
@@ -18,6 +19,7 @@ router = APIRouter()
 async def list_deals(
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
     contact_id: int | None = Query(default=None, description="Filter to deals for this contact"),
     stage: str | None = Query(default=None, description="Filter by pipeline stage"),
@@ -40,7 +42,7 @@ async def list_deals(
         query = (
             db.query(Deal)
             .options(joinedload(Deal.contact))
-            .filter(Deal.account_id == account_id)
+            .filter(tenant_predicate(Deal, org))
         )
 
         if contact_id is not None:

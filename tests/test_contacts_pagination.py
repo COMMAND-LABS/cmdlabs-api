@@ -10,6 +10,10 @@ from sqlalchemy.orm import Session
 
 from src.db.models import Account, Contact
 
+# Every row needs a tenant now that org_id is NOT NULL. These suites are
+# single-tenant, so they all sit in the root org conftest creates.
+ROOT_ORG_ID = 1
+
 CONTACTS_URL = "/api/contacts/"
 
 
@@ -18,6 +22,7 @@ def seed_contacts(db: Session, test_account: Account):
     for i in range(57):
         db.add(
             Contact(
+                org_id=ROOT_ORG_ID,
                 account_id=test_account.id,
                 first_name=f"Person{i:03d}",
                 last_name="Test",
@@ -30,6 +35,7 @@ def seed_contacts(db: Session, test_account: Account):
     db.flush()
     db.add(
         Contact(
+            org_id=ROOT_ORG_ID,
             account_id=other.id,
             first_name="Foreign",
             last_name="Person",

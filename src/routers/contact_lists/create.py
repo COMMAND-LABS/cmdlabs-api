@@ -2,7 +2,7 @@
 Create contact list endpoint.
 """
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
 from src.db.models import ContactList
 
 from .models import CreateContactListRequest, ContactListSummaryResponse
@@ -17,6 +17,7 @@ async def create_contact_list(
     request_body: CreateContactListRequest,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     try:
@@ -27,6 +28,7 @@ async def create_contact_list(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="List name cannot be empty")
 
         contact_list = ContactList(
+            org_id=org.org_id,
             account_id=account_id,
             name=request_body.name.strip(),
             description=request_body.description,

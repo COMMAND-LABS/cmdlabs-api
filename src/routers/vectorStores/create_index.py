@@ -4,7 +4,8 @@ Create index endpoint.
 import logging
 
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims, ensure_account
+from src.services.org_scope import AGENT, VECTOR_STORE, resource_predicate, scoped_resources
 from pinecone import Pinecone
 
 from .helpers import _pinecone_key_from_credential
@@ -25,6 +26,7 @@ async def create_index(
     request_body: CreateIndexRequest,
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request
 ):
     """
@@ -122,11 +124,12 @@ async def create_index(
         # case a row was backfilled for a same-named index previously.
         store = (
             db.query(VectorStore)
-            .filter(VectorStore.owner_account_id == account_id, VectorStore.index_name == index_name)
+            .filter(resource_predicate(VectorStore, org), VectorStore.index_name == index_name)
             .first()
         )
         if store is None:
-            store = VectorStore(owner_account_id=account_id, index_name=index_name)
+            store = VectorStore(owner_account_id=account_id, index_name=index_name,
+                                org_id=org.org_id)
             db.add(store)
         store.pinecone_credential_id = pinecone_cred.id if pinecone_cred else None
         store.gcs_credential_id = gcs_cred.id if gcs_cred else None

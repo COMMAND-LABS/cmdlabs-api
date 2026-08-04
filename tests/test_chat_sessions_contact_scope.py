@@ -16,12 +16,17 @@ from sqlalchemy.orm import Session
 
 from src.db.models import Account, Contact, ChatSession
 
+# Every row needs a tenant now that org_id is NOT NULL. These suites are
+# single-tenant, so they all sit in the root org conftest creates.
+ROOT_ORG_ID = 1
+
 SESSIONS_URL = "/api/chat-sessions/sessions"
 
 
 @pytest.fixture()
 def owned_contact(db: Session, test_account: Account) -> Contact:
     contact = Contact(
+        org_id=ROOT_ORG_ID,
         account_id=test_account.id,
         first_name="Rodolfo",
         last_name="Capdevilla",
@@ -39,6 +44,7 @@ def foreign_contact(db: Session) -> Contact:
     db.add(other)
     db.flush()
     contact = Contact(
+        org_id=ROOT_ORG_ID,
         account_id=other.id,
         first_name="Someone",
         last_name="Else",

@@ -25,9 +25,10 @@ def can_use_credential(db: Session, account_id: int, credential_id: int) -> bool
     return access.can_access(db, account_id, access.CREDENTIAL, credential_id, required="use")
 
 
-def get_accessible_credential_ids(db: Session, account_id: int) -> set:
+def get_accessible_credential_ids(db: Session, account_id: int, org_id: int | None = None) -> set:
     """Credential IDs shared WITH the account (excludes owned)."""
-    return access.accessible_resource_ids(db, account_id, access.CREDENTIAL, required="use")
+    return access.accessible_resource_ids(db, account_id, access.CREDENTIAL, required="use",
+                                          org_id=org_id)
 
 
 def load_credential_for_use(

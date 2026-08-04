@@ -23,7 +23,8 @@ import uuid as _uuid
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from src.deps import db_dependency, auth_dependency
+from src.deps import org_dependency, db_dependency, auth_dependency
+from src.services.org_scope import tenant_predicate
 from src.db.models import (
     Contact,
     ContactListMember,
@@ -80,12 +81,12 @@ class UnsentResponse(BaseModel):
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _load_list_contacts(db, account_id: int, contact_list_id: int) -> list[Contact]:
+def _load_list_contacts(db, account_id: int, contact_list_id: int, org) -> list[Contact]:
     members = (
         db.query(ContactListMember)
         .filter(
             ContactListMember.contact_list_id == contact_list_id,
-            ContactListMember.account_id == account_id,
+            tenant_predicate(ContactListMember, org),
         )
         .all()
     )
@@ -94,7 +95,7 @@ def _load_list_contacts(db, account_id: int, contact_list_id: int) -> list[Conta
         return []
     return (
         db.query(Contact)
-        .filter(Contact.id.in_(contact_ids), Contact.account_id == account_id)
+        .filter(Contact.id.in_(contact_ids), tenant_predicate(Contact, org))
         .all()
     )
 
@@ -108,6 +109,7 @@ async def send_campaign(
     body: CampaignSendRequest,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     """Send the campaign's linked template to every contact in its linked list.
@@ -137,7 +139,7 @@ async def send_campaign(
     if not template:
         raise HTTPException(status_code=404, detail="Linked email template not found")
 
-    contacts = _load_list_contacts(db, account_id, campaign.contact_list_id)
+    contacts = _load_list_contacts(db, account_id, campaign.contact_list_id, org)
     if not contacts:
         raise HTTPException(status_code=422, detail="Contact list has no members")
 
@@ -202,6 +204,7 @@ async def campaign_unsent(
     campaign_id: int,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
     contact_list_id: int = Query(
         default=None,
@@ -227,7 +230,7 @@ async def campaign_unsent(
             status_code=422,
             detail="No contact_list_id provided and campaign has none linked")
 
-    contacts = _load_list_contacts(db, account_id, list_id)
+    contacts = _load_list_contacts(db, account_id, list_id, org)
 
     already_sent = {
         row.contact_id

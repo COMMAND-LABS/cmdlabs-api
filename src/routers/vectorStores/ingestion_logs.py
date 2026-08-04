@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, status, Request, Query
 from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
 from datetime import datetime
-from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims, ensure_account
 from src.db.models import VectorDbIngestionLog, OperationType, OperationStatus
 from src.services.vector_store_access import authorize_vector_store
 from src.utils.errors import handle_db_error
@@ -48,6 +48,7 @@ class IngestionLogsListResponse(BaseModel):
 async def list_ingestion_logs(
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request,
     # Filter parameters
     index_name: Optional[str] = Query(None, description="Filter by index name"),
@@ -90,7 +91,8 @@ async def list_ingestion_logs(
                     detail="index_name is required when reading a shared knowledge base's logs",
                 )
             account_id = authorize_vector_store(
-                db, caller_account_id, index_name, owner_account_id, require_write=False
+                db, caller_account_id, index_name, owner_account_id,
+                require_write=False, org_id=org.org_id,
             )
         else:
             account_id = caller_account_id
@@ -195,6 +197,7 @@ async def get_ingestion_log(
     log_id: str,
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request
 ):
     """
@@ -250,6 +253,7 @@ async def get_ingestion_log(
 async def get_ingestion_logs_summary(
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request,
     index_name: Optional[str] = Query(None, description="Filter by index name"),
     namespace: Optional[str] = Query(None, description="Filter by namespace"),

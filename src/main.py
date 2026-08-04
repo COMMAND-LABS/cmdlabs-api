@@ -52,6 +52,8 @@ from .routers import email_campaigns
 from .routers import emails
 from .routers import tracking
 from .routers import feedback
+from .routers import admin
+from .routers import organizations
 
 app = FastAPI(
     docs_url="/api/docs",
@@ -184,7 +186,24 @@ _ROUTERS = [
     (emails.router, "/api/emails", ["Emails"]),
     (tracking.router, "/t", ["Tracking"]),
     (feedback.router, "/api/feedback", ["Feedback"]),
+    (organizations.router, "/api/organizations", ["Organizations"]),
+    (admin.router, "/api/admin", ["Platform Admin"]),
 ]
 
+# Module gating is derived from the registry rather than hand-written on each
+# router. A router either maps to a module (and is gated) or is absent from the
+# registry (and is visibly always-allowed) — there is no third state where
+# somebody simply forgot to add the dependency.
+#
+# tests/test_module_enforcement.py asserts every prefix here is classified, so
+# adding a router without deciding turns into a failing test rather than an
+# ungated endpoint.
+from fastapi import Depends
+
+from src.config.modules_registry import module_for_path
+from src.deps import require_module
+
 for _router, _prefix, _tags in _ROUTERS:
-    app.include_router(_router, prefix=_prefix, tags=_tags)
+    _module = module_for_path(_prefix) if _prefix else None
+    _deps = [Depends(require_module(_module.key))] if _module else None
+    app.include_router(_router, prefix=_prefix, tags=_tags, dependencies=_deps)

@@ -4,7 +4,8 @@ Grant an access group permission to use an agent (agent owner only).
 Writes a unified AccessGrant (resource_type='agent', role='use').
 """
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import db_dependency, jwt_dependency, account_id_from_claims
+from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
+from src.services.org_scope import AGENT, VECTOR_STORE, resource_predicate, scoped_resources
 from src.db.models import Agent, AccessGrant
 from src.services import access
 from src.services.access_admin import resolve_principal, upsert_grant, record_access_event
@@ -21,6 +22,7 @@ async def create_grant(
     body: CreateGrantRequest,
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request,
 ):
     """Grant an access group permission to use this agent. Agent owner + group manager."""
@@ -29,7 +31,7 @@ async def create_grant(
 
         agent = db.query(Agent).filter(
             Agent.id == agent_id,
-            Agent.account_id == account_id,
+            resource_predicate(Agent, org),
         ).first()
         if not agent:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
@@ -53,6 +55,7 @@ async def create_grant(
 
         grant = upsert_grant(
             db,
+            org_id=org.org_id,
             principal_type=principal_type,
             principal_id=principal_id,
             resource_type=access.AGENT,

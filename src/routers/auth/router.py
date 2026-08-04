@@ -1,5 +1,6 @@
 from datetime import timedelta, datetime, timezone
 import hashlib
+import logging
 import random
 import uuid
 from fastapi import APIRouter, HTTPException, status, Header, Response, BackgroundTasks, Request
@@ -14,8 +15,11 @@ from src.routers.auth.background_tasks.send_login_code_email_ses import send_log
 from src.deps import db_dependency, bcrypt_context, jwt_dependency
 from src.clients.stripe_client import create_stripe_customer
 
+from src.services.organizations import ensure_membership
 from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -221,6 +225,21 @@ async def verify_login_code(body: VerifyCodeBody, db: db_dependency, request: Re
     account.login_otp = None
     account.login_otp_expires_at = None
     db.commit()
+
+    # Place the account in an org on first VERIFIED login.
+    #
+    # Deliberately here and not in /request-code, which creates the account
+    # before the OTP is checked: an unverified squatter would otherwise get a
+    # membership for an email they do not control. They can never obtain a JWT,
+    # so they never need one.
+    #
+    # Idempotent, and non-fatal by design — a failure here must not cost a user
+    # their login. The membership is created on their next sign-in instead.
+    try:
+        ensure_membership(db, account)
+    except Exception:
+        db.rollback()
+        logger.exception("[VERIFY CODE] Could not ensure org membership for account %s", account.id)
 
     ip_address = request.client.host
     token = create_access_token(account.email, account.id, timedelta(days=7))

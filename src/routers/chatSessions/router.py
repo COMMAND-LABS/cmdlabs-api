@@ -2,7 +2,8 @@ import logging
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, status, Request, Query
 from pydantic import BaseModel, ConfigDict, Field
-from src.deps import db_dependency, jwt_dependency, account_id_from_claims
+from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
+from src.services.org_scope import tenant_predicate
 from src.db.models import ChatSession, ChatMessage, Contact
 from src.services.agent_access import can_access_agent
 import uuid
@@ -80,7 +81,8 @@ class ChatSessionWithMessagesResponse(BaseModel):
 async def create_session(
     sessionData: ChatSessionCreate, 
     db: db_dependency, 
-    jwt: jwt_dependency, 
+    jwt: jwt_dependency,
+    org: org_dependency, 
     request: Request
 ):
     """Create a new chat session"""
@@ -88,7 +90,9 @@ async def create_session(
         account_id = account_id_from_claims(jwt)
 
         # Verify the caller can access the requested agent
-        if sessionData.agentId and not can_access_agent(db, account_id, sessionData.agentId):
+        if sessionData.agentId and not can_access_agent(
+            db, account_id, sessionData.agentId, org_id=org.org_id
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You don't have access to this agent"
@@ -101,7 +105,7 @@ async def create_session(
         if sessionData.contactId is not None:
             owned_contact = db.query(Contact).filter(
                 Contact.id == sessionData.contactId,
-                Contact.account_id == account_id,
+                tenant_predicate(Contact, org),
             ).first()
             if not owned_contact:
                 raise HTTPException(
@@ -147,6 +151,7 @@ async def create_session(
 async def get_sessions(
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request,
     agent_id: Optional[int] = None,
     contact_id: Optional[int] = None,
@@ -206,6 +211,7 @@ async def get_session(
     session_id: str,
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request
 ):
     """Get a specific session by session_id with its messages"""
@@ -279,6 +285,7 @@ async def update_session(
     payload: ChatSessionUpdate,
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request
 ):
     """Rename a session.
@@ -337,7 +344,8 @@ async def update_session(
 async def delete_session(
     session_id: str, 
     db: db_dependency, 
-    jwt: jwt_dependency, 
+    jwt: jwt_dependency,
+    org: org_dependency, 
     request: Request
 ):
     """Delete a session and all its messages"""
@@ -370,7 +378,8 @@ async def delete_session(
 async def clear_session_messages(
     session_id: str, 
     db: db_dependency, 
-    jwt: jwt_dependency, 
+    jwt: jwt_dependency,
+    org: org_dependency, 
     request: Request
 ):
     """Clear all messages from a session without deleting the session itself"""

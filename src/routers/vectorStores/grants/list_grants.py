@@ -3,7 +3,8 @@ List access grants for a knowledge base (index owner only). Reads AccessGrant.
 """
 from fastapi import APIRouter, HTTPException, status, Request
 from typing import List
-from src.deps import db_dependency, jwt_dependency, account_id_from_claims
+from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
+from src.services.org_scope import AGENT, VECTOR_STORE, resource_predicate, scoped_resources
 from src.db.models import VectorStore, AccessGrant
 from src.services import access
 from src.services.access_admin import grant_label
@@ -20,6 +21,7 @@ async def list_grants(
     index_name: str,
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request,
 ):
     """List who a knowledge base is shared with (groups + individuals). Index owner only."""
@@ -28,7 +30,7 @@ async def list_grants(
         index_name = index_name.strip()
 
         store = db.query(VectorStore).filter(
-            VectorStore.owner_account_id == account_id,
+            resource_predicate(VectorStore, org),
             VectorStore.index_name == index_name,
         ).first()
         if not store:

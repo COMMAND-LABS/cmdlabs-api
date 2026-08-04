@@ -2,7 +2,8 @@
 Update deal endpoint.
 """
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.services.org_scope import tenant_predicate
 from src.db.models import Deal, Contact, DEAL_STAGES
 
 from .models import UpdateDealRequest, DealResponse
@@ -19,6 +20,7 @@ async def update_deal(
     request_body: UpdateDealRequest,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     try:
@@ -27,7 +29,7 @@ async def update_deal(
 
         deal = db.query(Deal).filter(
             Deal.id == deal_id,
-            Deal.account_id == account_id,
+            tenant_predicate(Deal, org),
         ).first()
 
         if not deal:
@@ -75,7 +77,7 @@ async def update_deal(
             else:
                 contact = db.query(Contact).filter(
                     Contact.id == request_body.contact_id,
-                    Contact.account_id == account_id,
+                    tenant_predicate(Contact, org),
                 ).first()
                 if not contact:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")

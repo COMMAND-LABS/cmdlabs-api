@@ -2,7 +2,7 @@
 Create access group endpoint.
 """
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import db_dependency, jwt_dependency, account_id_from_claims
+from src.deps import db_dependency, jwt_dependency, org_dependency, account_id_from_claims
 from src.db.models import AccessGroup
 from .models import CreateAccessGroupRequest, AccessGroupResponse
 from src.utils.errors import handle_db_error
@@ -16,6 +16,7 @@ async def create_access_group(
     body: CreateAccessGroupRequest,
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request,
 ):
     """Create a new access group. The authenticated user becomes the owner."""
@@ -23,6 +24,11 @@ async def create_access_group(
         account_id = account_id_from_claims(jwt)
 
         group = AccessGroup(
+            # A group with no org is unusable, not merely untidy: every grant
+            # goes through access.assert_same_org, which treats a NULL org as
+            # "not classified, cannot be used to cross" and refuses. Omitting
+            # this made every newly created group silently un-shareable.
+            org_id=org.org_id,
             name=body.name,
             owner_account_id=account_id,
         )

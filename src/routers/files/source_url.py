@@ -21,7 +21,7 @@ import logging
 
 from fastapi import APIRouter, Request, Query, HTTPException, status
 
-from src.deps import jwt_dependency, db_dependency, account_id_from_claims, ensure_account
+from src.deps import jwt_dependency, db_dependency, org_dependency, account_id_from_claims, ensure_account
 from src.db.models import Agent, VectorDbIngestionLog
 from src.services.agent_access import can_access_agent
 from src.services import account_gcs_service
@@ -59,6 +59,7 @@ async def get_source_url(
     expires: int = Query(900, ge=60, le=3600, description="URL lifetime in seconds"),
     db: db_dependency = None,
     decoded_jwt: jwt_dependency = None,
+    org: org_dependency = None,
 ):
     """Return a short-lived signed GET URL for an agent's source document."""
     try:
@@ -70,7 +71,7 @@ async def get_source_url(
         path = path.strip()
 
         # 1. Access check (owner or shared-via-group both pass here).
-        if not can_access_agent(db, account_id, agent_id):
+        if not can_access_agent(db, account_id, agent_id, org_id=org.org_id):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
         agent = db.query(Agent).filter(Agent.id == agent_id).first()

@@ -27,6 +27,10 @@ from src.db.models import (
     EmailTemplate,
 )
 
+# Every row needs a tenant now that org_id is NOT NULL. These suites are
+# single-tenant, so they all sit in the root org conftest creates.
+ROOT_ORG_ID = 1
+
 
 @pytest.fixture()
 def sent(db: Session, test_account: Account):
@@ -37,7 +41,7 @@ def sent(db: Session, test_account: Account):
         subject_template="{{ SUBJECT }}",
         html_template="<html><body>{{ RATING_BASE_URL }}/5</body></html>",
     )
-    contact = Contact(account_id=test_account.id, first_name="Alex", email="alex@example.com")
+    contact = Contact(org_id=ROOT_ORG_ID, account_id=test_account.id, first_name="Alex", email="alex@example.com")
     campaign = EmailCampaign(account_id=test_account.id, name="Q2")
     db.add_all([template, contact, campaign])
     db.commit()

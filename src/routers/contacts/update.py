@@ -2,7 +2,8 @@
 Update contact endpoint.
 """
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.services.org_scope import tenant_predicate
 from src.db.models import Contact
 
 from .models import UpdateContactRequest, ContactSummaryResponse
@@ -18,6 +19,7 @@ async def update_contact(
     request_body: UpdateContactRequest,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     try:
@@ -26,7 +28,7 @@ async def update_contact(
 
         contact = db.query(Contact).filter(
             Contact.id == contact_id,
-            Contact.account_id == account_id,
+            tenant_predicate(Contact, org),
         ).first()
 
         if not contact:

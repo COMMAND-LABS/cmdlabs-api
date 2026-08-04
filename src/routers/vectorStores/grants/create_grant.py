@@ -5,7 +5,7 @@ Writes a unified AccessGrant (resource_type='vector_store', role 'read'|'write')
 keyed by the VectorStore row id.
 """
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import db_dependency, jwt_dependency, account_id_from_claims
+from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
 from src.db.models import AccessGrant
 from src.services import access
 from src.services.access_admin import resolve_principal, upsert_grant, record_access_event
@@ -23,6 +23,7 @@ async def create_grant(
     body: CreateVectorStoreGrantRequest,
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request,
 ):
     """
@@ -45,7 +46,7 @@ async def create_grant(
             grantee_email=body.granteeEmail,
         )
 
-        store = get_or_create_vector_store(db, account_id, index_name)
+        store = get_or_create_vector_store(db, account_id, index_name, org_id=org.org_id)
 
         existing = db.query(AccessGrant).filter(
             AccessGrant.principal_type == principal_type,
@@ -58,6 +59,7 @@ async def create_grant(
 
         grant = upsert_grant(
             db,
+            org_id=org.org_id,
             principal_type=principal_type,
             principal_id=principal_id,
             resource_type=access.VECTOR_STORE,

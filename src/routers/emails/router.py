@@ -11,7 +11,8 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Request
 
-from src.deps import db_dependency, auth_dependency
+from src.deps import org_dependency, db_dependency, auth_dependency
+from src.services.org_scope import tenant_predicate
 from src.db.models import Contact, EmailCampaign, EmailTemplate
 from src.rate_limit import limiter
 from src.services.email_dispatch import (
@@ -34,6 +35,7 @@ async def send_email(
     body: SendEmailRequest,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     account_id = int(auth["id"]) if isinstance(auth["id"], str) else auth["id"]
@@ -59,7 +61,7 @@ async def send_email(
     if body.recipient.contact_id is not None:
         contact = db.query(Contact).filter(
             Contact.id == body.recipient.contact_id,
-            Contact.account_id == account_id,
+            tenant_predicate(Contact, org),
         ).first()
         if not contact:
             raise HTTPException(status_code=404, detail="Contact not found")

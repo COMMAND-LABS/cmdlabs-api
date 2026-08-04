@@ -8,7 +8,8 @@ section on the contact detail page.
 from typing import List
 from fastapi import APIRouter, HTTPException, status, Request
 from sqlalchemy.exc import IntegrityError
-from src.deps import db_dependency, auth_dependency, account_id_from_claims
+from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims
+from src.services.org_scope import tenant_predicate
 from src.db.models import Company, CompanyContact, Contact
 
 from .models import AddCompanyToContactRequest, ContactCompanyResponse
@@ -56,6 +57,7 @@ async def list_contact_companies(
     contact_id: int,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     """List all companies a given contact is associated with."""
@@ -64,7 +66,7 @@ async def list_contact_companies(
 
         contact = db.query(Contact).filter(
             Contact.id == contact_id,
-            Contact.account_id == account_id,
+            tenant_predicate(Contact, org),
         ).first()
 
         if not contact:
@@ -72,7 +74,7 @@ async def list_contact_companies(
 
         memberships = (
             db.query(CompanyContact)
-            .filter(CompanyContact.contact_id == contact_id)
+            .filter(CompanyContact.contact_id == contact_id, tenant_predicate(CompanyContact, org))
             .all()
         )
         return [_to_response(m, db) for m in memberships]
@@ -90,6 +92,7 @@ async def add_contact_company(
     request_body: AddCompanyToContactRequest,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     """Associate a contact with a company."""
@@ -98,7 +101,7 @@ async def add_contact_company(
 
         contact = db.query(Contact).filter(
             Contact.id == contact_id,
-            Contact.account_id == account_id,
+            tenant_predicate(Contact, org),
         ).first()
 
         if not contact:
@@ -106,13 +109,14 @@ async def add_contact_company(
 
         company = db.query(Company).filter(
             Company.id == request_body.company_id,
-            Company.account_id == account_id,
+            tenant_predicate(Company, org),
         ).first()
 
         if not company:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
 
         membership = CompanyContact(
+            org_id=org.org_id,
             company_id=request_body.company_id,
             contact_id=contact_id,
             account_id=account_id,
@@ -144,6 +148,7 @@ async def remove_contact_company(
     company_id: int,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     """Disassociate a contact from a company."""
@@ -152,7 +157,7 @@ async def remove_contact_company(
 
         contact = db.query(Contact).filter(
             Contact.id == contact_id,
-            Contact.account_id == account_id,
+            tenant_predicate(Contact, org),
         ).first()
 
         if not contact:
@@ -160,6 +165,7 @@ async def remove_contact_company(
 
         membership = db.query(CompanyContact).filter(
             CompanyContact.contact_id == contact_id,
+            tenant_predicate(CompanyContact, org),
             CompanyContact.company_id == company_id,
         ).first()
 

@@ -4,7 +4,7 @@ Create namespace endpoint.
 import logging
 
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims, ensure_account
 from pinecone import Pinecone
 
 from .helpers import get_pinecone_api_key_for_index
@@ -24,6 +24,7 @@ async def create_namespace(
     request_body: CreateNamespaceRequest,
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request,
     owner_account_id: int | None = None,
 ):
@@ -40,7 +41,7 @@ async def create_namespace(
         caller_account_id = account_id_from_claims(jwt)
         # Resolve the knowledge base's owner (self, or the owner of a shared KB the
         # caller may write to). Ingesting/editing requires write access.
-        account_id = authorize_vector_store(db, caller_account_id, index_name, owner_account_id, require_write=True)
+        account_id = authorize_vector_store(db, caller_account_id, index_name, owner_account_id, require_write=True, org_id=org.org_id)
         account = ensure_account(db, account_id)
 
         # Get Pinecone API key

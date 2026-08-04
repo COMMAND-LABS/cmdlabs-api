@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from pinecone import Pinecone
 
 from src.db.models import VectorDbIngestionLog
-from src.deps import account_id_from_claims, db_dependency, ensure_account, jwt_dependency
+from src.deps import org_dependency, account_id_from_claims, db_dependency, ensure_account, jwt_dependency
 from src.rate_limit import limiter
 from src.utils.errors import handle_db_error
 from .helpers import get_pinecone_api_key_for_index
@@ -39,6 +39,7 @@ async def delete_file_vectors_in_namespace(
     namespace: str,
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request,
     filename: str = Query(..., description="Source filename whose vectors to delete"),
     owner_account_id: int | None = None,
@@ -54,7 +55,7 @@ async def delete_file_vectors_in_namespace(
     try:
         caller_account_id = account_id_from_claims(jwt)
         # Deleting a file's vectors is a write — resolve the KB owner, require write.
-        account_id = authorize_vector_store(db, caller_account_id, index_name, owner_account_id, require_write=True)
+        account_id = authorize_vector_store(db, caller_account_id, index_name, owner_account_id, require_write=True, org_id=org.org_id)
         ensure_account(db, account_id)
 
         api_key = get_pinecone_api_key_for_index(db, account_id, index_name)

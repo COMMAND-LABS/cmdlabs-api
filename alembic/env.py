@@ -6,6 +6,13 @@ from sqlalchemy import pool
 
 from alembic import context
 from src.db.models import Base # NOTE: for integrating SQLAlchemy schema with Alembic for autogeneration
+# Imported for their SIDE EFFECT of registering on Base.metadata, not for any
+# name they export — hence the noqa. Feedback and Waitlist are declared outside
+# models.py, so without these imports autogenerate cannot see them, concludes
+# their models were deleted, and emits `op.drop_table` for both. Do not remove.
+from src.db import feedback as _feedback_models  # noqa: F401
+from src.db import waitlist as _waitlist_models  # noqa: F401
+from src.db import catalog_models as _catalog_models  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -54,6 +61,34 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+# Tables that exist in the database but deliberately have no SQLAlchemy model.
+#
+# Without this, autogenerate sees "table present, model absent", concludes the
+# model was deleted, and proposes `op.drop_table` — buried among dozens of
+# other operations in a file someone reviews quickly.
+#
+#   json_schemas - created by 151b744acb62_create_json_schemas_table.py. No
+#                  model, and nothing in either service reads or writes it.
+#                  Left in place pending a decision: either give it a model or
+#                  drop it in an explicit, deliberate migration. Do NOT let
+#                  autogenerate make that decision by accident.
+#
+# Keep this list SHORT and each entry justified. It suppresses a real signal,
+# so anything added here should be something a human has actually looked at.
+_TABLES_WITHOUT_MODELS = {"json_schemas"}
+
+
+def include_object(object_, name, type_, reflected, compare_to):
+    """Hide known model-less tables from autogenerate's drop detection."""
+    if type_ == "table" and name in _TABLES_WITHOUT_MODELS:
+        return False
+    # An index belonging to one of those tables comes through separately.
+    if type_ == "index" and getattr(object_, "table", None) is not None:
+        if object_.table.name in _TABLES_WITHOUT_MODELS:
+            return False
+    return True
+
+
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode.
 
@@ -70,7 +105,23 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection,
+            target_metadata=target_metadata,
+            include_object=include_object,
+            # One transaction PER MIGRATION rather than one for the whole run.
+            #
+            # Several migrations do `ALTER TYPE ... ADD VALUE` on a Postgres
+            # enum and a later migration then writes that value. Postgres
+            # refuses to use a new enum value in the transaction that added it
+            # ("unsafe use of new value ... of enum type"), so with a single
+            # wrapping transaction `alembic upgrade head` fails on any database
+            # built from empty.
+            #
+            # It never surfaced in production because migrations were applied a
+            # few at a time, which incidentally gave each enum change its own
+            # transaction. This makes that guarantee explicit rather than
+            # incidental, and is what allows the chain to be replayed in CI.
+            transaction_per_migration=True,
         )
 
         with context.begin_transaction():

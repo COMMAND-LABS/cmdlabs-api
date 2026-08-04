@@ -4,7 +4,8 @@ Create a contact event endpoint.
 import logging
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.services.org_scope import tenant_predicate
 from src.db.models import Contact, ContactEvent
 
 from ..models import CreateContactEventRequest, ContactEventResponse
@@ -22,6 +23,7 @@ async def create_contact_event(
     request_body: CreateContactEventRequest,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     try:
@@ -30,7 +32,7 @@ async def create_contact_event(
 
         contact = db.query(Contact).filter(
             Contact.id == contact_id,
-            Contact.account_id == account_id,
+            tenant_predicate(Contact, org),
         ).first()
 
         if not contact:
@@ -45,6 +47,7 @@ async def create_contact_event(
         occurred_at = request_body.occurred_at or datetime.now(timezone.utc)
 
         event = ContactEvent(
+            org_id=org.org_id,
             contact_id=contact_id,
             account_id=account_id,
             event_type=request_body.event_type.strip(),

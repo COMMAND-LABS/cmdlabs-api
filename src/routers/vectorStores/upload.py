@@ -6,7 +6,7 @@ import json
 import logging
 from fastapi import APIRouter, Request, UploadFile, File, HTTPException, Form
 from typing import Optional
-from src.deps import jwt_dependency, db_dependency, ensure_account
+from src.deps import org_dependency, jwt_dependency, db_dependency, ensure_account
 from src.services.vector_stores_upload_service import VectorStoresUploadService
 from src.services.vector_store_access import authorize_vector_store
 from src.services.account_gcs_service import AccountGcsCredentialMissing
@@ -30,6 +30,7 @@ async def upload_csv_file(
     owner_account_id: Optional[int] = Form(None, description="Owner of a shared knowledge base to ingest into (requires write/admin access)"),
     db: db_dependency = None,
     decoded_jwt: jwt_dependency = None,
+    org: org_dependency = None,
     request: Request = None
 ):
     """
@@ -45,7 +46,7 @@ async def upload_csv_file(
         caller_account_id = int(decoded_jwt['id']) if isinstance(decoded_jwt['id'], str) else decoded_jwt['id']
         # Ingesting into a shared knowledge base requires write (admin) access; for
         # your own KB this returns you unchanged. All GCS/log writes use the owner.
-        account_id = authorize_vector_store(db, caller_account_id, index_name, owner_account_id, require_write=True)
+        account_id = authorize_vector_store(db, caller_account_id, index_name, owner_account_id, require_write=True, org_id=org.org_id)
 
         # Validate account exists
         account = ensure_account(db, account_id)
@@ -152,6 +153,7 @@ async def upload_pdf_faq(
     owner_account_id: Optional[int] = Form(None, description="Owner of a shared knowledge base to ingest into (requires write/admin access)"),
     db: db_dependency = None,
     decoded_jwt: jwt_dependency = None,
+    org: org_dependency = None,
     request: Request = None
 ):
     """
@@ -171,7 +173,7 @@ async def upload_pdf_faq(
         caller_account_id = int(decoded_jwt['id']) if isinstance(decoded_jwt['id'], str) else decoded_jwt['id']
         # Ingesting into a shared knowledge base requires write (admin) access; for
         # your own KB this returns you unchanged. GCS/Pinecone/log writes use the owner.
-        account_id = authorize_vector_store(db, caller_account_id, index_name, owner_account_id, require_write=True)
+        account_id = authorize_vector_store(db, caller_account_id, index_name, owner_account_id, require_write=True, org_id=org.org_id)
 
         # Validate account exists
         account = ensure_account(db, account_id)
@@ -289,6 +291,7 @@ async def upload_text_file(
     owner_account_id: Optional[int] = Form(None, description="Owner of a shared knowledge base to ingest into (requires write/admin access)"),
     db: db_dependency = None,
     decoded_jwt: jwt_dependency = None,
+    org: org_dependency = None,
     request: Request = None
 ):
     """
@@ -304,7 +307,7 @@ async def upload_text_file(
         caller_account_id = int(decoded_jwt['id']) if isinstance(decoded_jwt['id'], str) else decoded_jwt['id']
         # Ingesting into a shared knowledge base requires write (admin) access; for
         # your own KB this returns you unchanged. All GCS/log writes use the owner.
-        account_id = authorize_vector_store(db, caller_account_id, index_name, owner_account_id, require_write=True)
+        account_id = authorize_vector_store(db, caller_account_id, index_name, owner_account_id, require_write=True, org_id=org.org_id)
 
         # Validate account exists
         account = ensure_account(db, account_id)

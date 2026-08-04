@@ -2,7 +2,8 @@
 Delete contact endpoint.
 """
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.services.org_scope import tenant_predicate
 from src.db.models import Contact
 from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
@@ -15,6 +16,7 @@ async def delete_contact(
     contact_id: int,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     try:
@@ -23,7 +25,7 @@ async def delete_contact(
 
         contact = db.query(Contact).filter(
             Contact.id == contact_id,
-            Contact.account_id == account_id,
+            tenant_predicate(Contact, org),
         ).first()
 
         if not contact:

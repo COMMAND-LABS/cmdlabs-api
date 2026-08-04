@@ -3,7 +3,8 @@ Delete a career timeline entry.
 """
 import logging
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.services.org_scope import tenant_predicate
 from src.db.models import Contact, CareerTimeline
 
 from src.utils.errors import handle_db_error
@@ -20,6 +21,7 @@ async def delete_career_timeline_entry(
     entry_id: int,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     try:
@@ -28,7 +30,7 @@ async def delete_career_timeline_entry(
 
         contact = db.query(Contact).filter(
             Contact.id == contact_id,
-            Contact.account_id == account_id,
+            tenant_predicate(Contact, org),
         ).first()
 
         if not contact:
@@ -37,7 +39,7 @@ async def delete_career_timeline_entry(
         entry = db.query(CareerTimeline).filter(
             CareerTimeline.id == entry_id,
             CareerTimeline.contact_id == contact_id,
-            CareerTimeline.account_id == account_id,
+            tenant_predicate(CareerTimeline, org),
         ).first()
 
         if not entry:

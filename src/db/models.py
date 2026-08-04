@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, ForeignKey, UUID, JSON, DateTime, Date, func, Double, Float, Numeric, Enum, Text, Boolean, UniqueConstraint, CheckConstraint, Index, text
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import relationship
-from sqlalchemy.dialects.postgresql import ENUM as PG_ENUM
+from sqlalchemy.dialects.postgresql import ENUM as PG_ENUM, JSONB
 from .database import Base
 from .service_name import ServiceName
 import datetime
@@ -73,6 +73,11 @@ class Account(Base):
     subscription_current_period_end = Column(DateTime(timezone=True), nullable=True)
     login_otp = Column(String, nullable=True)
     login_otp_expires_at = Column(DateTime(timezone=True), nullable=True)
+    # Which org this account lands in when no active-org cookie is present.
+    # Nullable only so the schema tolerates an account created before its
+    # membership exists (see services/organizations.ensure_membership).
+    default_org_id = Column(Integer, ForeignKey('organizations.id', ondelete='SET NULL'),
+                            nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -88,6 +93,9 @@ class Account(Base):
     contact_lists = relationship('ContactList', back_populates='account', cascade='all, delete-orphan')
     deals = relationship('Deal', back_populates='account', cascade='all, delete-orphan')
     prompts = relationship('Prompt', back_populates='account', cascade='all, delete-orphan')
+    org_memberships = relationship('OrganizationMember', back_populates='account',
+                                   foreign_keys='OrganizationMember.account_id',
+                                   cascade='all, delete-orphan')
     access_groups = relationship('AccessGroup', back_populates='owner', cascade='all, delete-orphan')
     group_memberships = relationship('AccessGroupMember', back_populates='account', cascade='all, delete-orphan')
     tool_approvals = relationship('PendingToolApproval', back_populates='account', cascade='all, delete-orphan')
@@ -107,7 +115,148 @@ class Account(Base):
 
     def __repr__(self):
         return f'<Account {self.email}>'
-    
+
+
+class Organization(Base):
+    """
+    A tenant. The unit of data isolation on the platform.
+
+    The root org (slug 'root') is org #1 and is NOT a special case — it is the
+    first instance of the same object every customer gets. If something only
+    works because it is the root org, that is a bug.
+
+    Two columns carry most of the weight:
+
+    - data_scope: 'personal' means members each see only rows they created
+      (root: thousands of unrelated signups); 'shared' means every member sees
+      every row (a real team). IMMUTABLE after creation — flipping root to
+      'shared' would expose every user's private contacts in a single UPDATE,
+      so no API path writes it.
+
+    - granted_modules: the ceiling. Which modules this org may use at all, set
+      by platform staff. Bespoke per org — there is no plan table. An org owner
+      distributes a subset of this to their own tiers and can never exceed it,
+      because resolution intersects at read time (see services/modules.py), so
+      lowering a ceiling takes effect on the very next request with no cascade.
+    """
+    __tablename__ = 'organizations'
+
+    id = Column(Integer, primary_key=True, index=True)
+    # No index=True: the UniqueConstraint below already creates a backing index
+    # in Postgres, and declaring both makes autogenerate see permanent drift.
+    slug = Column(String(64), nullable=False)
+    name = Column(String(255), nullable=False)
+    owner_account_id = Column(Integer, ForeignKey('accounts.id', ondelete='SET NULL'),
+                              nullable=True, index=True)
+    data_scope = Column(String(20), nullable=False, server_default='personal')
+    granted_modules = Column(JSONB, nullable=False, server_default='[]')
+    # 'read_only' when an org_owner subscription lapses: members keep reading
+    # and exporting, writes are refused. Never deletion — losing a team's data
+    # on a failed payment is not a recoverable mistake.
+    status = Column(String(20), nullable=False, server_default='active')
+    created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('slug', name='uq_organizations_slug'),
+        CheckConstraint("data_scope IN ('personal','shared')",
+                        name='ck_organizations_data_scope'),
+        CheckConstraint("status IN ('active','read_only')",
+                        name='ck_organizations_status'),
+    )
+
+    owner = relationship('Account', foreign_keys=[owner_account_id])
+    members = relationship('OrganizationMember', back_populates='org',
+                           cascade='all, delete-orphan')
+    tiers = relationship('OrganizationTier', back_populates='org',
+                         cascade='all, delete-orphan')
+
+    @property
+    def is_shared(self) -> bool:
+        return self.data_scope == 'shared'
+
+    def __repr__(self):
+        return f'<Organization {self.id}: {self.slug}>'
+
+
+class OrganizationTier(Base):
+    """
+    A named bundle of modules, defined per org. This is the org owner's matrix.
+
+    A tier is WHAT you get; a subscription is one way to GET it (see
+    OrganizationMember.granted_by). Keeping those separate is what allows an
+    owner to comp a client into a paid tier without a subscription, and what
+    stops a tier dropdown from becoming a way to hand out paid features by
+    accident — the tier names the bundle, billing names the entitlement.
+
+    Distinct from an access group by cardinality: a member holds exactly ONE
+    tier (what they paid for -> modules) but may belong to MANY access groups
+    (how they are organized -> which resources).
+    """
+    __tablename__ = 'organization_tiers'
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
+                    nullable=False, index=True)
+    tier_key = Column(String(64), nullable=False)
+    label = Column(String(255), nullable=False)
+    modules = Column(JSONB, nullable=False, server_default='[]')
+    # Set only when an org owner sells this tier through their own connected
+    # Stripe account. Unused until that ships.
+    stripe_price_id = Column(String(255), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('org_id', 'tier_key', name='uq_org_tier_key'),
+    )
+
+    org = relationship('Organization', back_populates='tiers')
+
+    def __repr__(self):
+        return f'<OrganizationTier org={self.org_id} {self.tier_key}>'
+
+
+class OrganizationMember(Base):
+    """
+    An account's membership in an org, carrying the tier it holds there.
+
+    The same account may be a member of several orgs at different tiers — you
+    can be premium inside an org that pays and free in your own.
+
+    granted_by is the override that makes comping work:
+      'subscription' - owned by the Stripe webhook; lapses when billing does.
+      'grant'        - set by an owner; NEVER written by any webhook.
+
+    is_owner is a bypass rather than a stored set of grants. An owner always
+    reaches every module the org's ceiling allows, so a bad save in the matrix
+    can never lock them out of the page that would undo it.
+    """
+    __tablename__ = 'organization_members'
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
+                    nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey('accounts.id', ondelete='CASCADE'),
+                        nullable=False, index=True)
+    tier_key = Column(String(64), nullable=False)
+    granted_by = Column(String(20), nullable=False, server_default='grant')
+    is_owner = Column(Boolean, nullable=False, server_default=text('false'))
+    created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('org_id', 'account_id', name='uq_org_member'),
+        CheckConstraint("granted_by IN ('subscription','grant')",
+                        name='ck_org_member_granted_by'),
+    )
+
+    org = relationship('Organization', back_populates='members')
+    account = relationship('Account', back_populates='org_memberships',
+                           foreign_keys=[account_id])
+
+    def __repr__(self):
+        return (f'<OrganizationMember org={self.org_id} account={self.account_id} '
+                f'tier={self.tier_key}>')
+
+
 class Logins(Base):
     __tablename__ = 'logins'
     id = Column(Integer, primary_key=True, index=True)
@@ -359,6 +508,14 @@ class VectorDbIngestionLog(Base):
 
 class Agent(Base):
     __tablename__ = 'agents'
+    # Tenant scope. Reads filter on this; account_id below is retained as
+    # created_by (attribution), never as the tenant key.
+    org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
+                    nullable=False, index=True)
+    # Intra-org visibility. 'private' = creator plus explicit grantees;
+    # 'org' = every member. Defaults to 'private' so widening is always a
+    # deliberate act.
+    visibility = Column(String(20), nullable=False, server_default='private')
     
     id = Column(Integer, primary_key=True, index=True)
     account_id = Column(Integer, ForeignKey('accounts.id'), nullable=False, index=True)
@@ -431,6 +588,10 @@ class AccessGroup(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
     owner_account_id = Column(Integer, ForeignKey('accounts.id', ondelete='CASCADE'), nullable=False, index=True)
+    # Groups are intra-org. Nullable during the expand phase of the migration;
+    # tightened once every row is backfilled.
+    org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
+                    nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now(), nullable=False)
     
@@ -490,6 +651,14 @@ class VectorStore(Base):
     services/vector_store_credentials.py. New stores should set them explicitly.
     """
     __tablename__ = 'vector_stores'
+    # Tenant scope. Reads filter on this; account_id below is retained as
+    # created_by (attribution), never as the tenant key.
+    org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
+                    nullable=False, index=True)
+    # Intra-org visibility. 'private' = creator plus explicit grantees;
+    # 'org' = every member. Defaults to 'private' so widening is always a
+    # deliberate act.
+    visibility = Column(String(20), nullable=False, server_default='private')
 
     id = Column(Integer, primary_key=True, index=True)
     owner_account_id = Column(Integer, ForeignKey('accounts.id', ondelete='CASCADE'), nullable=False, index=True)
@@ -535,6 +704,12 @@ class AccessGrant(Base):
     __tablename__ = 'access_grants'
 
     id = Column(Integer, primary_key=True, index=True)
+    # The org this grant lives in. A grant may NEVER cross orgs: principal and
+    # resource must both belong to this org, validated on every write. Without
+    # that constraint a grant between two accounts who end up in different orgs
+    # is a live cross-tenant read path.
+    org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
+                    nullable=True, index=True)
     principal_type = Column(String(20), nullable=False)   # 'account' | 'group'
     principal_id = Column(Integer, nullable=False)
     resource_type = Column(String(20), nullable=False)    # 'agent' | 'vector_store' | 'credential'
@@ -572,18 +747,33 @@ class AccessGrantEvent(Base):
     __tablename__ = 'access_grant_events'
 
     id = Column(Integer, primary_key=True, index=True)
-    # 'create' | 'revoke' | 'role_change'
-    event_type = Column(String(20), nullable=False, index=True)
+    # Which org the event happened in. No FK cascade concerns here beyond the
+    # column itself — like the id columns below, this log is deliberately
+    # independent so it survives what it describes.
+    org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
+                    nullable=True, index=True)
+    # See services/audit.py for the vocabulary. Widened well past resource
+    # grants: membership, tier, ceiling, publishing and staff-join events all
+    # land here, so there is ONE chronological answer to "what happened in this
+    # org, and who did it".
+    event_type = Column(String(40), nullable=False, index=True)
 
     resource_type = Column(String(20), nullable=False)   # agent | vector_store | credential
     resource_id = Column(Integer, nullable=False)
     resource_label = Column(String(512), nullable=True)  # snapshot
 
-    principal_type = Column(String(20), nullable=False)  # account | group
-    principal_id = Column(Integer, nullable=False)
+    # Nullable: org-level events (a ceiling change, a suspension) act on the
+    # organization itself and have no counterparty.
+    principal_type = Column(String(20), nullable=True)   # account | group
+    principal_id = Column(Integer, nullable=True)
     principal_label = Column(String(512), nullable=True)  # snapshot (group name / email)
 
     role = Column(String(20), nullable=True)             # role involved (new role for role_change)
+    # Free text for events that are not about roles: what a ceiling or a
+    # tier's module set BECAME. Unbounded on purpose — a module list is
+    # longer than any role name, and squeezing it into `role` is what broke
+    # the first ceiling change.
+    detail = Column(Text, nullable=True)
 
     actor_account_id = Column(Integer, nullable=True, index=True)   # who performed the change
     actor_email = Column(String(320), nullable=True)               # snapshot
@@ -591,7 +781,14 @@ class AccessGrantEvent(Base):
     created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False, index=True)
 
     __table_args__ = (
-        CheckConstraint("event_type IN ('create','revoke','role_change')", name='ck_access_grant_event_type'),
+        CheckConstraint(
+            "event_type IN ('create','revoke','role_change',"
+            "'member.add','member.remove','member.tier_change',"
+            "'org.create','org.suspend','org.restore','org.ceiling_change',"
+            "'tier.modules_change',"
+            "'catalog.publish','catalog.unpublish','catalog.grant','catalog.revoke',"
+            "'staff.join')",
+            name='ck_access_grant_event_type'),
         Index('ix_access_grant_events_resource', 'resource_type', 'resource_id'),
     )
 
@@ -610,6 +807,10 @@ class Company(Base):
     Companies.
     """
     __tablename__ = 'companies'
+    # Tenant scope. Reads filter on this; account_id below is retained as
+    # created_by (attribution), never as the tenant key.
+    org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
+                    nullable=False, index=True)
 
     id = Column(Integer, primary_key=True, index=True)
     account_id = Column(Integer, ForeignKey('accounts.id', ondelete='CASCADE'), nullable=False, index=True)
@@ -642,6 +843,10 @@ class CompanyContact(Base):
     owning Account, with a uniqueness constraint preventing duplicate links.
     """
     __tablename__ = 'company_contacts'
+    # Tenant scope. Reads filter on this; account_id below is retained as
+    # created_by (attribution), never as the tenant key.
+    org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
+                    nullable=False, index=True)
 
     id = Column(Integer, primary_key=True, index=True)
     company_id = Column(Integer, ForeignKey('companies.id', ondelete='CASCADE'), nullable=False, index=True)
@@ -673,6 +878,10 @@ class Contact(Base):
     ContactEvents (calls, emails, meetings, notes, etc.).
     """
     __tablename__ = 'contacts'
+    # Tenant scope. Reads filter on this; account_id below is retained as
+    # created_by (attribution), never as the tenant key.
+    org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
+                    nullable=False, index=True)
 
     id = Column(Integer, primary_key=True, index=True)
     account_id = Column(Integer, ForeignKey('accounts.id', ondelete='CASCADE'), nullable=False, index=True)
@@ -743,6 +952,10 @@ class ContactList(Base):
     account's Contacts via the ContactListMember join table.
     """
     __tablename__ = 'contact_lists'
+    # Tenant scope. Reads filter on this; account_id below is retained as
+    # created_by (attribution), never as the tenant key.
+    org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
+                    nullable=False, index=True)
 
     id = Column(Integer, primary_key=True, index=True)
     account_id = Column(Integer, ForeignKey('accounts.id', ondelete='CASCADE'), nullable=False, index=True)
@@ -765,6 +978,10 @@ class ContactListMember(Base):
     Join table linking a ContactList to its member Contacts.
     """
     __tablename__ = 'contact_list_members'
+    # Tenant scope. Reads filter on this; account_id below is retained as
+    # created_by (attribution), never as the tenant key.
+    org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
+                    nullable=False, index=True)
 
     id = Column(Integer, primary_key=True, index=True)
     contact_list_id = Column(Integer, ForeignKey('contact_lists.id', ondelete='CASCADE'), nullable=False, index=True)
@@ -792,6 +1009,10 @@ class ContactEvent(Base):
     description, and when it occurred (occurred_at supports backdating).
     """
     __tablename__ = 'contact_events'
+    # Tenant scope. Reads filter on this; account_id below is retained as
+    # created_by (attribution), never as the tenant key.
+    org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
+                    nullable=False, index=True)
 
     id = Column(Integer, primary_key=True, index=True)
     contact_id = Column(Integer, ForeignKey('contacts.id', ondelete='CASCADE'), nullable=False, index=True)
@@ -819,6 +1040,10 @@ class CareerTimeline(Base):
     title, and optional description.
     """
     __tablename__ = 'career_timeline'
+    # Tenant scope. Reads filter on this; account_id below is retained as
+    # created_by (attribution), never as the tenant key.
+    org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
+                    nullable=False, index=True)
 
     id = Column(Integer, primary_key=True, index=True)
     contact_id = Column(Integer, ForeignKey('contacts.id', ondelete='CASCADE'), nullable=False, index=True)
@@ -853,6 +1078,10 @@ class Deal(Base):
     SET NULL) rather than cascade-deleted.
     """
     __tablename__ = 'deals'
+    # Tenant scope. Reads filter on this; account_id below is retained as
+    # created_by (attribution), never as the tenant key.
+    org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
+                    nullable=False, index=True)
 
     id = Column(Integer, primary_key=True, index=True)
     account_id = Column(Integer, ForeignKey('accounts.id', ondelete='CASCADE'), nullable=False, index=True)
@@ -1106,3 +1335,22 @@ class EmailCampaignRating(Base):
     campaign = relationship('EmailCampaign', back_populates='ratings')
     email_template = relationship('EmailTemplate')
     contact = relationship('Contact')
+
+
+# ---------------------------------------------------------------------------
+# Model registration
+# ---------------------------------------------------------------------------
+# Imported for its SIDE EFFECT of attaching the catalog tables to
+# Base.metadata, not for any name it exports — hence the noqa.
+#
+# The catalog lives in its own module because it belongs to the PLATFORM
+# rather than to any tenant, and keeping that boundary visible in the file
+# layout is worth a little awkwardness. But every consumer of Base.metadata
+# needs those tables: Alembic autogenerate would otherwise propose dropping
+# them, and tests/conftest.py's create_all would not build them at all
+# (which surfaces as "relation catalog_items does not exist" from any query
+# that reaches the catalog arm).
+#
+# Registering here rather than in each consumer means there is ONE place to
+# get this right instead of one per entry point.
+from . import catalog_models  # noqa: F401,E402

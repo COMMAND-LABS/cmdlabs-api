@@ -2,7 +2,8 @@
 Update agent endpoint.
 """
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims, ensure_account
+from src.services.org_scope import AGENT, VECTOR_STORE, resource_predicate, scoped_resources
 from src.db.models import Agent
 from src.schemas import validate_against_schema
 from jsonschema import ValidationError as JsonSchemaValidationError
@@ -19,6 +20,7 @@ async def update_agent(
     request_body: UpdateAgentRequest,
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request
 ):
     """
@@ -32,7 +34,7 @@ async def update_agent(
 
         agent = db.query(Agent).filter(
             Agent.id == agent_id,
-            Agent.account_id == account_id
+            resource_predicate(Agent, org)
         ).first()
 
         if not agent:

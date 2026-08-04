@@ -10,9 +10,11 @@ Turns the access graph into something you can read off one screen:
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, status, Request
 from pydantic import BaseModel
+from sqlalchemy import tuple_
 
 from datetime import datetime
-from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims, ensure_account
+from src.services.org_scope import AGENT, VECTOR_STORE, resource_predicate, scoped_resources
 from src.db.models import Agent, VectorStore, Credential, AccessGrant, AccessGrantEvent
 from src.services import access
 from src.services.access_admin import grant_label
@@ -84,6 +86,7 @@ async def audit_resource(
     resource_id: int,
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request,
 ):
     """Who can access this resource (resolved to accounts) + derived exposure.
@@ -141,6 +144,7 @@ async def audit_resource(
 async def my_access_report(
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request,
 ):
     """Reverse audit: everything the caller can reach via grants, and the path."""
@@ -171,6 +175,7 @@ async def my_access_report(
 async def shared_by_me(
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request,
 ):
     """Every resource the caller OWNS that is shared, with whom, and at what role."""
@@ -180,9 +185,9 @@ async def shared_by_me(
 
         # Map each owned resource (type, id) -> label.
         owned: dict = {}
-        for aid, name in db.query(Agent.id, Agent.name).filter(Agent.account_id == account_id).all():
+        for aid, name in db.query(Agent.id, Agent.name).filter(resource_predicate(Agent, org)).all():
             owned[(access.AGENT, aid)] = name
-        for vid, idx in db.query(VectorStore.id, VectorStore.index_name).filter(VectorStore.owner_account_id == account_id).all():
+        for vid, idx in db.query(VectorStore.id, VectorStore.index_name).filter(resource_predicate(VectorStore, org)).all():
             owned[(access.VECTOR_STORE, vid)] = idx
         for cid, cname, ctype in db.query(Credential.id, Credential.credential_name, Credential.credential_type).filter(Credential.account_id == account_id).all():
             owned[(access.CREDENTIAL, cid)] = cname or str(ctype)
@@ -242,6 +247,7 @@ class AccessEvent(BaseModel):
 async def access_activity(
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request,
     limit: int = 200,
 ):
@@ -257,18 +263,30 @@ async def access_activity(
 
         # Resource keys the caller owns.
         owned = set()
-        owned |= {(access.AGENT, r[0]) for r in db.query(Agent.id).filter(Agent.account_id == account_id).all()}
-        owned |= {(access.VECTOR_STORE, r[0]) for r in db.query(VectorStore.id).filter(VectorStore.owner_account_id == account_id).all()}
+        owned |= {(access.AGENT, r[0]) for r in db.query(Agent.id).filter(resource_predicate(Agent, org)).all()}
+        owned |= {(access.VECTOR_STORE, r[0]) for r in db.query(VectorStore.id).filter(resource_predicate(VectorStore, org)).all()}
         owned |= {(access.CREDENTIAL, r[0]) for r in db.query(Credential.id).filter(Credential.account_id == account_id).all()}
         if not owned:
             return []
 
-        # Pull recent events and keep those on owned resources. (Volume is low;
-        # ordering by recency + capping keeps it cheap without a composite filter.)
+        # Pull recent events on the caller's own resources, then keep those on
+        # resources they own.
+        #
+        # The (type, id) pairs are filtered in SQL rather than only in Python.
+        # This used to take the newest 2000 rows platform-wide and filter after
+        # the fact, which was fine while the table held nothing but resource
+        # grants — but the log now also carries membership, tier, ceiling, org
+        # and catalog events for every org, and those would steadily crowd the
+        # caller's own grant history out of the window. It also stops the scan
+        # being O(every org) to answer a question about one.
         rows = (
             db.query(AccessGrantEvent)
+            .filter(
+                tuple_(AccessGrantEvent.resource_type,
+                       AccessGrantEvent.resource_id).in_(list(owned)),
+            )
             .order_by(AccessGrantEvent.created_at.desc())
-            .limit(2000)
+            .limit(limit)
             .all()
         )
         out = [
@@ -285,9 +303,8 @@ async def access_activity(
                 created_at=e.created_at,
             )
             for e in rows
-            if (e.resource_type, e.resource_id) in owned
         ]
-        return out[:limit]
+        return out
     except HTTPException:
         raise
     except Exception as e:

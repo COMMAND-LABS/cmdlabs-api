@@ -4,7 +4,8 @@ Contact list members sub-router — add/remove/list contacts within a list.
 from typing import List
 from fastapi import APIRouter, HTTPException, status, Request
 from sqlalchemy.exc import IntegrityError
-from src.deps import db_dependency, auth_dependency, account_id_from_claims
+from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims
+from src.services.org_scope import tenant_predicate
 from src.db.models import ContactList, ContactListMember, Contact
 
 from src.routers.contact_lists.models import (
@@ -23,6 +24,7 @@ async def list_members(
     list_id: int,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     """List all contacts in a given contact list."""
@@ -31,7 +33,7 @@ async def list_members(
 
         contact_list = db.query(ContactList).filter(
             ContactList.id == list_id,
-            ContactList.account_id == account_id,
+            tenant_predicate(ContactList, org),
         ).first()
 
         if not contact_list:
@@ -56,6 +58,7 @@ async def add_member(
     request_body: AddContactToListRequest,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     """Add a single contact to a contact list."""
@@ -64,7 +67,7 @@ async def add_member(
 
         contact_list = db.query(ContactList).filter(
             ContactList.id == list_id,
-            ContactList.account_id == account_id,
+            tenant_predicate(ContactList, org),
         ).first()
 
         if not contact_list:
@@ -72,13 +75,14 @@ async def add_member(
 
         contact = db.query(Contact).filter(
             Contact.id == request_body.contact_id,
-            Contact.account_id == account_id,
+            tenant_predicate(Contact, org),
         ).first()
 
         if not contact:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
 
         member = ContactListMember(
+            org_id=org.org_id,
             contact_list_id=list_id,
             contact_id=request_body.contact_id,
             account_id=account_id,
@@ -108,6 +112,7 @@ async def bulk_add_members(
     request_body: BulkAddContactsToListRequest,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     """Add multiple contacts to a list in one call, skipping duplicates."""
@@ -116,7 +121,7 @@ async def bulk_add_members(
 
         contact_list = db.query(ContactList).filter(
             ContactList.id == list_id,
-            ContactList.account_id == account_id,
+            tenant_predicate(ContactList, org),
         ).first()
 
         if not contact_list:
@@ -125,13 +130,14 @@ async def bulk_add_members(
         existing_ids = {
             m.contact_id
             for m in db.query(ContactListMember)
-            .filter(ContactListMember.contact_list_id == list_id)
+            .filter(ContactListMember.contact_list_id == list_id,
+                    tenant_predicate(ContactListMember, org))
             .all()
         }
 
         valid_contacts = db.query(Contact).filter(
             Contact.id.in_(request_body.contact_ids),
-            Contact.account_id == account_id,
+            tenant_predicate(Contact, org),
         ).all()
         valid_ids = {c.id for c in valid_contacts}
 
@@ -139,6 +145,7 @@ async def bulk_add_members(
         for contact_id in request_body.contact_ids:
             if contact_id in valid_ids and contact_id not in existing_ids:
                 db.add(ContactListMember(
+                    org_id=org.org_id,
                     contact_list_id=list_id,
                     contact_id=contact_id,
                     account_id=account_id,
@@ -161,6 +168,7 @@ async def remove_member(
     contact_id: int,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     """Remove a contact from a contact list."""
@@ -169,7 +177,7 @@ async def remove_member(
 
         contact_list = db.query(ContactList).filter(
             ContactList.id == list_id,
-            ContactList.account_id == account_id,
+            tenant_predicate(ContactList, org),
         ).first()
 
         if not contact_list:

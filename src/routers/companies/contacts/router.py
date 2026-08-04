@@ -8,7 +8,8 @@ companies and vice versa.
 from typing import List
 from fastapi import APIRouter, HTTPException, status, Request
 from sqlalchemy.exc import IntegrityError
-from src.deps import db_dependency, auth_dependency, account_id_from_claims
+from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims
+from src.services.org_scope import tenant_predicate
 from src.db.models import Company, CompanyContact, Contact
 
 from src.routers.companies.models import (
@@ -27,6 +28,7 @@ async def list_company_contacts(
     company_id: int,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     """List all contacts associated with a given company."""
@@ -35,7 +37,7 @@ async def list_company_contacts(
 
         company = db.query(Company).filter(
             Company.id == company_id,
-            Company.account_id == account_id,
+            tenant_predicate(Company, org),
         ).first()
 
         if not company:
@@ -43,7 +45,7 @@ async def list_company_contacts(
 
         memberships = (
             db.query(CompanyContact)
-            .filter(CompanyContact.company_id == company_id)
+            .filter(CompanyContact.company_id == company_id, tenant_predicate(CompanyContact, org))
             .all()
         )
         return memberships
@@ -60,6 +62,7 @@ async def add_company_contact(
     request_body: AddContactToCompanyRequest,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     """Associate a single contact with a company."""
@@ -68,7 +71,7 @@ async def add_company_contact(
 
         company = db.query(Company).filter(
             Company.id == company_id,
-            Company.account_id == account_id,
+            tenant_predicate(Company, org),
         ).first()
 
         if not company:
@@ -76,13 +79,14 @@ async def add_company_contact(
 
         contact = db.query(Contact).filter(
             Contact.id == request_body.contact_id,
-            Contact.account_id == account_id,
+            tenant_predicate(Contact, org),
         ).first()
 
         if not contact:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
 
         membership = CompanyContact(
+            org_id=org.org_id,
             company_id=company_id,
             contact_id=request_body.contact_id,
             account_id=account_id,
@@ -113,6 +117,7 @@ async def bulk_add_company_contacts(
     request_body: BulkAddContactsToCompanyRequest,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     """Associate multiple contacts with a company in one call, skipping duplicates."""
@@ -121,7 +126,7 @@ async def bulk_add_company_contacts(
 
         company = db.query(Company).filter(
             Company.id == company_id,
-            Company.account_id == account_id,
+            tenant_predicate(Company, org),
         ).first()
 
         if not company:
@@ -130,13 +135,13 @@ async def bulk_add_company_contacts(
         existing_ids = {
             m.contact_id
             for m in db.query(CompanyContact)
-            .filter(CompanyContact.company_id == company_id)
+            .filter(CompanyContact.company_id == company_id, tenant_predicate(CompanyContact, org))
             .all()
         }
 
         valid_contacts = db.query(Contact).filter(
             Contact.id.in_(request_body.contact_ids),
-            Contact.account_id == account_id,
+            tenant_predicate(Contact, org),
         ).all()
         valid_ids = {c.id for c in valid_contacts}
 
@@ -144,6 +149,7 @@ async def bulk_add_company_contacts(
         for contact_id in request_body.contact_ids:
             if contact_id in valid_ids and contact_id not in existing_ids:
                 db.add(CompanyContact(
+                    org_id=org.org_id,
                     company_id=company_id,
                     contact_id=contact_id,
                     account_id=account_id,
@@ -166,6 +172,7 @@ async def remove_company_contact(
     contact_id: int,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     """Disassociate a contact from a company."""
@@ -174,7 +181,7 @@ async def remove_company_contact(
 
         company = db.query(Company).filter(
             Company.id == company_id,
-            Company.account_id == account_id,
+            tenant_predicate(Company, org),
         ).first()
 
         if not company:
@@ -182,6 +189,7 @@ async def remove_company_contact(
 
         membership = db.query(CompanyContact).filter(
             CompanyContact.company_id == company_id,
+            tenant_predicate(CompanyContact, org),
             CompanyContact.contact_id == contact_id,
         ).first()
 

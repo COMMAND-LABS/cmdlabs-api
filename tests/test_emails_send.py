@@ -28,6 +28,10 @@ from src.db.models import (
     EmailTemplate,
 )
 
+# Every row needs a tenant now that org_id is NOT NULL. These suites are
+# single-tenant, so they all sit in the root org conftest creates.
+ROOT_ORG_ID = 1
+
 SEND_URL = "/api/emails/send"
 
 
@@ -75,7 +79,7 @@ def template(db: Session, test_account: Account) -> EmailTemplate:
 
 @pytest.fixture()
 def contact(db: Session, test_account: Account) -> Contact:
-    c = Contact(account_id=test_account.id, first_name="Alex", last_name="Doe",
+    c = Contact(org_id=ROOT_ORG_ID, account_id=test_account.id, first_name="Alex", last_name="Doe",
                 email="alex@example.com")
     db.add(c)
     db.commit()
@@ -194,14 +198,14 @@ async def test_template_not_mutated(authed_client, db, campaign, template, conta
 
 async def test_unsent_resume_helper(authed_client, db, test_account, campaign, template, contact, credential, _stub_ses):
     # second contact, both in a list linked to the campaign
-    other = Contact(account_id=test_account.id, first_name="Sam", email="sam@example.com")
+    other = Contact(org_id=ROOT_ORG_ID, account_id=test_account.id, first_name="Sam", email="sam@example.com")
     db.add(other)
     db.commit()
-    clist = ContactList(account_id=test_account.id, name="Recipients")
+    clist = ContactList(org_id=ROOT_ORG_ID, account_id=test_account.id, name="Recipients")
     db.add(clist)
     db.commit()
     for c in (contact, other):
-        db.add(ContactListMember(contact_list_id=clist.id, contact_id=c.id,
+        db.add(ContactListMember(org_id=ROOT_ORG_ID, contact_list_id=clist.id, contact_id=c.id,
                                  account_id=test_account.id))
     campaign.contact_list_id = clist.id
     db.commit()

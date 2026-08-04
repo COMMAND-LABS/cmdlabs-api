@@ -2,7 +2,7 @@
 Create agent endpoint.
 """
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims, ensure_account
 from src.db.models import Agent
 from src.schemas import validate_against_schema
 from jsonschema import ValidationError as JsonSchemaValidationError
@@ -18,6 +18,7 @@ async def create_agent(
     request_body: CreateAgentRequest,
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request
 ):
     """
@@ -64,6 +65,7 @@ async def create_agent(
             _log.getLogger(__name__).warning("[CREATE AGENT] Config schema file not found: %s", e)
 
         agent = Agent(
+            org_id=org.org_id,
             account_id=account_id,
             name=agent_name,
             config=request_body.config

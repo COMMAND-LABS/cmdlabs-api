@@ -1,7 +1,8 @@
 """Email campaigns CRUD router."""
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, status, Request, Query
-from src.deps import db_dependency, auth_dependency
+from src.deps import org_dependency, db_dependency, auth_dependency
+from src.services.org_scope import tenant_predicate
 from src.db.models import EmailCampaign, EmailTemplate, ContactList
 from src.utils.errors import handle_db_error
 
@@ -24,6 +25,7 @@ router.include_router(ratings_router)
 async def list_email_campaigns(
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
     search: Optional[str] = Query(default=None, description="Filter by name (case-insensitive substring)"),
     status_filter: Optional[str] = Query(
@@ -50,6 +52,7 @@ async def get_email_campaign(
     campaign_id: int,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     try:
@@ -73,6 +76,7 @@ async def create_email_campaign(
     body: CreateEmailCampaignRequest,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     try:
@@ -89,7 +93,7 @@ async def create_email_campaign(
         if body.contact_list_id is not None:
             cl = db.query(ContactList).filter(
                 ContactList.id == body.contact_list_id,
-                ContactList.account_id == account_id,
+                tenant_predicate(ContactList, org),
             ).first()
             if not cl:
                 raise HTTPException(status_code=404, detail="Contact list not found")
@@ -120,6 +124,7 @@ async def update_email_campaign(
     body: UpdateEmailCampaignRequest,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     try:
@@ -142,7 +147,7 @@ async def update_email_campaign(
         if body.contact_list_id is not None:
             cl = db.query(ContactList).filter(
                 ContactList.id == body.contact_list_id,
-                ContactList.account_id == account_id,
+                tenant_predicate(ContactList, org),
             ).first()
             if not cl:
                 raise HTTPException(status_code=404, detail="Contact list not found")
@@ -174,6 +179,7 @@ async def delete_email_campaign(
     campaign_id: int,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     try:

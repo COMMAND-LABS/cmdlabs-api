@@ -4,7 +4,7 @@ Delete vectors endpoint.
 import logging
 
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims, ensure_account
 from src.db.models import VectorDbIngestionLog
 from pinecone import Pinecone
 
@@ -25,6 +25,7 @@ async def delete_vectors_in_namespace(
     namespace: str,
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request,
     owner_account_id: int | None = None,
 ):
@@ -37,7 +38,7 @@ async def delete_vectors_in_namespace(
     try:
         caller_account_id = account_id_from_claims(jwt)
         # Deleting vectors is a write — resolve the KB owner and require write access.
-        account_id = authorize_vector_store(db, caller_account_id, index_name, owner_account_id, require_write=True)
+        account_id = authorize_vector_store(db, caller_account_id, index_name, owner_account_id, require_write=True, org_id=org.org_id)
         account = ensure_account(db, account_id)
 
         # Get Pinecone API key for this account

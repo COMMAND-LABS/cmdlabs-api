@@ -25,6 +25,7 @@ from src.db.models import (
     AccessGroup,
     Agent,
     Credential,
+    OrganizationMember,
     VectorStore,
 )
 
@@ -78,32 +79,132 @@ def _resource_owner(db: Session, resource_type: str, resource_id: int):
     return row[0] if row else None
 
 
+class CrossOrgGrantError(Exception):
+    """A grant would have joined a principal and a resource in different orgs."""
+
+
+def _resource_org(db: Session, resource_type: str, resource_id: int):
+    """Return the org that owns a resource, or None if it doesn't exist."""
+    if resource_type == AGENT:
+        row = db.query(Agent.org_id).filter(Agent.id == resource_id).first()
+    elif resource_type == VECTOR_STORE:
+        row = db.query(VectorStore.org_id).filter(VectorStore.id == resource_id).first()
+    elif resource_type == CREDENTIAL:
+        # Credentials are portable identity rather than tenant data: a personal
+        # key has org_id NULL and travels with its owner. Nothing to confine.
+        return None
+    else:
+        return None
+    return row[0] if row else None
+
+
+def assert_same_org(db: Session, org_id: int, principal_type: str, principal_id: int,
+                    resource_type: str, resource_id: int) -> None:
+    """Refuse a grant whose principal and resource are not in the same org.
+
+    An AccessGrant row is polymorphic and carries no inherent tenancy, so
+    "account in org B may use agent in org A" is perfectly expressible. If it
+    were ever written, that agent would appear in B's list through the
+    "or granted" arm — the grant table would become a documented way around
+    org_id, which is the one thing the tenancy boundary may not have.
+
+    Read-side confinement in accessible_resource_ids() neutralizes such rows if
+    they already exist; this stops them being created at all. Both matter: the
+    filter protects against history, this protects against the future.
+
+    Cross-org sharing is not a missing feature here. Reaching another org's
+    resource is done by JOINING that org, which leaves a membership row its
+    members can see.
+    """
+    resource_org = _resource_org(db, resource_type, resource_id)
+    if resource_org is not None and resource_org != org_id:
+        raise CrossOrgGrantError(
+            f"{resource_type} {resource_id} belongs to org {resource_org}, "
+            f"not org {org_id}"
+        )
+
+    if principal_type == ACCOUNT:
+        is_member = (
+            db.query(OrganizationMember.id)
+            .filter(
+                OrganizationMember.org_id == org_id,
+                OrganizationMember.account_id == principal_id,
+            )
+            .first()
+        )
+        if not is_member:
+            raise CrossOrgGrantError(
+                f"account {principal_id} is not a member of org {org_id}"
+            )
+    elif principal_type == GROUP:
+        row = (
+            db.query(AccessGroup.org_id)
+            .filter(AccessGroup.id == principal_id)
+            .first()
+        )
+        # A group predating org scoping has org_id NULL; treat that as "not yet
+        # classified" rather than as a match, so it cannot be used to cross.
+        if row is None or row[0] != org_id:
+            raise CrossOrgGrantError(
+                f"group {principal_id} does not belong to org {org_id}"
+            )
+
+
 def can_access(
     db: Session,
     account_id: int,
     resource_type: str,
     resource_id: int,
     required: str = "read",
+    org_id: int | None = None,
 ) -> bool:
     """True if *account_id* can access the resource at >= *required* role.
 
-    Owner short-circuit, then a single indexed query over grants to the account
-    directly OR to a group it belongs to, filtered to roles that satisfy required.
+    Org check, then owner short-circuit, then a single indexed query over grants
+    to the account directly OR to a group it belongs to, filtered to roles that
+    satisfy required.
+
+    ``org_id`` CONFINES the answer to one organization, and every caller with a
+    request context must pass it. This is the single-resource twin of the filter
+    in accessible_resource_ids(): without it the LIST endpoints are org-scoped
+    while the GET-one endpoints are not, which is the worse half to leave open —
+    a caller who knows an id skips the list entirely.
+
+    It confines both arms deliberately. The grant filter stops a grant recorded
+    in another org from counting; the ownership check stops the owner
+    short-circuit from reaching across, which matters as soon as one account
+    belongs to two orgs (platform staff who joined a tenant, today; anyone,
+    after org switching ships). Ownership is not tenancy.
+
+    Credentials are exempt by construction: they are portable identity rather
+    than tenant data, so _resource_org returns None for them and the check
+    passes through.
+
+    ``None`` means "do not confine", and exists only for callers with no request
+    context at all (maintenance scripts). Prefer passing an org.
     """
     owner = _resource_owner(db, resource_type, resource_id)
     if owner is None:
         return False
+
+    if org_id is not None:
+        resource_org = _resource_org(db, resource_type, resource_id)
+        if resource_org is not None and resource_org != org_id:
+            return False
+
     if owner == account_id:
         return True
 
-    grants = (
+    grant_q = (
         db.query(AccessGrant.principal_type, AccessGrant.principal_id, AccessGrant.role)
         .filter(
             AccessGrant.resource_type == resource_type,
             AccessGrant.resource_id == resource_id,
         )
-        .all()
     )
+    if org_id is not None:
+        grant_q = grant_q.filter(AccessGrant.org_id == org_id)
+    grants = grant_q.all()
     if not grants:
         return False
 
@@ -132,9 +233,25 @@ def accessible_resource_ids(
     account_id: int,
     resource_type: str,
     required: str = "read",
+    org_id: int | None = None,
 ) -> set:
     """Resource ids of *resource_type* the account can reach via grants at >=
     *required* role (EXCLUDES owned — callers union owned separately).
+
+    ``org_id`` CONFINES the result to grants recorded in that organization, and
+    every caller with a request context must pass it.
+
+    Why it matters: a grant row is polymorphic and carries no inherent tenancy,
+    so a row naming a principal in one org and a resource in another is
+    expressible. Without this filter those ids flow straight into the caller's
+    "or granted" arm and become a cross-tenant read — the grant table would
+    silently become a way around org_id. Creation-time validation (see
+    assert_same_org) stops such rows being written; this filter neutralizes any
+    that already exist, which is the half that protects data written before the
+    check landed.
+
+    ``None`` means "do not confine", and exists only for callers that have no
+    request context at all (maintenance scripts). Prefer passing an org.
     """
     group_ids = {
         r[0]
@@ -142,11 +259,13 @@ def accessible_resource_ids(
         .filter(AccessGroupMember.account_id == account_id)
         .all()
     }
-    grants = (
+    grant_q = (
         db.query(AccessGrant.resource_id, AccessGrant.role, AccessGrant.principal_type, AccessGrant.principal_id)
         .filter(AccessGrant.resource_type == resource_type)
-        .all()
     )
+    if org_id is not None:
+        grant_q = grant_q.filter(AccessGrant.org_id == org_id)
+    grants = grant_q.all()
     out = set()
     for resource_id, role, principal_type, principal_id in grants:
         if not role_satisfies(role, required):

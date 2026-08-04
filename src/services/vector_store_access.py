@@ -38,6 +38,7 @@ def authorize_vector_store(
     owner_account_id: int | None,
     *,
     require_write: bool,
+    org_id: int | None = None,
 ) -> int:
     """Authorize access to knowledge base ``index_name`` and return its OWNER id.
 
@@ -46,6 +47,11 @@ def authorize_vector_store(
       group) on the VectorStore at read (or write, when require_write) level.
 
     404 if no read access, 403 if read-only but write required.
+
+    ``org_id`` confines the grant lookup to one organization; pass it whenever a
+    request context exists. Without it a grant recorded in another org still
+    resolves, and this helper is the gate every vector-store endpoint funnels
+    through.
     """
     if owner_account_id is None or owner_account_id == caller_account_id:
         return caller_account_id
@@ -54,11 +60,12 @@ def authorize_vector_store(
     if vs_id is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base not found")
 
-    if not access.can_access(db, caller_account_id, access.VECTOR_STORE, vs_id, required="read"):
+    if not access.can_access(db, caller_account_id, access.VECTOR_STORE, vs_id,
+                             required="read", org_id=org_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base not found")
 
     if require_write and not access.can_access(
-        db, caller_account_id, access.VECTOR_STORE, vs_id, required="write"
+        db, caller_account_id, access.VECTOR_STORE, vs_id, required="write", org_id=org_id
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -68,16 +75,21 @@ def authorize_vector_store(
     return owner_account_id
 
 
-def list_shared_vector_stores(db: Session, account_id: int) -> list[dict]:
+def list_shared_vector_stores(db: Session, account_id: int,
+                              org_id: int | None = None) -> list[dict]:
     """Knowledge bases shared with ``account_id`` (via direct or group grants).
 
     Returns one entry per (owner, index) the caller can reach, with ``can_write``
     True when the caller holds a write grant.
+
+    ``org_id`` confines the result to grants recorded in that organization.
     """
-    readable_ids = access.accessible_resource_ids(db, account_id, access.VECTOR_STORE, required="read")
+    readable_ids = access.accessible_resource_ids(db, account_id, access.VECTOR_STORE,
+                                                  required="read", org_id=org_id)
     if not readable_ids:
         return []
-    writable_ids = access.accessible_resource_ids(db, account_id, access.VECTOR_STORE, required="write")
+    writable_ids = access.accessible_resource_ids(db, account_id, access.VECTOR_STORE,
+                                                  required="write", org_id=org_id)
 
     rows = (
         db.query(VectorStore.id, VectorStore.owner_account_id, VectorStore.index_name)

@@ -5,7 +5,7 @@ import logging
 from typing import List
 
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims, ensure_account
 from pinecone import Pinecone
 
 from .helpers import get_pinecone_api_key_for_index
@@ -24,6 +24,7 @@ async def list_namespaces(
     index_name: str,
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request,
     owner_account_id: int | None = None,
 ):
@@ -33,7 +34,7 @@ async def list_namespaces(
     try:
         caller_account_id = account_id_from_claims(jwt)
         # Resolve the KB owner (self, or the owner of a shared KB). Read access.
-        account_id = authorize_vector_store(db, caller_account_id, index_name, owner_account_id, require_write=False)
+        account_id = authorize_vector_store(db, caller_account_id, index_name, owner_account_id, require_write=False, org_id=org.org_id)
         account = ensure_account(db, account_id)
 
         # Get Pinecone API key

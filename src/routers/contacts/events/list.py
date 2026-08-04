@@ -3,7 +3,8 @@ List contact events endpoint.
 """
 from typing import List
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.services.org_scope import tenant_predicate
 from src.db.models import Contact, ContactEvent
 
 from ..models import ContactEventResponse
@@ -18,6 +19,7 @@ async def list_contact_events(
     contact_id: int,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     """Return events for a contact ordered most-recent first."""
@@ -27,7 +29,7 @@ async def list_contact_events(
 
         contact = db.query(Contact).filter(
             Contact.id == contact_id,
-            Contact.account_id == account_id,
+            tenant_predicate(Contact, org),
         ).first()
 
         if not contact:
@@ -35,7 +37,7 @@ async def list_contact_events(
 
         events = (
             db.query(ContactEvent)
-            .filter(ContactEvent.contact_id == contact_id)
+            .filter(ContactEvent.contact_id == contact_id, tenant_predicate(ContactEvent, org))
             .order_by(ContactEvent.occurred_at.desc())
             .all()
         )

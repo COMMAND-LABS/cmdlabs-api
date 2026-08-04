@@ -22,6 +22,10 @@ from src.services.agent_access import (
     load_agent_with_access_check,
 )
 
+# Every row needs a tenant now that org_id is NOT NULL. These suites are
+# single-tenant, so they all sit in the root org conftest creates.
+ROOT_ORG_ID = 1
+
 OWNER, MEMBER, OUTSIDER, MEMBER_NOGRANT = 1001, 1002, 1003, 1004
 AGENT_ID = 2001
 GROUP_GRANTED, GROUP_UNGRANTED = 3001, 3002
@@ -38,7 +42,7 @@ def seed(db):
         (MEMBER_NOGRANT, "member-nogrant@example.com"),
     ]:
         db.add(Account(id=acc_id, email=email))
-    db.add(Agent(id=AGENT_ID, account_id=OWNER, name="SOP Agent", config={"data": {}}))
+    db.add(Agent(org_id=ROOT_ORG_ID, id=AGENT_ID, account_id=OWNER, name="SOP Agent", config={"data": {}}))
     db.add(AccessGroup(id=GROUP_GRANTED, name="Granted", owner_account_id=OWNER))
     db.add(AccessGroup(id=GROUP_UNGRANTED, name="Ungranted", owner_account_id=OWNER))
     db.add(AccessGroupMember(access_group_id=GROUP_GRANTED, account_id=MEMBER))

@@ -10,11 +10,17 @@ from src.services.vector_store_credentials import resolve_index_pinecone_credent
 from src.utils.errors import handle_db_error
 
 
-def get_or_create_vector_store(db, owner_account_id: int, index_name: str) -> VectorStore:
+def get_or_create_vector_store(db, owner_account_id: int, index_name: str,
+                               org_id: int | None = None) -> VectorStore:
     """
     Return the VectorStore row for (owner, index), creating it (with no explicit
     credential bindings → default fallback) if missing. Lets sharing/audit work
     for indexes created before the VectorStore table existed. Caller commits.
+
+    org_id is required on any row this creates. It is keyword-optional only so
+    that a caller which genuinely has no request context (a backfill script)
+    can still look up an existing row — creating one without a tenant would be
+    a row no org can ever see, so that case raises instead.
     """
     store = (
         db.query(VectorStore)
@@ -25,7 +31,13 @@ def get_or_create_vector_store(db, owner_account_id: int, index_name: str) -> Ve
         .first()
     )
     if store is None:
-        store = VectorStore(owner_account_id=owner_account_id, index_name=index_name)
+        if org_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Cannot create a knowledge base without an organization.",
+            )
+        store = VectorStore(owner_account_id=owner_account_id, index_name=index_name,
+                            org_id=org_id)
         db.add(store)
         db.flush()  # assign id for grant references in the same transaction
     return store

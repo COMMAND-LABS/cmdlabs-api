@@ -15,9 +15,13 @@ from httpx import AsyncClient, ASGITransport
 from jose import jwt as jose_jwt
 from sqlalchemy.orm import Session
 
-from src.db.models import Account, Agent, AccessGroup, AccessGroupMember
+from src.db.models import Account, Agent, AccessGroup, AccessGroupMember, OrganizationMember
 from src.deps import get_db
 from src.main import app
+
+# Every row needs a tenant now that org_id is NOT NULL. These suites are
+# single-tenant, so they all sit in the root org conftest creates.
+ROOT_ORG_ID = 1
 
 OWNER, ADMIN, MEMBER, OUTSIDER, NEWHIRE, ADMIN2 = 1, 2, 3, 4, 5, 6
 GROUP = 100
@@ -50,13 +54,18 @@ def seed(db: Session):
         (OWNER, "owner@x.com"), (ADMIN, "admin@x.com"), (MEMBER, "member@x.com"),
         (OUTSIDER, "outsider@x.com"), (NEWHIRE, "newhire@x.com"), (ADMIN2, "admin2@x.com"),
     ]:
-        db.add(Account(id=uid, email=email))
-    db.add(AccessGroup(id=GROUP, name="Employees", owner_account_id=OWNER))
+        db.add(Account(id=uid, email=email, default_org_id=ROOT_ORG_ID))
+        # Endpoints that touch org-scoped resources resolve an OrgContext, which
+        # 403s for an account with no membership. These are all colleagues in
+        # the root org.
+        db.add(OrganizationMember(org_id=ROOT_ORG_ID, account_id=uid,
+                                  tier_key="free", granted_by="grant", is_owner=False))
+    db.add(AccessGroup(id=GROUP, name="Employees", owner_account_id=OWNER, org_id=ROOT_ORG_ID))
     db.add(AccessGroupMember(access_group_id=GROUP, account_id=ADMIN, role="admin"))
     db.add(AccessGroupMember(access_group_id=GROUP, account_id=MEMBER, role="member"))
     db.add(AccessGroupMember(access_group_id=GROUP, account_id=ADMIN2, role="admin"))
-    db.add(Agent(id=ADMIN_AGENT, account_id=ADMIN, name="Admin Agent", config={"data": {}}))
-    db.add(Agent(id=MEMBER_AGENT, account_id=MEMBER, name="Member Agent", config={"data": {}}))
+    db.add(Agent(org_id=ROOT_ORG_ID, id=ADMIN_AGENT, account_id=ADMIN, name="Admin Agent", config={"data": {}}))
+    db.add(Agent(org_id=ROOT_ORG_ID, id=MEMBER_AGENT, account_id=MEMBER, name="Member Agent", config={"data": {}}))
     db.flush()
     return db
 

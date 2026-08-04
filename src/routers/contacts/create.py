@@ -2,7 +2,7 @@
 Create contact endpoint.
 """
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.deps import db_dependency, auth_dependency, org_dependency, account_id_from_claims, ensure_account
 from src.db.models import Contact
 
 from .models import CreateContactRequest, ContactSummaryResponse
@@ -17,6 +17,7 @@ async def create_contact(
     request_body: CreateContactRequest,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     try:
@@ -44,6 +45,9 @@ async def create_contact(
             return value.strip()
 
         contact = Contact(
+            # Tenant scope. account_id below is retained as created_by
+            # attribution — it is no longer what reads filter on.
+            org_id=org.org_id,
             account_id=account_id,
             first_name=request_body.first_name.strip(),
             middle_name=request_body.middle_name.strip() if request_body.middle_name else None,

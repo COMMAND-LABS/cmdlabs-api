@@ -3,7 +3,8 @@ List career timeline entries for a contact.
 """
 from typing import List
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.services.org_scope import tenant_predicate
 from src.db.models import Contact, CareerTimeline
 
 from ..models import CareerTimelineResponse
@@ -18,6 +19,7 @@ async def list_career_timeline(
     contact_id: int,
     db: db_dependency,
     auth: auth_dependency,
+    org: org_dependency,
     request: Request,
 ):
     try:
@@ -26,7 +28,7 @@ async def list_career_timeline(
 
         contact = db.query(Contact).filter(
             Contact.id == contact_id,
-            Contact.account_id == account_id,
+            tenant_predicate(Contact, org),
         ).first()
 
         if not contact:
@@ -36,7 +38,7 @@ async def list_career_timeline(
             db.query(CareerTimeline)
             .filter(
                 CareerTimeline.contact_id == contact_id,
-                CareerTimeline.account_id == account_id,
+                tenant_predicate(CareerTimeline, org),
             )
             .order_by(CareerTimeline.start_date.desc())
             .all()

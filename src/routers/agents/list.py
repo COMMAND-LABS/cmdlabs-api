@@ -7,7 +7,8 @@ with them via access groups.
 from fastapi import APIRouter, HTTPException, status, Request
 from typing import List
 from sqlalchemy import or_
-from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims, ensure_account
+from src.services.org_scope import AGENT, VECTOR_STORE, resource_predicate, scoped_resources
 from src.db.models import Agent
 from src.services.agent_access import get_accessible_agent_ids
 from .models import AgentResponse
@@ -21,6 +22,7 @@ router = APIRouter()
 async def list_agents(
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request
 ):
     """
@@ -35,28 +37,17 @@ async def list_agents(
         account = ensure_account(db, account_id)
         
         # IDs the user can access via group grants (excludes owned)
-        granted_ids = get_accessible_agent_ids(db, account_id)
+        granted_ids = get_accessible_agent_ids(db, account_id, org_id=org.org_id)
 
-        # Single query: owned OR granted
-        if granted_ids:
-            agents = (
-                db.query(Agent)
-                .filter(
-                    or_(
-                        Agent.account_id == account_id,
-                        Agent.id.in_(granted_ids),
-                    )
-                )
-                .order_by(Agent.id.desc())
-                .all()
-            )
-        else:
-            agents = (
-                db.query(Agent)
-                .filter(Agent.account_id == account_id)
-                .order_by(Agent.id.desc())
-                .all()
-            )
+        # Own org (honouring visibility) OR explicitly granted OR published to
+        # this org through the catalog. The branch on `granted_ids` is gone:
+        # scoped_resources composes the arms, so there is one query shape
+        # rather than two that could drift apart.
+        agents = (
+            scoped_resources(db, Agent, org, AGENT, granted_ids)
+            .order_by(Agent.id.desc())
+            .all()
+        )
         
         return [
             AgentResponse(

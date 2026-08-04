@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass
 from typing import Annotated
 from sqlalchemy.orm import Session
 from fastapi import Depends, HTTPException, status, Request
@@ -167,3 +168,209 @@ def ensure_account(db: Session, account_id: int) -> Account:
             detail="Account not found",
         )
     return account
+
+
+# --------------------------------------------------------------------------
+# Organization context
+# --------------------------------------------------------------------------
+
+# Name of the cookie carrying the caller's active organization id.
+#
+# A cookie rather than a header, because ~11 fetch call sites in the UI bypass
+# the shared request() wrapper; every one of them already sends
+# credentials:"include", so a cookie reaches all of them for free while a
+# header would silently fall back to the wrong org wherever it was missed.
+#
+# A cookie rather than a JWT claim, because the JWT lives 7 days and removing
+# someone from an org has to take effect on their very next request.
+ORG_COOKIE_NAME = "cmdlabs_org"
+
+
+@dataclass(frozen=True)
+class OrgContext:
+    """Who is asking, in which org, and what that org allows.
+
+    `org_id` is the ONLY thing that decides which rows a request may see.
+    `tier_key` decides which modules it may open. Those two axes are kept
+    strictly separate: a tier never widens or narrows row visibility, so a
+    misconfigured tier is a wrong menu rather than a data leak.
+
+    `is_super_admin` bypasses MODULE gating only. It never bypasses org_id —
+    platform staff read an org's data by joining it, which leaves a membership
+    row anyone in that org can see. An invisible read bypass would make the
+    audit log meaningless and would give every query two behaviors.
+    """
+    account_id: int
+    org_id: int
+    org_slug: str
+    tier_key: str
+    is_owner: bool
+    is_super_admin: bool
+    data_scope: str          # 'personal' | 'shared'
+    org_status: str          # 'active' | 'read_only'
+
+    @property
+    def is_shared(self) -> bool:
+        """True when every member of this org sees every row."""
+        return self.data_scope == "shared"
+
+    @property
+    def is_read_only(self) -> bool:
+        """True when the org's subscription lapsed: reads and exports only."""
+        return self.org_status == "read_only"
+
+
+async def get_org_context(
+    request: Request,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(get_current_user_or_api_key),
+) -> OrgContext:
+    """Resolve and VALIDATE the caller's active organization.
+
+    The cookie is never trusted. It names an org, and membership in that org is
+    re-checked against the database on every single request — so revoking a
+    membership takes effect immediately, with no token to re-issue and no cache
+    to invalidate.
+    """
+    from src.db.models import Organization, OrganizationMember
+
+    account_id = account_id_from_claims(auth)
+    account = ensure_account(db, account_id)
+
+    requested_org_id: int | None = None
+    # On the API-key path the cookie is ignored outright. A key is a
+    # long-lived credential that carries no org of its own yet, so honouring a
+    # cookie alongside it would let a key issued for one org be pointed at
+    # another just by setting a header. Falls back to the account default.
+    if auth.get("auth_type") != "api_key":
+        raw = request.cookies.get(ORG_COOKIE_NAME)
+        if raw and raw.isdigit():
+            requested_org_id = int(raw)
+
+    target_org_id = requested_org_id or account.default_org_id
+    if target_org_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No organization for this account.",
+        )
+
+    row = (
+        db.query(OrganizationMember, Organization)
+        .join(Organization, Organization.id == OrganizationMember.org_id)
+        .filter(
+            OrganizationMember.account_id == account_id,
+            OrganizationMember.org_id == target_org_id,
+        )
+        .first()
+    )
+
+    if row is None:
+        # Fail closed. Notably we do NOT silently fall back to the default org
+        # when a cookie names an org the caller is not in: that would turn a
+        # revoked membership into "you are quietly somewhere else" instead of a
+        # visible error, and would mask a tampered cookie entirely.
+        logger.warning(
+            "[ORG] account %s is not a member of org %s — refusing",
+            account_id, target_org_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a member of this organization.",
+        )
+
+    member, org = row
+    return OrgContext(
+        account_id=account_id,
+        org_id=org.id,
+        org_slug=org.slug,
+        tier_key=member.tier_key,
+        is_owner=member.is_owner,
+        is_super_admin=(account.role == "admin"),
+        data_scope=org.data_scope,
+        org_status=org.status,
+    )
+
+
+org_dependency = Annotated[OrgContext, Depends(get_org_context)]
+
+
+def require_module(module_key: str):
+    """Dependency factory: refuse the request unless `ctx` may open this module.
+
+    This is what makes the tiers matrix an authorization boundary rather than a
+    menu filter. Without it an account whose tier excludes Deals still reaches
+    GET /api/deals by typing the URL — which is exactly the state
+    cmdlabs-ui/src/config/roles.ts documents about the pre-org system in its
+    own header comment.
+
+    Attached in main.py from the module registry rather than hand-written on
+    each router, so a new router either maps to a module and is gated, or is
+    absent from the registry and visibly always-allowed. There is no third
+    state where someone simply forgot.
+
+    Note this gates SCREENS, not rows. org_id still decides what is visible
+    within a module; the two axes never substitute for each other.
+    """
+    async def _check(
+        request: Request,
+        db: Session = Depends(get_db),
+        ctx: "OrgContext" = Depends(get_org_context),
+    ) -> None:
+        from src.services import modules as modules_service
+
+        if not modules_service.can_open(db, ctx, module_key):
+            logger.info(
+                "[MODULE] account %s (org %s, tier %s) denied %s %s — %s not enabled",
+                ctx.account_id, ctx.org_id, ctx.tier_key,
+                request.method, request.url.path, module_key,
+            )
+            # 404 rather than 403: a module the caller has no tier for should
+            # look absent, not forbidden. Telling someone precisely which paid
+            # features exist behind a wall is an invitation to probe them.
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Not found",
+            )
+
+        # An org whose owner's subscription lapsed keeps reading and exporting
+        # but cannot write. Deleting or freezing their data outright is not a
+        # recoverable mistake; refusing writes is.
+        if ctx.is_read_only and request.method not in ("GET", "HEAD", "OPTIONS"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This organization is read-only. Reactivate the "
+                       "subscription to make changes.",
+            )
+
+    return _check
+
+
+async def require_super_admin(
+    db: Session = Depends(get_db),
+    auth: dict = Depends(get_current_user_or_api_key),
+) -> Account:
+    """Platform staff only. Granted out of band via scripts/sync_account_roles.py.
+
+    Deliberately NOT built on OrgContext: administering the platform is not an
+    action inside any one org, so requiring an active-org membership would be
+    both wrong and circular (staff would need to belong to an org to discover
+    which orgs exist).
+
+    What this permits is administration — listing orgs, setting a module
+    ceiling, suspending. It does NOT grant access to any org's DATA. Reading
+    another org's rows still requires joining that org, which leaves a
+    membership row its members can see. Keeping those apart is what lets
+    `org_id == ctx.org_id` hold with zero exceptions.
+    """
+    account = ensure_account(db, account_id_from_claims(auth))
+    if account.role != 'admin':
+        # 404 rather than 403: the admin surface should not confirm its own
+        # existence to a non-staff caller.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Not found",
+        )
+    return account
+
+
+super_admin_dependency = Annotated[Account, Depends(require_super_admin)]

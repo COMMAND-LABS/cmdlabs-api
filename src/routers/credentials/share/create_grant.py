@@ -4,7 +4,7 @@ Share a credential with an access group or an individual (credential owner only)
 Writes a unified AccessGrant (resource_type='credential', role='use').
 """
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import db_dependency, jwt_dependency, account_id_from_claims
+from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
 from src.db.models import Credential, AccessGrant
 from src.services import access
 from src.services.access_admin import resolve_principal, upsert_grant, record_access_event
@@ -22,6 +22,7 @@ async def create_credential_grant(
     body: CreateCredentialGrantRequest,
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request,
 ):
     """Share a credential with a group OR an individual. Owner only. Use-not-view."""
@@ -54,6 +55,7 @@ async def create_credential_grant(
 
         grant = upsert_grant(
             db,
+            org_id=org.org_id,
             principal_type=principal_type,
             principal_id=principal_id,
             resource_type=access.CREDENTIAL,
