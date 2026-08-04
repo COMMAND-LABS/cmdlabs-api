@@ -20,11 +20,13 @@ router = APIRouter()
 
 class EntitlementsResponse(BaseModel):
     org_id: int
-    org_slug: str
+    # None for a personal workspace, which has no public page.
+    org_slug: Optional[str] = None
     tier_key: str
     is_owner: bool
     is_super_admin: bool
-    data_scope: str
+    # True when this org has one member, who owns it.
+    is_personal: bool
     org_status: str
     modules: List[str]
     # The org's whole ceiling, so an owner's admin UI can show what exists but
@@ -42,7 +44,7 @@ async def my_entitlements(db: db_dependency, org: org_dependency, request: Reque
             tier_key=org.tier_key,
             is_owner=org.is_owner,
             is_super_admin=org.is_super_admin,
-            data_scope=org.data_scope,
+            is_personal=org.is_personal,
             org_status=org.org_status,
             modules=modules.effective_modules(db, org),
             ceiling=(modules.ceiling_for(db, org.org_id)

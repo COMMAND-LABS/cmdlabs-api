@@ -14,6 +14,7 @@ import stripe
 
 from src.deps import db_dependency
 from src.db.models import Account, role_for_subscription
+from src.services.organizations import sync_ceiling_to_subscription
 from src.clients.stripe_client import construct_webhook_event, get_subscription
 
 logger = logging.getLogger(__name__)
@@ -76,7 +77,7 @@ def _find_account(
     return None
 
 
-def _apply_subscription(account: Account, subscription) -> None:
+def _apply_subscription(db, account: Account, subscription) -> None:
     """
     Copy the subscription's current state onto the account, and move the role
     to match in the same transaction.
@@ -84,6 +85,12 @@ def _apply_subscription(account: Account, subscription) -> None:
     Role and subscription status are written together and only here, so the two
     can never disagree — a lapsed subscription demotes to 'free' on the same
     commit that records the lapse. Admins pass through untouched.
+
+    The account's personal workspace ceiling moves with it. Since every account
+    owns its own org and an owner bypasses the tier layer, the CEILING is what
+    a personal org's entitlement actually is — without this line subscribing
+    would set role='premium' and change nothing a user could see. Orgs whose
+    ceiling was granted by staff are left alone; that is the comp.
     """
     account.stripe_subscription_id = subscription.get("id")
     account.subscription_status = subscription.get("status")
@@ -91,6 +98,7 @@ def _apply_subscription(account: Account, subscription) -> None:
         subscription.get("current_period_end")
     )
     account.role = role_for_subscription(account.subscription_status, account.role)
+    sync_ceiling_to_subscription(db, account)
 
 
 @router.post("/webhook", status_code=status.HTTP_200_OK)
@@ -154,7 +162,7 @@ async def stripe_webhook(
             # the subscription itself — that is what entitlement is based on.
             subscription = get_subscription(subscription_id) if subscription_id else None
             if subscription:
-                _apply_subscription(account, subscription)
+                _apply_subscription(db, account, subscription)
             if data.get("customer") and not account.stripe_customer_id:
                 account.stripe_customer_id = data["customer"]
             db.commit()
@@ -179,13 +187,14 @@ async def stripe_webhook(
                 )
                 return {"received": True, "handled": False}
 
-            _apply_subscription(account, data)
+            _apply_subscription(db, account, data)
             if event_type == "customer.subscription.deleted":
                 # Stripe sends this as status 'canceled', but pin it so a future
                 # payload shape cannot leave a deleted subscription looking live
                 # — and re-derive the role from the pinned status.
                 account.subscription_status = "canceled"
                 account.role = role_for_subscription("canceled", account.role)
+                sync_ceiling_to_subscription(db, account)
             db.commit()
             logger.info(
                 "[STRIPE WEBHOOK] Account %s subscription %s -> %s",

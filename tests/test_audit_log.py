@@ -66,6 +66,13 @@ def _events(db, event_type=None):
 # ---------------------------------------------------------------------------
 
 def test_joining_an_org_is_recorded(db: Session, test_org):
+    """A signup lands in its OWN workspace, and that is logged.
+
+    It used to land in root, which is why this once asserted test_org.id and
+    tier 'free'. Since org-per-signup the newcomer owns the org it joins, so
+    the tier is 'owner' — and for a personal workspace the tier is inert
+    anyway, because an owner resolves modules straight from the ceiling.
+    """
     newcomer = Account(id=7301, email="newcomer@x.com")
     db.add(newcomer); db.flush()
 
@@ -74,10 +81,10 @@ def test_joining_an_org_is_recorded(db: Session, test_org):
     events = _events(db, audit.MEMBER_ADD)
     assert len(events) == 1
     ev = events[0]
-    assert ev.org_id == test_org.id
+    assert ev.org_id != test_org.id, "a signup must not land in the platform org"
     assert ev.principal_id == newcomer.id
     assert ev.principal_label == "newcomer@x.com"   # snapshotted
-    assert ev.role == "free"                        # the tier they joined on
+    assert ev.role == "owner"                       # the tier they joined on
 
 
 def test_membership_is_recorded_once_not_on_every_login(db: Session, test_org):

@@ -214,10 +214,9 @@ def test_org(db: Session) -> Organization:
     Contact without having asked for an org would otherwise fail on a foreign
     key rather than on whatever it meant to assert.
 
-    data_scope='personal' matches production root: many unrelated signups
-    share the org, and each still sees only rows it created. Tests that need
-    a real shared team create their own org with data_scope='shared' — see
-    tests/org_isolation.make_tenant.
+    Stands in for the platform org. Since org-per-signup, every org means the
+    same thing — one tenant, whose members all see its rows — so a suite that
+    needs a second tenant simply makes another org (tests/org_isolation).
     """
     org = db.query(Organization).filter(Organization.slug == "root").first()
     if org is None:
@@ -225,7 +224,6 @@ def test_org(db: Session) -> Organization:
             id=ROOT_ORG_ID,
             slug="root",
             name="CMD LABS",
-            data_scope="personal",
             # Every module enabled. Module gating is enforced for real now, so
             # a fixture org with an empty ceiling would 404 every gated route
             # and every suite would be testing entitlement instead of its own

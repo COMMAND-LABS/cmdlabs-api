@@ -47,9 +47,9 @@ async def staff_client(_override_db, staff_account) -> AsyncClient:
 
 @pytest.fixture()
 def seeded_orgs(db, test_org, test_account):
-    acme = Organization(slug="acme", name="Acme", data_scope="shared",
+    acme = Organization(slug="acme", name="Acme",
                         granted_modules=["contacts", "deals"], status="active")
-    lapsed = Organization(slug="lapsed-co", name="Lapsed Co", data_scope="shared",
+    lapsed = Organization(slug="lapsed-co", name="Lapsed Co",
                           granted_modules=["contacts"], status="read_only")
     db.add_all([acme, lapsed])
     db.flush()
@@ -96,7 +96,7 @@ async def test_summary_reports_counts_and_ceiling(staff_client: AsyncClient, see
     assert row["member_count"] == 1
     assert row["tier_count"] == 1
     assert row["granted_modules"] == ["contacts", "deals"]
-    assert row["data_scope"] == "shared"
+    assert row["is_personal"] is False
 
 
 async def test_suspended_org_is_visible_as_read_only(staff_client: AsyncClient, seeded_orgs):
@@ -110,7 +110,7 @@ async def test_response_carries_no_tenant_data(staff_client: AsyncClient, seeded
     """Guard against this page quietly growing into a data-read bypass."""
     body = (await staff_client.get(ADMIN_ORGS_URL)).json()
     allowed = {
-        "id", "slug", "name", "data_scope", "status", "owner_account_id",
+        "id", "slug", "name", "is_personal", "status", "owner_account_id",
         "owner_email", "member_count", "tier_count", "granted_modules",
         "created_at",
     }

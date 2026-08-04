@@ -61,7 +61,7 @@ async def list_organizations(
                     id=o.id,
                     slug=o.slug,
                     name=o.name,
-                    data_scope=o.data_scope,
+                    is_personal=o.is_personal,
                     status=o.status,
                     owner_account_id=o.owner_account_id,
                     owner_email=owner_emails.get(o.owner_account_id),

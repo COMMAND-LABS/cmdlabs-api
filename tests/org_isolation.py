@@ -60,21 +60,27 @@ def make_tenant(
     slug: str,
     account_id: int,
     email: str | None = None,
-    data_scope: str = "shared",
+    data_scope: str | None = None,
     tier_key: str = "member",
     is_owner: bool = True,
 ) -> Tenant:
-    """Create an org with one member. Defaults to a real team (shared scope).
+    """Create an org with one member.
 
-    Pass data_scope='personal' to model the root org, where many unrelated
-    signups coexist and each sees only rows it created.
+    Calling twice with the same slug adds a second member to the SAME org,
+    which is how a team is built here.
+
+    `data_scope` is accepted and ignored. Orgs no longer have one: every
+    account owns its own org, so the flag that once distinguished the shared
+    root lobby from a real team has nothing left to distinguish (migrations
+    e3f4a5b6c7d8 / f4a5b6c7d8e9). The parameter stays so the ~30 existing call
+    sites still read correctly rather than churning in a security suite whose
+    diffs should stay easy to review.
     """
     org = db.query(Organization).filter(Organization.slug == slug).first()
     if org is None:
         org = Organization(
             slug=slug,
             name=slug.title(),
-            data_scope=data_scope,
             # Fully enabled by default — see the note in conftest.test_org.
             granted_modules=list(MODULE_KEYS),
             status="active",

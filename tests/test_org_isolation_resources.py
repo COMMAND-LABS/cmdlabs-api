@@ -85,21 +85,35 @@ async def test_org_visible_agent_is_shared_with_colleagues(db: Session, _overrid
     assert shared.id in await _visible_ids(colleague)
 
 
-async def test_org_visibility_does_nothing_in_a_personal_org(db: Session, _override_db):
-    """The guard that matters most.
+async def test_org_visibility_reaches_colleagues_and_stops_at_the_org(
+    db: Session, _override_db
+):
+    """visibility='org' means THIS org, and it is checked at the boundary.
 
-    Root is data_scope='personal' and holds thousands of unrelated signups. If
-    visibility='org' took effect there, one person marking an agent shared
-    would expose it to every user on the platform.
+    This test used to assert that visibility='org' did nothing at all inside
+    the root org — the guard that stopped one person marking an agent shared
+    from exposing it to every signup on the platform. That hazard is gone with
+    the lobby: an org now only ever contains people who belong together.
+
+    What still has to hold, and is the easier thing to get wrong, is that
+    'org' does not mean 'everyone'. So: a colleague sees it, an outsider never
+    does.
     """
-    mine = make_tenant(db, slug="rootish-res", account_id=5305, data_scope="personal")
-    stranger = make_tenant(db, slug="rootish-res", account_id=5306, data_scope="personal")
-    assert mine.org_id == stranger.org_id
+    mine = make_tenant(db, slug="vis-team", account_id=5305)
+    colleague = make_tenant(db, slug="vis-team", account_id=5306)
+    outsider = make_tenant(db, slug="vis-outsider", account_id=5313)
+    assert mine.org_id == colleague.org_id != outsider.org_id
 
-    a = _agent(mine, "Marked Shared", visibility="org")
-    db.add(a); db.flush()
+    shared = _agent(mine, "Marked Shared", visibility="org")
+    private = _agent(mine, "Still Mine", visibility="private")
+    db.add_all([shared, private]); db.flush()
 
-    assert a.id not in await _visible_ids(stranger)
+    seen_by_colleague = await _visible_ids(colleague)
+    assert shared.id in seen_by_colleague, "'org' must reach the team"
+    assert private.id not in seen_by_colleague, "private stays private"
+
+    assert shared.id not in await _visible_ids(outsider), \
+        "'org' means this org, never another tenant"
 
 
 # ---------------------------------------------------------------------------

@@ -199,20 +199,22 @@ class OrgContext:
     platform staff read an org's data by joining it, which leaves a membership
     row anyone in that org can see. An invisible read bypass would make the
     audit log meaningless and would give every query two behaviors.
+
+    `org_slug` is None for a personal workspace, which has no public page until
+    its owner creates one.
     """
     account_id: int
     org_id: int
-    org_slug: str
+    org_slug: str | None
     tier_key: str
     is_owner: bool
     is_super_admin: bool
-    data_scope: str          # 'personal' | 'shared'
     org_status: str          # 'active' | 'read_only'
 
     @property
-    def is_shared(self) -> bool:
-        """True when every member of this org sees every row."""
-        return self.data_scope == "shared"
+    def is_personal(self) -> bool:
+        """A workspace with one member, who owns it."""
+        return self.org_slug is None
 
     @property
     def is_read_only(self) -> bool:
@@ -286,7 +288,6 @@ async def get_org_context(
         tier_key=member.tier_key,
         is_owner=member.is_owner,
         is_super_admin=(account.role == "admin"),
-        data_scope=org.data_scope,
         org_status=org.status,
     )
 

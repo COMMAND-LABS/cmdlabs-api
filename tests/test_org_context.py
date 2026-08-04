@@ -38,7 +38,7 @@ async def _resolve(db, account_id, cookies=None, auth_type="jwt"):
 @pytest.fixture()
 def other_org(db) -> Organization:
     org = Organization(
-        slug="acme", name="Acme", data_scope="shared",
+        slug="acme", name="Acme",
         granted_modules=[], status="active",
     )
     db.add(org)
@@ -68,8 +68,9 @@ async def test_cookie_selects_a_joined_org(db, test_account, test_org, other_org
     assert ctx.org_id == other_org.id
     assert ctx.tier_key == "premium"
     assert ctx.is_owner is True
-    # data_scope travels with the org, not the account.
-    assert ctx.is_shared is True
+    # Org-level facts travel with the org, not the account.
+    assert ctx.org_slug == other_org.slug
+    assert ctx.is_personal is False   # it has a slug, so it is a real org
 
 
 # ---------------------------------------------------------------------------

@@ -37,14 +37,12 @@ class OrgScope:
     its own. There is therefore no ambient context to inherit, and the scope
     has to be passed explicitly. A shared shape keeps both services scoping
     identically rather than approximately.
+
+    `account_id` is here for attribution and for resource visibility, NOT for
+    row scoping. Once every account had its own org, org_id became sufficient.
     """
     account_id: int
     org_id: int
-    data_scope: str          # 'personal' | 'shared'
-
-    @property
-    def is_shared(self) -> bool:
-        return self.data_scope == "shared"
 
 # Tables whose "who created this" column is not called account_id.
 _CREATED_BY_COLUMN = {
@@ -60,37 +58,38 @@ VECTOR_STORE = 'vector_store'
 def created_by_column(model):
     """The column recording who created a row.
 
-    Since org scoping landed, account_id is ATTRIBUTION, not the tenant key.
-    It still decides visibility inside a data_scope='personal' org, where
-    members coexist without sharing.
+    Since org scoping landed, account_id is ATTRIBUTION, not the tenant key —
+    it records who made the row and no longer decides who sees it. It does
+    still narrow RESOURCES (agents, knowledge bases), which default to private
+    within their org until deliberately marked 'org'.
     """
     name = _CREATED_BY_COLUMN.get(model.__tablename__, 'account_id')
     return getattr(model, name)
 
 
 def tenant_predicate(model, ctx):
-    """Rows of `model` that `ctx` may see.
+    """Rows of `model` that `ctx` may see. One clause, no exceptions.
 
-    Two clauses, and the order of reasoning matters:
+    org_id must match. That is the entire tenancy rule — not for owners, not
+    for platform staff, not for any resource type. Staff read another org's
+    data by joining it, which leaves a membership row that org can see.
 
-      1. org_id must match. ALWAYS. This is the tenant boundary and it has no
-         exceptions — not for owners, not for platform staff. Staff read
-         another org's data by joining it, which leaves a membership row that
-         org can see.
+    This used to carry a second clause: inside a 'personal' org a member saw
+    only rows they created. That existed because the root org held every signup
+    at once, so it needed a rule for strangers sharing one org. Since
+    e3f4a5b6c7d8 every account owns its own org and a team is just an org with
+    more members, so the clause was constant-true everywhere and f4a5b6c7d8e9
+    removed the column behind it.
 
-      2. within a 'personal' org, a member additionally sees only rows they
-         created. That is what lets the root org hold thousands of unrelated
-         signups without them seeing each other, while a real team org
-         ('shared') shows everything to everyone in it.
+    Worth keeping it this way. This expression is the one thing standing
+    between two tenants — there is no row-level security behind it — and its
+    reviewability IS the safety property. A single comparison can be checked at
+    a glance at all ~40 call sites; a conditional cannot.
 
-    In a personal org this reduces to `created_by == me`, which is exactly the
-    pre-org behaviour — which is why flipping reads is a no-op until orgs
-    actually have multiple members.
+    Attribution did not go anywhere: account_id still records who created each
+    row, it just no longer decides who sees it.
     """
-    in_org = model.org_id == ctx.org_id
-    if ctx.is_shared:
-        return in_org
-    return and_(in_org, created_by_column(model) == ctx.account_id)
+    return model.org_id == ctx.org_id
 
 
 def scoped(db: Session, model, ctx):
@@ -102,28 +101,29 @@ def resource_predicate(model, ctx):
     """Rows of a RESOURCE table (agents, vector stores) that `ctx` may see.
 
     Distinct from tenant_predicate because these carry a `visibility` column:
-    inside a shared org, a resource is reachable by everyone only if its
-    creator marked it 'org'. A CRM contact belongs to the team by default; an
-    agent someone is still building does not.
+    a resource is reachable by everyone in the org only if its creator marked
+    it 'org'. A CRM contact belongs to the team by default; an agent someone is
+    still building does not.
 
         org_id == mine
-        AND ( (org is shared AND visibility == 'org')   -- deliberately shared
-              OR created_by == me )                     -- always your own
+        AND ( visibility == 'org'      -- deliberately shared with the team
+              OR created_by == me )    -- always your own
 
-    The `ctx.is_shared` guard is load-bearing: without it, a resource marked
-    'org' inside the PERSONAL root org would become visible to every one of
-    the thousands of unrelated signups living there. Visibility only means
-    anything in an org that is actually a team.
+    In a personal org this is moot — its one member created everything in it —
+    so the rule needs no special case for workspaces, which is the point of
+    every org meaning the same thing.
+
+    This is still narrower than tenant_predicate, deliberately. Resources are
+    few and consequential (an agent carries credentials and reaches a knowledge
+    base), so they default to private and widening is an explicit act. CRM rows
+    are many and belong to the team by nature.
 
     Explicit grants (AccessGrant) are additive on top of this and are applied
     by the caller — they are how one names an individual or a department.
     """
-    mine = created_by_column(model) == ctx.account_id
-    if not ctx.is_shared:
-        return and_(model.org_id == ctx.org_id, mine)
     return and_(
         model.org_id == ctx.org_id,
-        or_(model.visibility == 'org', mine),
+        or_(model.visibility == 'org', created_by_column(model) == ctx.account_id),
     )
 
 

@@ -119,37 +119,52 @@ class Account(Base):
 
 class Organization(Base):
     """
-    A tenant. The unit of data isolation on the platform.
+    A tenant. The unit of data isolation on the platform, with no exceptions.
 
-    The root org (slug 'root') is org #1 and is NOT a special case — it is the
-    first instance of the same object every customer gets. If something only
-    works because it is the root org, that is a bug.
+    EVERY account owns one. A signup gets a personal workspace — an org with a
+    single member who is its owner — and a team is the same object with more
+    members in it. There is no "not really an org" case, which is what lets the
+    tenancy rule be `org_id == ctx.org_id` and nothing else.
 
-    Two columns carry most of the weight:
+    That uniformity replaced a `data_scope` column. Root used to hold every
+    signup at once, and data_scope='personal' was the flag that stopped them
+    seeing each other; it existed for exactly one row, and it was the only
+    reason visibility depended on anything besides org_id. Migration
+    e3f4a5b6c7d8 split the orgs apart and f4a5b6c7d8e9 dropped the column.
 
-    - data_scope: 'personal' means members each see only rows they created
-      (root: thousands of unrelated signups); 'shared' means every member sees
-      every row (a real team). IMMUTABLE after creation — flipping root to
-      'shared' would expose every user's private contacts in a single UPDATE,
-      so no API path writes it.
+    `slug` is NULL for a personal workspace: it has no public page until its
+    owner decides to create one. Immutable once set — it is the org's public
+    identity, so an auto-generated one would be a defect the owner is stuck
+    with. Postgres treats NULLs as distinct, so UNIQUE still holds.
 
-    - granted_modules: the ceiling. Which modules this org may use at all, set
-      by platform staff. Bespoke per org — there is no plan table. An org owner
-      distributes a subset of this to their own tiers and can never exceed it,
-      because resolution intersects at read time (see services/modules.py), so
-      lowering a ceiling takes effect on the very next request with no cascade.
+    Root (slug 'root') is now purely the PLATFORM org: staff only, and the home
+    of published catalog content. It is still an ordinary org — nothing works
+    because of its id — it simply has staff in it.
+
+    `granted_modules` is the ceiling: which modules this org may use at all.
+    Bespoke per org, no plan table. For a PERSONAL org it is the whole
+    entitlement, because its single member is its owner and an owner bypasses
+    the tier layer — so this is the column billing raises and lowers. Tiers
+    only start mattering once an org has someone in it who is not the owner.
+    Resolution intersects at read time (services/modules.py), so lowering a
+    ceiling takes effect on the very next request with no cascade.
     """
     __tablename__ = 'organizations'
 
     id = Column(Integer, primary_key=True, index=True)
     # No index=True: the UniqueConstraint below already creates a backing index
     # in Postgres, and declaring both makes autogenerate see permanent drift.
-    slug = Column(String(64), nullable=False)
+    slug = Column(String(64), nullable=True)
     name = Column(String(255), nullable=False)
     owner_account_id = Column(Integer, ForeignKey('accounts.id', ondelete='SET NULL'),
                               nullable=True, index=True)
-    data_scope = Column(String(20), nullable=False, server_default='personal')
     granted_modules = Column(JSONB, nullable=False, server_default='[]')
+    # Who owns granted_modules. 'subscription' means the Stripe webhook writes
+    # it; 'grant' means a human did and billing must never undo it. The same
+    # asymmetry as OrganizationMember.granted_by, one level up — which is where
+    # it has to live now that the ceiling is a personal org's entitlement.
+    ceiling_managed_by = Column(String(20), nullable=False,
+                                server_default='subscription')
     # 'read_only' when an org_owner subscription lapses: members keep reading
     # and exporting, writes are refused. Never deletion — losing a team's data
     # on a failed payment is not a recoverable mistake.
@@ -158,10 +173,10 @@ class Organization(Base):
 
     __table_args__ = (
         UniqueConstraint('slug', name='uq_organizations_slug'),
-        CheckConstraint("data_scope IN ('personal','shared')",
-                        name='ck_organizations_data_scope'),
         CheckConstraint("status IN ('active','read_only')",
                         name='ck_organizations_status'),
+        CheckConstraint("ceiling_managed_by IN ('subscription','grant')",
+                        name='ck_org_ceiling_managed_by'),
     )
 
     owner = relationship('Account', foreign_keys=[owner_account_id])
@@ -171,11 +186,12 @@ class Organization(Base):
                          cascade='all, delete-orphan')
 
     @property
-    def is_shared(self) -> bool:
-        return self.data_scope == 'shared'
+    def is_personal(self) -> bool:
+        """A workspace with no public page — one member, who owns it."""
+        return self.slug is None
 
     def __repr__(self):
-        return f'<Organization {self.id}: {self.slug}>'
+        return f'<Organization {self.id}: {self.slug or "(personal)"}>'
 
 
 class OrganizationTier(Base):

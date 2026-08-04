@@ -13,6 +13,7 @@ import stripe
 
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
 from src.db.models import role_for_subscription
+from src.services.organizations import sync_ceiling_to_subscription
 from src.clients.stripe_client import (
     create_billing_portal_session,
     create_stripe_customer,
@@ -237,6 +238,7 @@ async def downgrade_to_free(
         # path and the webhook can never disagree.
         account.subscription_status = subscription.get("status") or "canceled"
         account.role = role_for_subscription(account.subscription_status, account.role)
+        sync_ceiling_to_subscription(db, account)
         db.commit()
         db.refresh(account)
 

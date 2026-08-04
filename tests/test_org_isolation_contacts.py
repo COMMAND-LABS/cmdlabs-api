@@ -14,7 +14,8 @@ over-restrictive filter would look like a pass.
 import pytest
 from sqlalchemy.orm import Session
 
-from src.db.models import Contact
+from src.config.modules_registry import MODULE_KEYS
+from src.db.models import Organization, Contact
 from tests.org_isolation import assert_org_isolated, client_for, make_tenant
 
 CONTACTS_URL = "/api/contacts/"
@@ -75,24 +76,46 @@ async def test_colleagues_in_a_shared_org_see_each_others_contacts(
     assert row.id in ids, "a shared org must show a colleague's contacts"
 
 
-async def test_personal_org_members_still_do_not_see_each_other(
+async def test_a_signup_never_shares_an_org_with_another_signup(
     db: Session, _override_db
 ):
-    """Root is data_scope='personal'. Thousands of unrelated signups live
-    there, and the flip must not have quietly introduced sharing between
-    them — that would be a mass privacy break, not a feature."""
-    mine = make_tenant(db, slug="rootish", account_id=5104, data_scope="personal")
-    stranger = make_tenant(db, slug="rootish", account_id=5105, data_scope="personal")
-    assert mine.org_id == stranger.org_id
+    """The invariant that replaced personal scope.
 
-    theirs = _contact(mine.org_id, stranger.account_id, "stranger@iso.test")
+    Two strangers used to land in the root org together, and a data_scope flag
+    was what stopped them seeing each other's contacts — one conditional
+    standing between 274 people and each other. Now they are never in the same
+    org at all, so the isolation is structural rather than conditional.
+
+    Asserted through ensure_membership rather than by constructing orgs by
+    hand, because the thing that could regress is the SIGNUP PATH quietly
+    putting people back in a shared org. Building the orgs here would test the
+    fixture instead of the code.
+    """
+    from src.db.models import Account
+    from src.services.organizations import ensure_membership
+    from tests.org_isolation import Tenant
+
+    a = Account(id=5104, email="stranger-a@iso.test")
+    b = Account(id=5105, email="stranger-b@iso.test")
+    db.add_all([a, b]); db.flush()
+
+    ma = ensure_membership(db, a)
+    mb = ensure_membership(db, b)
+    assert ma.org_id != mb.org_id, "two signups must never share an org"
+    assert ma.is_owner and mb.is_owner, "each owns their own workspace"
+
+    org_b = db.query(Organization).filter(Organization.id == mb.org_id).one()
+    theirs = _contact(mb.org_id, b.id, "stranger@iso.test")
     db.add(theirs); db.flush()
 
-    async with client_for(mine) as c:
+    # And the boundary holds over HTTP, not just in the predicate.
+    org_a = db.query(Organization).filter(Organization.id == ma.org_id).one()
+    org_a.granted_modules = list(MODULE_KEYS)
+    db.flush()
+    async with client_for(Tenant(org=org_a, account=a)) as c:
         resp = await c.get(CONTACTS_URL)
     assert resp.status_code == 200
-    ids = {r["id"] for r in resp.json()["contacts"]}
-    assert theirs.id not in ids, "personal scope must not leak between members"
+    assert theirs.id not in {r["id"] for r in resp.json()["contacts"]}
 
 
 async def test_detail_route_is_scoped_too(db: Session, _override_db, acme, beta):

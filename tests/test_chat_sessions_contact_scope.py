@@ -14,6 +14,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.orm import Session
 
+from tests.org_isolation import make_tenant
 from src.db.models import Account, Contact, ChatSession
 
 # Every row needs a tenant now that org_id is NOT NULL. These suites are
@@ -39,13 +40,17 @@ def owned_contact(db: Session, test_account: Account) -> Contact:
 
 @pytest.fixture()
 def foreign_contact(db: Session) -> Contact:
-    """A contact owned by a *different* account."""
-    other = Account(id=2, email="other@example.com")
-    db.add(other)
-    db.flush()
+    """A contact owned by a different ORG — the boundary that exists.
+
+    Previously this was a different account inside the root org, invisible only
+    because root ran on personal scope. Every account now owns its own org, so
+    a colleague's contact is legitimately visible and the foreign case has to
+    be a genuinely foreign tenant.
+    """
+    other = make_tenant(db, slug="chat-outsider", account_id=2)
     contact = Contact(
-        org_id=ROOT_ORG_ID,
-        account_id=other.id,
+        org_id=other.org_id,
+        account_id=other.account_id,
         first_name="Someone",
         last_name="Else",
         email="someone.else@example.com",

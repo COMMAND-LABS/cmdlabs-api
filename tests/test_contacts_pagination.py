@@ -8,6 +8,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.orm import Session
 
+from tests.org_isolation import make_tenant
 from src.db.models import Account, Contact
 
 # Every row needs a tenant now that org_id is NOT NULL. These suites are
@@ -29,14 +30,18 @@ def seed_contacts(db: Session, test_account: Account):
                 email=f"person{i:03d}@example.com",
             )
         )
-    # A different account's contact must never appear.
-    other = Account(id=2, email="other@example.com")
-    db.add(other)
-    db.flush()
+    # A contact belonging to a DIFFERENT ORG must never appear.
+    #
+    # This used to be a different account in the SAME org, which was invisible
+    # only because the root org ran on personal scope. Since every account owns
+    # its own org, a different account in your org is a colleague and their
+    # contacts are meant to be visible — so that setup no longer tests
+    # anything. The tenant boundary is the org, so the foreign row goes in one.
+    other = make_tenant(db, slug="pagination-outsider", account_id=2)
     db.add(
         Contact(
-            org_id=ROOT_ORG_ID,
-            account_id=other.id,
+            org_id=other.org_id,
+            account_id=other.account_id,
             first_name="Foreign",
             last_name="Person",
             email="foreign@example.com",

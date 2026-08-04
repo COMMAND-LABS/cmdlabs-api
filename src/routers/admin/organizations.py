@@ -65,6 +65,13 @@ async def set_ceiling(
         before = list(org.granted_modules or [])
         org.granted_modules = normalize(body.modules)
 
+        # Setting a ceiling by hand is a deliberate act, so billing must never
+        # undo it. This is the comp: for a personal workspace the ceiling IS
+        # the entitlement, and without this flip the next Stripe event for that
+        # account would quietly take a granted module straight back out. Same
+        # asymmetry as OrganizationMember.granted_by, one level up.
+        org.ceiling_managed_by = "grant"
+
         if org.granted_modules != before:
             audit.record_org_change(
                 db,

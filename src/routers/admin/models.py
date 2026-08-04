@@ -13,9 +13,11 @@ class OrganizationSummary(BaseModel):
     joining it.
     """
     id: int
-    slug: str
+    # None for a personal workspace, which has no public page.
+    slug: Optional[str] = None
     name: str
-    data_scope: str            # 'personal' | 'shared'
+    # True for a personal workspace: one member, who owns it, no public page.
+    is_personal: bool
     status: str                # 'active' | 'read_only'
     owner_account_id: Optional[int] = None
     owner_email: Optional[str] = None
