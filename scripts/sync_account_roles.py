@@ -45,14 +45,28 @@ load_dotenv()
 from src.db.database import SessionLocal
 from src.db.models import (
     Account,
+    Organization,
+    OrganizationMember,
     ROLE_ADMIN,
     role_for_subscription,
 )
+from src.services.organizations import (
+    GRANTED_BY_GRANT,
+    PLATFORM_SLUG,
+    TIER_OWNER,
+)
 
 
-def sync(dry_run: bool, make_admin: list[str]) -> int:
-    """Returns the number of accounts whose role changed (or would change)."""
-    db = SessionLocal()
+def sync(dry_run: bool, make_admin: list[str], db=None) -> int:
+    """Returns the number of accounts whose role changed (or would change).
+
+    `db` lets a caller inject a session. The default opens one against
+    POSTGRES_URL, which is what the CLI wants; tests pass their own so this
+    can be exercised without the production engine's SSL requirement — and so
+    the staff-placement rule below is covered rather than assumed.
+    """
+    owns_session = db is None
+    db = db or SessionLocal()
     promote = {e.strip().lower() for e in make_admin if e.strip()}
 
     try:
@@ -75,6 +89,52 @@ def sync(dry_run: bool, make_admin: list[str]) -> int:
         for email in sorted(unmatched):
             print(f"  WARNING: --make-admin {email} matched no account")
         if unmatched:
+            print()
+
+        # Put new staff INTO the platform org, not just the admin role.
+        #
+        # role='admin' grants the platform-admin surface, but entitlement is
+        # resolved from whichever org the caller is acting in — and a promoted
+        # account is acting in its own personal workspace, whose ceiling is the
+        # free one. Without this, a brand-new platform admin can browse every
+        # org on the platform and cannot open Contacts, which reads as a
+        # permissions bug and is really a missing membership.
+        #
+        # Root is the platform org: staff only, full ceiling. Joining it is
+        # what makes someone staff in practice.
+        joined = []
+        platform = (db.query(Organization)
+                      .filter(Organization.slug == PLATFORM_SLUG).first())
+        if platform is None and promote:
+            print("  WARNING: no platform org — cannot place staff. "
+                  "Has the org migration been applied?\n")
+        elif platform is not None:
+            for account in accounts:
+                if account.role != ROLE_ADMIN:
+                    continue
+                already = (db.query(OrganizationMember)
+                             .filter(OrganizationMember.org_id == platform.id,
+                                     OrganizationMember.account_id == account.id)
+                             .first())
+                if already:
+                    continue
+                db.add(OrganizationMember(
+                    org_id=platform.id, account_id=account.id,
+                    tier_key=TIER_OWNER,
+                    # Staff access is granted, never billed. No webhook may
+                    # touch it.
+                    granted_by=GRANTED_BY_GRANT,
+                    is_owner=True,
+                ))
+                # Their own workspace stays theirs; the platform org simply
+                # becomes where they land, because that is where staff work.
+                account.default_org_id = platform.id
+                joined.append((account.id, account.email))
+
+        if joined:
+            print(f"Placed in the platform org ({len(joined)}):")
+            for account_id, email in joined:
+                print(f"  #{account_id:<6} {email:<40} -> {PLATFORM_SLUG}")
             print()
 
         changes = []
@@ -111,13 +171,23 @@ def sync(dry_run: bool, make_admin: list[str]) -> int:
             f"{role}={count}" for role, count in sorted(tally.items())
         ))
 
+        # Placements are reported above but deliberately NOT counted here:
+        # this function's contract is "how many accounts changed ROLE", and
+        # conflating the two would make the number mean neither.
         total = len(promoted) + len(changes)
         if dry_run:
-            db.rollback()
+            # An injected session belongs to its caller — rolling it back would
+            # discard whatever they had staged, so only flush-free reporting
+            # happens here and they decide what to keep.
+            if owns_session:
+                db.rollback()
             print(f"\n[DRY RUN] Would update {total} account(s). No changes written.")
-        else:
+        elif owns_session:
             db.commit()
             print(f"\nDone — {total} account(s) updated.")
+        else:
+            db.flush()
+            print(f"\nDone — {total} account(s) updated (caller commits).")
         return total
 
     except Exception as e:
@@ -125,7 +195,8 @@ def sync(dry_run: bool, make_admin: list[str]) -> int:
         print(f"Failed: {e}")
         raise
     finally:
-        db.close()
+        if owns_session:
+            db.close()
 
 
 def main() -> None:
