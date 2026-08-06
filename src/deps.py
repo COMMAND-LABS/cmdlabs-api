@@ -6,6 +6,7 @@ from fastapi import Depends, HTTPException, status, Request
 from passlib.context import CryptContext
 from jose import jwt, JWTError
 import os
+from .config import plans_registry as plans
 from .db.database import SessionLocal
 from .db.models import ApiKey, Account, ApiKeyStatus
 from .utils.api_key_utils import verify_api_key
@@ -210,6 +211,12 @@ class OrgContext:
     is_owner: bool
     is_super_admin: bool
     org_status: str          # 'active' | 'read_only'
+    # The self-serve plan this ACCOUNT is on, per Stripe — 'free' | 'premium'.
+    # A third axis, and the narrowest: it gates the platform course catalog and
+    # nothing else. Module access still comes from ceiling ∩ tier, and row
+    # access still comes from org_id alone. Defaulted so the handful of test
+    # helpers that build a context by hand keep working.
+    plan: str = plans.PLAN_FREE
 
     @property
     def is_personal(self) -> bool:
@@ -289,6 +296,7 @@ async def get_org_context(
         is_owner=member.is_owner,
         is_super_admin=(account.role == "admin"),
         org_status=org.status,
+        plan=plans.plan_for_account(account),
     )
 
 

@@ -44,6 +44,7 @@ ORG_CREATE = "org.create"
 ORG_SUSPEND = "org.suspend"
 ORG_RESTORE = "org.restore"
 ORG_CEILING_CHANGE = "org.ceiling_change"
+ORG_RENAME = "org.rename"
 
 TIER_MODULES_CHANGE = "tier.modules_change"
 

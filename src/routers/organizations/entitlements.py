@@ -28,6 +28,11 @@ class EntitlementsResponse(BaseModel):
     # True when this org has one member, who owns it.
     is_personal: bool
     org_status: str
+    # The self-serve plan this account is on: 'free' | 'premium'. Distinct from
+    # `modules` on purpose — modules say what opens, the plan says what was
+    # bought, and the course catalog needs the second to show somebody what
+    # they do not have yet.
+    plan: str
     modules: List[str]
     # The org's whole ceiling, so an owner's admin UI can show what exists but
     # is not enabled. None for non-owners, who have no use for it.
@@ -46,6 +51,7 @@ async def my_entitlements(db: db_dependency, org: org_dependency, request: Reque
             is_super_admin=org.is_super_admin,
             is_personal=org.is_personal,
             org_status=org.org_status,
+            plan=org.plan,
             modules=modules.effective_modules(db, org),
             ceiling=(modules.ceiling_for(db, org.org_id)
                      if (org.is_owner or org.is_super_admin) else None),

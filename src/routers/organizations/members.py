@@ -113,6 +113,27 @@ class NameOrgRequest(BaseModel):
     name: Optional[str] = None
 
 
+class SlugAvailability(BaseModel):
+    slug: str
+    available: bool
+    # Why not, in the same words the write path would use. None when available.
+    reason: Optional[str] = None
+
+
+class RenameOrgRequest(BaseModel):
+    name: str = Field(description="Display name. Editable, unlike the slug.")
+
+    @field_validator("name")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("Give the organization a name.")
+        if len(v) > 255:
+            raise ValueError("That name is too long (255 characters max).")
+        return v
+
+
 class UpdateMemberRequest(BaseModel):
     tier_key: str
 
@@ -130,6 +151,27 @@ def _require_owner(org):
 
 def _load_org(db, org_id: int) -> Organization:
     return db.query(Organization).filter(Organization.id == org_id).one()
+
+
+def _slug_problem(db, slug: str) -> Optional[tuple]:
+    """Why `slug` cannot be taken, as (status_code, message), or None.
+
+    ONE function for the availability check and the write, so the form can
+    never call something available that the PUT then refuses. The status code
+    travels with the message because the two callers need different ones —
+    422 for a malformed slug, 409 for one that is reserved or already someone
+    else's — and splitting the rules to preserve that distinction is exactly
+    how the two would drift apart.
+    """
+    if not SLUG_PATTERN.match(slug):
+        return (status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Use 2-63 characters: lowercase letters, numbers and hyphens, "
+                "starting with a letter or number.")
+    if slug in RESERVED_SLUGS:
+        return (status.HTTP_409_CONFLICT, "That name is reserved.")
+    if db.query(Organization.id).filter(Organization.slug == slug).first():
+        return (status.HTTP_409_CONFLICT, "That name is taken.")
+    return None
 
 
 def _owner_count(db, org_id: int) -> int:
@@ -181,6 +223,44 @@ async def list_members(db: db_dependency, org: org_dependency, request: Request)
         raise handle_db_error(e, "[LIST MEMBERS]")
 
 
+@router.get("/slug/available", response_model=SlugAvailability)
+@limiter.limit("30/minute")
+async def check_slug(
+    slug: str, db: db_dependency, org: org_dependency, request: Request,
+):
+    """Whether a name can still be claimed — for the naming form.
+
+    Deliberately narrow. Only an owner of a STILL-UNNAMED org may ask, because
+    that is the only caller with a use for the answer, and answering it for
+    anyone else would turn an immutable public identifier into a directory
+    anybody could enumerate one guess at a time. An org that already has a slug
+    gets the same 404 as a non-owner: naming happens once, so the question is
+    moot the moment it is answered.
+
+    Rate limited at a third of the write path's neighbours for the same reason.
+    The check is advisory in any case — PUT /slug re-validates, and the unique
+    constraint settles a race between two owners typing the same name.
+    """
+    try:
+        _require_owner(org)
+        organization = _load_org(db, org.org_id)
+        if organization.slug is not None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail="Not found")
+
+        candidate = (slug or "").strip().lower()
+        problem = _slug_problem(db, candidate)
+        return SlugAvailability(
+            slug=candidate,
+            available=problem is None,
+            reason=None if problem is None else problem[1],
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise handle_db_error(e, "[CHECK SLUG]")
+
+
 @router.put("/slug", response_model=MembersPageResponse)
 @limiter.limit("10/minute")
 async def name_organization(
@@ -205,20 +285,9 @@ async def name_organization(
             )
 
         slug = (body.slug or "").strip().lower()
-        if not SLUG_PATTERN.match(slug):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Use 2-63 characters: lowercase letters, numbers and "
-                       "hyphens, starting with a letter or number.",
-            )
-        if slug in RESERVED_SLUGS:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
-                                detail="That name is reserved.")
-        taken = (db.query(Organization.id)
-                   .filter(Organization.slug == slug).first())
-        if taken:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
-                                detail="That name is taken.")
+        problem = _slug_problem(db, slug)
+        if problem:
+            raise HTTPException(status_code=problem[0], detail=problem[1])
 
         organization.slug = slug
         if body.name:
@@ -235,6 +304,47 @@ async def name_organization(
     except Exception as e:
         db.rollback()
         raise handle_db_error(e, "[NAME ORG]")
+
+
+@router.put("/name", response_model=MembersPageResponse)
+@limiter.limit("30/minute")
+async def rename_organization(
+    body: RenameOrgRequest, db: db_dependency, org: org_dependency, request: Request,
+):
+    """Change the display name. Never the slug.
+
+    The two are deliberately different kinds of thing. The SLUG is identity —
+    public, in URLs, immutable, and the reason renaming cannot quietly let one
+    org assume a name another built a reputation on. The NAME is a label: it is
+    what members see in the switcher, and being stuck with a typo in it forever
+    would be a silly thing to enforce.
+
+    The API promised this in the 409 it returns from /slug ("its display name
+    can [be changed]") before anything implemented it. This is that promise.
+    """
+    try:
+        _require_owner(org)
+        organization = _load_org(db, org.org_id)
+
+        before = organization.name
+        if before != body.name:
+            organization.name = body.name
+            # Worth a log line: the audit trail snapshots names at write time so
+            # entries survive a rename, which only reads correctly if the rename
+            # itself is recorded. Otherwise history shows a name changing with
+            # nothing saying when or by whom.
+            audit.record_org_change(
+                db, event_type=audit.ORG_RENAME, org_id=org.org_id,
+                detail=f"{before!r} -> {body.name!r}",
+                actor_account_id=org.account_id,
+            )
+        db.commit()
+        return await list_members(db=db, org=org, request=request)
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise handle_db_error(e, "[RENAME ORG]")
 
 
 @router.post("/members", status_code=status.HTTP_201_CREATED,

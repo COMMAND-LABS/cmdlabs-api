@@ -322,3 +322,59 @@ async def test_a_non_staff_account_cannot_reach_the_browsers(
         assert (await c.get(
             f"/api/admin/organizations/{team.org_id}")).status_code == 404
         assert (await c.get("/api/admin/groups")).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# viewing and renaming
+# ---------------------------------------------------------------------------
+
+async def test_any_member_can_see_the_org_details(db: Session, _override_db, team):
+    """Knowing which tenant your records live in is not privileged. The
+    switcher shows only a name, so this is where the rest lives."""
+    plain = make_tenant(db, slug="invite-co", account_id=9610,
+                        tier_key="member", is_owner=False)
+    async with client_for(plain) as c:
+        body = (await c.get(MEMBERS)).json()
+    assert body["org_name"] == "Invite-Co"
+    assert body["org_slug"] == "invite-co"
+    assert body["can_manage"] is False
+
+
+async def test_an_owner_can_rename_the_display_name(db: Session, _override_db, team):
+    """The API promised this in the 409 from /slug before anything did it."""
+    async with client_for(team) as c:
+        resp = await c.put("/api/organizations/name", json={"name": "Acme Rebrand"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["org_name"] == "Acme Rebrand"
+    assert body["org_slug"] == "invite-co", "the identifier does not move"
+
+
+async def test_renaming_is_audited(db: Session, _override_db, team):
+    """The log snapshots names at write time so history survives a rename —
+    which only reads correctly if the rename itself is recorded."""
+    from src.db.models import AccessGrantEvent
+    from src.services import audit
+
+    async with client_for(team) as c:
+        await c.put("/api/organizations/name", json={"name": "Renamed Co"})
+
+    ev = (db.query(AccessGrantEvent)
+            .filter(AccessGrantEvent.event_type == audit.ORG_RENAME,
+                    AccessGrantEvent.org_id == team.org_id).one())
+    assert "Renamed Co" in ev.detail
+    assert ev.actor_account_id == team.account_id
+
+
+async def test_a_blank_name_is_refused(db: Session, _override_db, team):
+    async with client_for(team) as c:
+        resp = await c.put("/api/organizations/name", json={"name": "   "})
+    assert resp.status_code == 422
+
+
+async def test_a_member_cannot_rename(db: Session, _override_db, team):
+    plain = make_tenant(db, slug="invite-co", account_id=9611,
+                        tier_key="member", is_owner=False)
+    async with client_for(plain) as c:
+        resp = await c.put("/api/organizations/name", json={"name": "Hijack"})
+    assert resp.status_code == 404

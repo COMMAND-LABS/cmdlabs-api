@@ -38,6 +38,7 @@ import logging
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from src.config import plans_registry as plans
 from src.db.models import Account, Organization, OrganizationMember, OrganizationTier
 from src.services import audit
 
@@ -62,14 +63,18 @@ TIER_ORG_OWNER = "org_owner"
 GRANTED_BY_SUBSCRIPTION = "subscription"
 GRANTED_BY_GRANT = "grant"
 
-ACTIVE_SUBSCRIPTION_STATUSES = ("active", "trialing")
+ACTIVE_SUBSCRIPTION_STATUSES = plans.ACTIVE_SUBSCRIPTION_STATUSES
 
-# Ceilings for a brand-new personal workspace. Kept in step with migration
-# e3f4a5b6c7d8, which seeded exactly these for the accounts that already
-# existed. Duplicated rather than imported because a migration is a
-# point-in-time snapshot and must not follow this file as it changes.
-FREE_CEILING = ["home", "membership", "settings"]
-PREMIUM_CEILING = ["agents", "agent_chat", "credentials", "membership", "settings"]
+# The plan module sets, by their old names.
+#
+# These used to be literal lists here, named after the COLUMN they are written
+# to rather than the thing they are. The definition now lives in
+# config/plans_registry.py — one answer to "what does premium include?" — and
+# these stay as aliases because a handful of tests and readers still reach for
+# them. Migration e3f4a5b6c7d8 seeded its own point-in-time copy and must not
+# follow either of them as the product changes.
+FREE_CEILING = plans.modules_for_plan(plans.PLAN_FREE)
+PREMIUM_CEILING = plans.modules_for_plan(plans.PLAN_PREMIUM)
 
 
 def get_org_by_slug(db: Session, slug: str) -> Organization | None:
@@ -84,16 +89,20 @@ get_root_org = get_platform_org  # back-compat
 
 
 def ceiling_for_account(account: Account) -> list:
-    """The modules a new personal workspace starts with.
+    """The modules a new personal workspace starts with — i.e. their plan.
 
     Derived from the subscription rather than accounts.role, for the same
     reason the backfill migrations do it that way: a row whose role has drifted
     out of agreement with Stripe would otherwise be handed paid modules that no
     webhook would ever take back.
+
+    For a personal workspace the ceiling IS the plan. It is stored one level
+    above the tier layer on purpose — tiers are editable by the org's own
+    owner, and every self-serve signup owns their workspace, so a plan
+    expressed as a tier would be a plan the customer could rewrite. See
+    config/plans_registry.py.
     """
-    if account.subscription_status in ACTIVE_SUBSCRIPTION_STATUSES:
-        return list(PREMIUM_CEILING)
-    return list(FREE_CEILING)
+    return plans.modules_for_plan(plans.plan_for_account(account))
 
 
 def personal_org_for(db: Session, account_id: int) -> Organization | None:

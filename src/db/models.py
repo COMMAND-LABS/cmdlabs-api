@@ -593,6 +593,61 @@ class Prompt(Base):
         return f'<Prompt {self.id}: {self.name}>'
 
 
+class Course(Base):
+    """
+    A course an organization may open.
+
+    The CONTENT is not here and never will be. A course is a dynamic experience
+    living in the Next.js router — components, embedded agents, interactive
+    steps — so what this table stores is a per-org ENABLEMENT: which stable
+    course_key this tenant may reach, and how it is titled and ordered for them.
+
+    That is also why courses need no publishing mechanism. The content is
+    platform code, so two orgs holding the same key render the same route, the
+    way both render /dashboard/contacts. One copy exists by construction and no
+    tenant data moves, so there is nothing to leak between them.
+
+    `course_key` is a STABLE IDENTIFIER matching a UI route, never a display
+    name — renaming the folder must not revoke access. Same rule as
+    config/modules_registry.py, for the same reason.
+
+    Access is the machinery that already exists:
+      visibility='org'     -> every member of the org (tenant_predicate)
+      visibility='granted' -> only AccessGrant holders (account or group)
+    """
+    __tablename__ = 'courses'
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
+                    nullable=False, index=True)
+    course_key = Column(String(64), nullable=False)
+    title = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    sort_order = Column(Integer, nullable=False, server_default='0')
+    visibility = Column(String(20), nullable=False, server_default='org')
+    # Which self-serve plan opens this course: 'free' | 'premium'. Meaningful
+    # on a CATALOG course, where it is the whole gate; on an org's own course
+    # it is inert, because an owner enabling a course for their team has
+    # already decided who may open it.
+    required_plan = Column(String(20), nullable=False, server_default='free')
+    # Attribution, never tenancy.
+    account_id = Column(Integer, ForeignKey('accounts.id', ondelete='SET NULL'),
+                        nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(),
+                        nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('org_id', 'course_key', name='uq_course_org_key'),
+        CheckConstraint("visibility IN ('org','granted','catalog')",
+                        name='ck_courses_visibility'),
+        CheckConstraint("required_plan IN ('free','premium')",
+                        name='ck_courses_required_plan'),
+    )
+
+    def __repr__(self):
+        return f'<Course {self.course_key} org={self.org_id}>'
+
+
 class AccessGroup(Base):
     """
     Named group owned by an account. The owner can add/remove members

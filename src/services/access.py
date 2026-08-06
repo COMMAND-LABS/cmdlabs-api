@@ -3,7 +3,7 @@ Unified access control + audit resolution.
 
 Single source of truth for "can this account access this resource (at this role)?"
 and "who can access this resource / what can this account reach?" — across agents,
-vector stores (knowledge bases), and credentials. Replaces the per-resource
+vector stores (knowledge bases), credentials, and courses. Replaces the per-resource
 modules (agent_access / vector_store_access / credential_access): every grant is an
 AccessGrant row (principal × resource × role), and the account-vs-group distinction
 lives only in members_of().
@@ -24,6 +24,7 @@ from src.db.models import (
     Account,
     AccessGroup,
     Agent,
+    Course,
     Credential,
     OrganizationMember,
     VectorStore,
@@ -33,6 +34,7 @@ from src.db.models import (
 AGENT = "agent"
 VECTOR_STORE = "vector_store"
 CREDENTIAL = "credential"
+COURSE = "course"
 
 # Principal type constants
 ACCOUNT = "account"
@@ -68,7 +70,12 @@ def members_of(db: Session, principal_type: str, principal_id: int) -> set:
 
 def _resource_owner(db: Session, resource_type: str, resource_id: int):
     """Return the owning account id of a resource, or None if it doesn't exist."""
-    if resource_type == AGENT:
+    if resource_type == COURSE:
+        # Whoever enabled it for the org. Courses are org content rather than
+        # personal, so this is attribution — the org-wide arm in
+        # routers/courses is what actually reaches most members.
+        row = db.query(Course.account_id).filter(Course.id == resource_id).first()
+    elif resource_type == AGENT:
         row = db.query(Agent.account_id).filter(Agent.id == resource_id).first()
     elif resource_type == CREDENTIAL:
         row = db.query(Credential.account_id).filter(Credential.id == resource_id).first()
@@ -85,7 +92,9 @@ class CrossOrgGrantError(Exception):
 
 def _resource_org(db: Session, resource_type: str, resource_id: int):
     """Return the org that owns a resource, or None if it doesn't exist."""
-    if resource_type == AGENT:
+    if resource_type == COURSE:
+        row = db.query(Course.org_id).filter(Course.id == resource_id).first()
+    elif resource_type == AGENT:
         row = db.query(Agent.org_id).filter(Agent.id == resource_id).first()
     elif resource_type == VECTOR_STORE:
         row = db.query(VectorStore.org_id).filter(VectorStore.id == resource_id).first()

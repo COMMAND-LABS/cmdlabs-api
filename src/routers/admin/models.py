@@ -16,9 +16,15 @@ class OrganizationSummary(BaseModel):
     # None for a personal workspace, which has no public page.
     slug: Optional[str] = None
     name: str
-    # True for a personal workspace: one member, who owns it, no public page.
+    # True when the org has no public page (no slug). Kept because the row
+    # renders the slug, NOT as a stand-in for "solo" — member_count says that.
     is_personal: bool
     status: str                # 'active' | 'read_only'
+    # Who owns granted_modules. 'grant' means staff set the ceiling by hand and
+    # no webhook may undo it — i.e. this org is comped. Surfaced here because it
+    # is the one fact about an org that appears nowhere else, and "who is on a
+    # free ride?" is a question the list should answer at a glance.
+    ceiling_managed_by: str    # 'subscription' | 'grant'
     owner_account_id: Optional[int] = None
     owner_email: Optional[str] = None
     member_count: int

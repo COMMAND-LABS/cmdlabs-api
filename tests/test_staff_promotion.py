@@ -16,6 +16,7 @@ to click by accident.
 from sqlalchemy.orm import Session
 
 from scripts.sync_account_roles import sync
+from src.config import plans_registry as plans
 from src.db.models import Account, Organization, OrganizationMember
 from src.deps import OrgContext
 from src.services import modules
@@ -40,9 +41,14 @@ def test_promotion_places_staff_in_the_platform_org(db: Session, test_org):
     workspace = (db.query(Organization)
                    .filter(Organization.owner_account_id == acct.id,
                            Organization.slug.is_(None)).one())
-    # Before: staff-in-name-only would see the free ceiling.
-    assert modules.effective_modules(db, _ctx(acct.id, workspace)) == [
-        "home", "membership", "settings"]
+    # Before: staff-in-name-only would see the free plan and nothing more.
+    #
+    # Asserted against the registry rather than a literal list. What the free
+    # plan contains is a product decision that moves (it gained `courses` when
+    # the catalog shipped); that a promoted account is still stuck on it until
+    # the membership exists is the invariant this test is about.
+    assert (modules.effective_modules(db, _ctx(acct.id, workspace))
+            == plans.modules_for_plan(plans.PLAN_FREE))
 
     sync(dry_run=False, make_admin=["NewStaff@cmdlabs.io"], db=db)
 

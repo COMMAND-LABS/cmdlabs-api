@@ -109,10 +109,13 @@ async def test_suspended_org_is_visible_as_read_only(staff_client: AsyncClient, 
 async def test_response_carries_no_tenant_data(staff_client: AsyncClient, seeded_orgs):
     """Guard against this page quietly growing into a data-read bypass."""
     body = (await staff_client.get(ADMIN_ORGS_URL)).json()
+    # Configuration and counts only. A new field has to be added here
+    # deliberately, which is the point: this test is the thing standing between
+    # "staff can administer an org" and "staff can quietly read it".
     allowed = {
         "id", "slug", "name", "is_personal", "status", "owner_account_id",
         "owner_email", "member_count", "tier_count", "granted_modules",
-        "created_at",
+        "ceiling_managed_by", "created_at",
     }
     for org in body["organizations"]:
         assert set(org.keys()) <= allowed, f"unexpected field(s): {set(org) - allowed}"

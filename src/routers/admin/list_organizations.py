@@ -63,6 +63,7 @@ async def list_organizations(
                     name=o.name,
                     is_personal=o.is_personal,
                     status=o.status,
+                    ceiling_managed_by=o.ceiling_managed_by,
                     owner_account_id=o.owner_account_id,
                     owner_email=owner_emails.get(o.owner_account_id),
                     member_count=member_counts.get(o.id, 0),

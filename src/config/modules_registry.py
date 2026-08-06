@@ -69,6 +69,11 @@ MODULES = (
     Module("email_templates", "Email Templates", ("/api/email-templates",)),
     Module("email_campaigns", "Email Campaigns",
            ("/api/email-campaigns", "/api/emails", "/api/email-events")),
+    # Courses are gated like any other product area. Banding free vs paid
+    # courseware is therefore a TIER question, not a per-course one — module
+    # keys are platform-wide and stable, while tier_key is a per-org string
+    # that means nothing in a second org.
+    Module("courses", "Courses", ("/api/courses",)),
     Module("analytics", "Analytics", ()),
     Module("membership", "Membership", ()),
     Module("settings", "Settings", ()),
