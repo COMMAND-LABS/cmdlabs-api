@@ -55,6 +55,7 @@ from .routers import feedback
 from .routers import admin
 from .routers import organizations
 from .routers import courses
+from .routers import spaces
 
 app = FastAPI(
     docs_url="/api/docs",
@@ -188,6 +189,7 @@ _ROUTERS = [
     (tracking.router, "/t", ["Tracking"]),
     (feedback.router, "/api/feedback", ["Feedback"]),
     (courses.router, "/api/courses", ["Courses"]),
+    (spaces.router, "/api/spaces", ["Spaces"]),
     (organizations.router, "/api/organizations", ["Organizations"]),
     (admin.router, "/api/admin", ["Platform Admin"]),
 ]

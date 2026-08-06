@@ -54,8 +54,8 @@ PLAN_LABELS = {
 # Which COURSES they can open is decided per course by Course.required_plan,
 # not by hiding the module.
 PLAN_MODULES = {
-    PLAN_FREE: ("home", "courses", "membership", "settings"),
-    PLAN_PREMIUM: ("agents", "agent_chat", "credentials", "courses",
+    PLAN_FREE: ("home", "courses", "spaces", "membership", "settings"),
+    PLAN_PREMIUM: ("agents", "agent_chat", "credentials", "courses", "spaces",
                    "membership", "settings"),
 }
 

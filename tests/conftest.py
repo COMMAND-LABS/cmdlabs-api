@@ -150,8 +150,45 @@ def _setup_database():
 
     Base.metadata.create_all(bind=test_engine)
 
+    # Same staleness, one layer along: create_all adds MISSING TABLES and never
+    # alters existing ones, so a CHECK constraint that has been widened in the
+    # models still holds its old definition on a database created before the
+    # change. That surfaces as a CheckViolation on a value the models consider
+    # perfectly legal — a confusing failure that looks like a bug in the code
+    # under test rather than in the fixture.
+    #
+    # Reconciled from Base.metadata rather than from a hardcoded list, so this
+    # keeps working the next time a vocabulary grows. Only enumerated
+    # constraints need it: they are the ones that widen.
+    _reconcile_check_constraints(("access_grant_events",))
+
     yield
     # No teardown — tables are left in place for inspection and speed.
+
+
+def _reconcile_check_constraints(table_names) -> None:
+    """Drop and re-create each named table's CHECK constraints from the models."""
+    from sqlalchemy.schema import CheckConstraint
+
+    with test_engine.connect() as conn:
+        for table_name in table_names:
+            table = Base.metadata.tables.get(table_name)
+            if table is None:
+                continue
+            for constraint in table.constraints:
+                if not isinstance(constraint, CheckConstraint):
+                    continue
+                if not constraint.name:
+                    continue
+                conn.execute(text(
+                    f'ALTER TABLE {table_name} '
+                    f'DROP CONSTRAINT IF EXISTS {constraint.name}'
+                ))
+                conn.execute(text(
+                    f'ALTER TABLE {table_name} ADD CONSTRAINT '
+                    f'{constraint.name} CHECK ({constraint.sqltext})'
+                ))
+        conn.commit()
 
 
 @pytest.fixture()

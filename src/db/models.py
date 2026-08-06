@@ -852,13 +852,23 @@ class AccessGrantEvent(Base):
     created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False, index=True)
 
     __table_args__ = (
+        # Kept in step with services/audit.py AND with the migrations that
+        # widen this constraint. It had already fallen behind by one verb
+        # ('org.rename', added in a5b6c7d8e9f0): harmless against a migrated
+        # database, but tests/conftest.py builds its schema from this metadata,
+        # so a stale list here is a constraint violation that only appears on a
+        # freshly created test database.
         CheckConstraint(
             "event_type IN ('create','revoke','role_change',"
             "'member.add','member.remove','member.tier_change',"
             "'org.create','org.suspend','org.restore','org.ceiling_change',"
+            "'org.rename',"
             "'tier.modules_change',"
             "'catalog.publish','catalog.unpublish','catalog.grant','catalog.revoke',"
-            "'staff.join')",
+            "'staff.join',"
+            "'space.create','space.archive',"
+            "'space.member_add','space.member_remove',"
+            "'space.request','space.request_approve','space.request_deny')",
             name='ck_access_grant_event_type'),
         Index('ix_access_grant_events_resource', 'resource_type', 'resource_id'),
     )
@@ -1425,3 +1435,10 @@ class EmailCampaignRating(Base):
 # Registering here rather than in each consumer means there is ONE place to
 # get this right instead of one per entry point.
 from . import catalog_models  # noqa: F401,E402
+
+# Spaces are the platform's SECOND container — shared content whose members
+# come from many orgs — and they are separate here for the same reason the
+# catalog is: they belong to no tenant, and the file layout should say so.
+# Same registration, same reasons: Alembic autogenerate and conftest's
+# create_all both read Base.metadata.
+from . import space_models  # noqa: F401,E402
