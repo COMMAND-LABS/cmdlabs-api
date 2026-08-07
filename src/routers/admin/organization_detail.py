@@ -98,8 +98,11 @@ class OrganizationDetailResponse(BaseModel):
     is_personal: bool
     # 'active' | 'grace' | 'lapsed'. Derived from the owner's subscription.
     billing_state: str
-    granted_modules: List[str]
-    ceiling_managed_by: str
+    # The plan in force and what it opens. Derived, never stored.
+    plan: str
+    modules: List[str]
+    # Null means "follows the owner's subscription".
+    pinned_plan: Optional[str] = None
     owner_account_id: Optional[int] = None
     created_at: Optional[datetime] = None
     members: List[AdminMember]
@@ -117,8 +120,8 @@ def _billing_state(db, org) -> str:
     """
     from src.config import plans_registry as plans
 
-    if org.ceiling_managed_by != "subscription":
-        # Comped. Billing has nothing to say about it in either direction.
+    if org.pinned_plan is not None:
+        # Pinned. Billing has nothing to say about it in either direction.
         return plans.BILLING_ACTIVE
     if org.owner_account_id is None:
         return plans.BILLING_ACTIVE
@@ -152,7 +155,10 @@ async def organization_detail(
     """
     try:
         org = _org_or_404(db, org_id)
-        ceiling = list(org.granted_modules or [])
+        from src.services import modules as modules_service
+
+        entitlement = modules_service.org_entitlement(db, org_id)
+        ceiling = entitlement.ceiling
 
         tier_modules = {
             t.tier_key: list(t.modules or [])
@@ -232,8 +238,9 @@ async def organization_detail(
             id=org.id, name=org.name,
             is_personal=(len(members) == 1),
             billing_state=_billing_state(db, org),
-            granted_modules=ceiling,
-            ceiling_managed_by=org.ceiling_managed_by,
+            plan=entitlement.plan,
+            modules=ceiling,
+            pinned_plan=org.pinned_plan,
             owner_account_id=org.owner_account_id, created_at=org.created_at,
             members=members, tiers=tiers, spaces=spaces,
         )

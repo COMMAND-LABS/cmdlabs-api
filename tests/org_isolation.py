@@ -28,6 +28,7 @@ from typing import Any, Callable, Iterable
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.orm import Session
 
+from src.config import plans_registry as plans
 from src.config.modules_registry import MODULE_KEYS
 from src.db.models import (
     Account,
@@ -83,14 +84,11 @@ def make_tenant(
     if org is None:
         org = Organization(
             name=slug.title(),
-            # Fully enabled by default — see the note in conftest.test_org.
-            granted_modules=list(MODULE_KEYS),
-            # 'grant', so the list above is actually what this org gets. A
-            # 'subscription' ceiling is DERIVED from the owner's plan and
-            # ignores the stored column entirely (services.modules.ceiling_for),
-            # which would quietly give every test tenant the free plan and make
-            # isolation tests pass because nothing resolved at all.
-            ceiling_managed_by="grant",
+            # Pinned to premium — see the note in conftest.test_org. Without a
+            # pin the plan is DERIVED from the owner's subscription, which would
+            # quietly put every test tenant on free and make isolation tests
+            # pass because nothing resolved at all.
+            pinned_plan=plans.PLAN_PREMIUM,
         )
         db.add(org)
         db.flush()

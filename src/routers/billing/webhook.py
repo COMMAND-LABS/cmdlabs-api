@@ -81,13 +81,13 @@ def _record_billing_transition(db, account: Account, event_type: str) -> None:
     """Log the lapse (or the recovery) against the orgs it actually affects.
 
     Against the ORGS rather than the account, because the org is where the
-    consequence lands and where somebody investigating starts. Comped orgs are
-    skipped for the same reason billing cannot make them read-only: staff set
-    their ceiling by hand, so a payment says nothing about them.
+    consequence lands and where somebody investigating starts. Pinned orgs are
+    skipped for the same reason billing cannot make them read-only: staff gave
+    them a plan, so a payment says nothing about them.
     """
     orgs = (db.query(Organization.id)
               .filter(Organization.owner_account_id == account.id,
-                      Organization.ceiling_managed_by == "subscription")
+                      Organization.pinned_plan.is_(None))
               .all())
     for (org_id,) in orgs:
         audit.record_org_change(

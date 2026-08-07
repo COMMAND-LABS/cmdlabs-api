@@ -20,6 +20,7 @@ from src.db.models import (
     OrganizationMember,
     OrganizationTier,
 )
+from src.config import plans_registry as plans
 from src.config.modules_registry import MODULE_KEYS
 from src.deps import OrgContext
 from src.main import app
@@ -52,10 +53,10 @@ async def staff_client(_override_db, staff) -> AsyncClient:
 
 @pytest.fixture()
 def acme(db: Session):
-    """A client org with a ceiling and two tiers."""
+    """A client org on the premium plan, with two tiers."""
     t = make_tenant(db, slug="ent-acme", account_id=8801, data_scope="shared")
     org = db.query(Organization).filter(Organization.id == t.org_id).one()
-    org.granted_modules = ["home", "contacts", "companies", "deals", "agents"]
+    org.pinned_plan = plans.PLAN_PREMIUM
 
     # make_tenant already created a fully-enabled 'member' tier; narrow it
     # rather than inserting a second one (uq_org_tier_key).
@@ -110,15 +111,17 @@ async def test_ceiling_caps_the_tier(db: Session, _override_db, acme):
     tier = (db.query(OrganizationTier)
               .filter(OrganizationTier.org_id == acme.org_id,
                       OrganizationTier.tier_key == "member").one())
-    tier.modules = ["home", "contacts", "credentials"]   # credentials NOT in ceiling
+    # `organization` is a real registry key that NO plan sells, so it is
+    # outside every possible ceiling — which is exactly the case this tests.
+    tier.modules = ["home", "contacts", "organization"]
     db.flush()
 
     member = _member_of(db, acme, 8804, "member")
     async with client_for(member) as c:
         body = (await c.get(ENTITLEMENTS)).json()
-    assert "credentials" not in body["modules"]
+    assert "organization" not in body["modules"]
     # The stored row is untouched — lowering a ceiling never rewrites tiers.
-    assert "credentials" in db.query(OrganizationTier).filter(
+    assert "organization" in db.query(OrganizationTier).filter(
         OrganizationTier.id == tier.id).one().modules
 
 
@@ -127,7 +130,8 @@ async def test_owner_gets_the_whole_ceiling(db: Session, _override_db, acme):
     one bad save would lock them out of the screen that undoes it."""
     async with client_for(acme) as c:
         body = (await c.get(ENTITLEMENTS)).json()
-    assert set(body["modules"]) == {"home", "contacts", "companies", "deals", "agents"}
+    assert set(body["modules"]) == set(
+        plans.modules_for_plan(plans.PLAN_PREMIUM))
     assert body["ceiling"] is not None
 
 
@@ -154,9 +158,12 @@ async def test_owner_can_set_tier_modules_and_it_is_audited(
 async def test_setting_a_tier_outside_the_ceiling_is_clamped(
     db: Session, _override_db, acme
 ):
+    # `organization` and `membership` are real registry keys that no plan
+    # sells, so they are outside every possible ceiling. An owner naming them
+    # gets them dropped rather than granted.
     async with client_for(acme) as c:
         resp = await c.put(f"{TIERS}/member/modules",
-                           json={"modules": ["home", "credentials", "analytics"]})
+                           json={"modules": ["home", "organization", "membership"]})
     assert resp.status_code == 200
     assert resp.json()["modules"] == ["home"], "an owner cannot exceed their ceiling"
 
@@ -190,15 +197,16 @@ async def test_unchanged_tier_writes_no_audit_noise(db: Session, _override_db, a
 # ceiling + staff join
 # ---------------------------------------------------------------------------
 
-async def test_staff_can_set_a_ceiling_and_it_is_audited(
+async def test_staff_can_pin_a_plan_and_it_is_audited(
     db: Session, _override_db, staff_client, acme
 ):
     resp = await staff_client.put(
-        f"/api/admin/organizations/{acme.org_id}/ceiling",
-        json={"modules": ["home", "agent_chat", "knowledge_bases"]})
+        f"/api/admin/organizations/{acme.org_id}/plan",
+        json={"plan": "free"})
     assert resp.status_code == 200, resp.text
-    assert resp.json()["granted_modules"] == ["agent_chat", "knowledge_bases", "home"] \
-        or set(resp.json()["granted_modules"]) == {"home", "agent_chat", "knowledge_bases"}
+    assert resp.json()["pinned_plan"] == "free"
+    assert resp.json()["modules"] == plans.modules_for_plan(plans.PLAN_FREE), (
+        "the response resolves the plan so the caller need not")
 
     ev = db.query(AccessGrantEvent).filter(
         AccessGrantEvent.event_type == audit.ORG_CEILING_CHANGE).one()
@@ -215,17 +223,18 @@ async def test_lowering_a_ceiling_takes_effect_immediately(
     async with client_for(member) as c:
         assert "contacts" in (await c.get(ENTITLEMENTS)).json()["modules"]
 
-    await staff_client.put(f"/api/admin/organizations/{acme.org_id}/ceiling",
-                           json={"modules": ["home"]})
+    await staff_client.put(f"/api/admin/organizations/{acme.org_id}/plan",
+                           json={"plan": "free"})
 
     async with client_for(member) as c:
-        assert (await c.get(ENTITLEMENTS)).json()["modules"] == ["home"]
+        # The tier still names contacts; the free ceiling no longer allows it.
+        assert "contacts" not in (await c.get(ENTITLEMENTS)).json()["modules"]
 
 
-async def test_non_staff_cannot_set_a_ceiling(db: Session, _override_db, acme):
+async def test_non_staff_cannot_set_a_plan(db: Session, _override_db, acme):
     async with client_for(acme) as c:
-        resp = await c.put(f"/api/admin/organizations/{acme.org_id}/ceiling",
-                           json={"modules": []})
+        resp = await c.put(f"/api/admin/organizations/{acme.org_id}/plan",
+                           json={"plan": "premium"})
     assert resp.status_code == 404, "the admin surface does not confirm it exists"
 
 
@@ -278,15 +287,14 @@ async def test_staff_still_cannot_read_data_without_joining(
 
 
 def test_staff_are_never_the_last_to_open_a_new_module(db: Session, test_org):
-    """A ceiling can fall behind the registry; staff must not fall with it.
+    """A plan can be narrower than the registry; staff must not be.
 
-    Every new module has to be added to an org's stored ceiling, and no billing
-    event or backfill touches a staff-set one — which is how `courses` and
-    `spaces` both shipped invisible to staff. Fixed by removing the cap rather
-    than by keeping a column in step with the registry.
+    Two module keys are in no plan at all (membership, organization), and any
+    new one starts that way until it is added — which is how `courses` and
+    `spaces` both once shipped invisible to staff. Fixed by removing the cap
+    for staff rather than by keeping something in step with the registry.
     """
-    narrow = Organization(name="Stale",
-                          granted_modules=["home"])
+    narrow = Organization(name="Stale", pinned_plan=plans.PLAN_FREE)
     db.add(narrow)
     db.flush()
 
@@ -294,19 +302,20 @@ def test_staff_are_never_the_last_to_open_a_new_module(db: Session, test_org):
     assert modules.effective_modules(db, staff) == list(MODULE_KEYS)
 
 
-def test_a_tenant_ceiling_is_still_exactly_what_was_granted(db: Session):
-    """The platform rule must not leak into anybody else's org.
+def test_a_tenant_ceiling_is_still_exactly_its_plan(db: Session):
+    """The staff rule must not leak into anybody else's org.
 
-    If this ever equals the full registry, the special case above has stopped
-    being special and every tenant has silently been given everything.
+    If this ever equals the full registry, the bypass above has stopped being
+    special and every tenant has silently been given everything.
     """
     tenant = make_tenant(db, slug="ceiling-tenant", account_id=8890,
                          tier_key="owner", is_owner=True)
     org = db.query(Organization).filter(Organization.id == tenant.org_id).one()
-    org.granted_modules = ["home", "contacts"]
+    org.pinned_plan = plans.PLAN_FREE
     db.flush()
 
-    assert modules.ceiling_for(db, tenant.org_id) == ["home", "contacts"]
+    assert modules.ceiling_for(db, tenant.org_id) == plans.modules_for_plan(
+        plans.PLAN_FREE)
     assert len(modules.ceiling_for(db, tenant.org_id)) < len(MODULE_KEYS)
 
 

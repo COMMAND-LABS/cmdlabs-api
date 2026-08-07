@@ -74,11 +74,12 @@ def test_staff_are_not_capped_by_the_org_they_are_acting_in(db: Session):
     db.flush()
 
     narrow = Organization(name="Narrow",
-                          granted_modules=["home"])
+                          pinned_plan="free")
     db.add(narrow)
     db.flush()
 
-    assert modules.ceiling_for(db, narrow.id) == ["home"], "the org is narrow"
+    assert modules.ceiling_for(db, narrow.id) == plans.modules_for_plan(
+        plans.PLAN_FREE), "the org is on the narrow plan"
     assert modules.effective_modules(db, _ctx(acct.id, narrow)) == list(
         MODULE_KEYS), "the staff member is not"
 
@@ -90,12 +91,13 @@ def test_a_non_staff_owner_is_still_capped_by_their_ceiling(db: Session):
     db.flush()
 
     org = Organization(name="Ordinary",
-                       granted_modules=["home", "contacts"])
+                       pinned_plan="premium")
     db.add(org)
     db.flush()
 
     assert modules.effective_modules(
-        db, _ctx(acct.id, org, is_super_admin=False)) == ["home", "contacts"]
+        db, _ctx(acct.id, org, is_super_admin=False)) == plans.modules_for_plan(
+            plans.PLAN_PREMIUM), "an owner gets their plan, and no more"
 
 
 def test_promotion_leaves_their_own_workspace_alone(db: Session):

@@ -48,6 +48,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 
 from src.db.database import Base
+from src.config import plans_registry as plans
 from src.config.modules_registry import MODULE_KEYS
 from src.db.models import (
     Account,
@@ -198,16 +199,15 @@ def test_org(db: Session) -> Organization:
         db.add(org)
         db.flush()
 
-    # Every module enabled. Module gating is enforced for real, so a fixture
-    # org with a narrow ceiling would 404 gated routes and every suite would be
+    # PINNED TO PREMIUM. Module gating is enforced for real, so a fixture org
+    # on the free plan would 404 most gated routes and every suite would be
     # testing entitlement instead of its own subject. Tests that care about
-    # gating narrow it themselves.
-    org.granted_modules = list(MODULE_KEYS)
-    # 'grant', so the list above is what this org actually gets: a
-    # 'subscription' ceiling is DERIVED from the owner's billing and ignores
-    # the column entirely (services.modules.org_entitlement). It also keeps the
-    # fixture out of the read-only grace window, which is billing's to decide.
-    org.ceiling_managed_by = "grant"
+    # gating narrow their own TIER, which is the layer that narrows.
+    #
+    # Pinned rather than "give the owner an active subscription" because a pin
+    # also keeps the fixture out of the read-only grace window, which is
+    # billing's business and not every suite's.
+    org.pinned_plan = plans.PLAN_PREMIUM
 
     existing = {
         t.tier_key: t

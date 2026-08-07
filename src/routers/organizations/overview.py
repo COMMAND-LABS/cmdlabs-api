@@ -87,7 +87,11 @@ class OrganizationOverviewResponse(BaseModel):
     # True during the grace window after a lapse. Derived, never stored.
     read_only: bool
     grace_ends_at: Optional[datetime] = None
-    ceiling_managed_by: str         # 'subscription' | 'grant' (comped)
+    # Null means "follows your subscription"; set means staff pinned this
+    # plan and billing cannot change it.
+    pinned_plan: Optional[str] = None
+    # The plan in force right now: 'free' | 'premium'.
+    plan: str
     ceiling: List[ModuleSummary]
     # Denominator for "12 of 19 modules". Sent rather than hardcoded in the UI
     # so adding a module to the registry does not need a front-end deploy.
@@ -186,7 +190,8 @@ async def my_organization(db: db_dependency, org: org_dependency, request: Reque
             created_at=organization.created_at,
             read_only=entitlement.read_only,
             grace_ends_at=entitlement.grace_ends_at,
-            ceiling_managed_by=organization.ceiling_managed_by,
+            pinned_plan=organization.pinned_plan,
+            plan=entitlement.plan,
             # Labelled here because the keys are stable identifiers, not
             # display names — the UI must never render a raw module key.
             ceiling=[

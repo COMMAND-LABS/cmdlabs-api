@@ -15,21 +15,19 @@ class OrganizationSummary(BaseModel):
     id: int
     # None for a personal workspace, which has no public page.
     name: str
-    # True when the org has no public page (no slug). Kept because the row
-    # renders the slug, NOT as a stand-in for "solo" — member_count says that.
+    # True when the org has exactly one member — a workspace, not a team.
     is_personal: bool
     # 'active' | 'grace' | 'lapsed' — the owner's billing, derived per request.
     billing_state: str
-    # Who owns granted_modules. 'grant' means staff set the ceiling by hand and
-    # no webhook may undo it — i.e. this org is comped. Surfaced here because it
-    # is the one fact about an org that appears nowhere else, and "who is on a
-    # free ride?" is a question the list should answer at a glance.
-    ceiling_managed_by: str    # 'subscription' | 'grant'
+    # Null means "follows the owner's subscription". Set means staff pinned a
+    # plan and no webhook may change it — the comp.
+    pinned_plan: str | None
     owner_account_id: Optional[int] = None
     owner_email: Optional[str] = None
     member_count: int
     tier_count: int
-    granted_modules: List[str]
+    # What the plan in force opens. Derived, never stored.
+    modules: List[str]
     created_at: Optional[datetime] = None
 
     class Config:

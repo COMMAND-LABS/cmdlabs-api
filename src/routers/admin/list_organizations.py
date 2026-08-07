@@ -62,14 +62,23 @@ async def list_organizations(
         owner_billing = {oid: (st, lapsed) for oid, _, st, lapsed in owners}
 
         def _state(org) -> str:
-            """Comped orgs are always 'active': staff set their ceiling by
-            hand, so a payment says nothing about them in either direction."""
-            if org.ceiling_managed_by != "subscription":
+            """Pinned orgs are always 'active': staff gave them a plan, so a
+            payment says nothing about them in either direction."""
+            if org.pinned_plan is not None:
                 return plans.BILLING_ACTIVE
             billing = owner_billing.get(org.owner_account_id)
             if billing is None:
                 return plans.BILLING_ACTIVE
             return plans.billing_state(billing[0], billing[1])
+
+        def _plan_of(org) -> str:
+            """The plan in force. Same rule as services.modules.org_entitlement,
+            evaluated from the rows already loaded above rather than one query
+            per org."""
+            billing = owner_billing.get(org.owner_account_id)
+            if billing is None:
+                return plans.PLAN_FREE
+            return plans.plan_for(billing[0], billing[1])
 
         return OrganizationListResponse(
             organizations=[
@@ -78,12 +87,13 @@ async def list_organizations(
                     name=o.name,
                     is_personal=(member_counts.get(o.id, 0) == 1),
                     billing_state=_state(o),
-                    ceiling_managed_by=o.ceiling_managed_by,
+                    pinned_plan=o.pinned_plan,
                     owner_account_id=o.owner_account_id,
                     owner_email=owner_emails.get(o.owner_account_id),
                     member_count=member_counts.get(o.id, 0),
                     tier_count=tier_counts.get(o.id, 0),
-                    granted_modules=list(o.granted_modules or []),
+                    modules=plans.modules_for_plan(
+                        o.pinned_plan or _plan_of(o)),
                     created_at=o.created_at,
                 )
                 for o in orgs

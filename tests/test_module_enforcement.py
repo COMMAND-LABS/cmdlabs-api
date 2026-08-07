@@ -117,7 +117,7 @@ async def test_writes_are_refused_too(db: Session, _override_db, acme):
     assert resp.status_code == 404
 
 
-async def test_lowering_the_ceiling_revokes_immediately(
+async def test_narrowing_the_plan_revokes_immediately(
     db: Session, _override_db, acme
 ):
     """No cascade, no re-login: the intersection happens per request."""
@@ -125,7 +125,7 @@ async def test_lowering_the_ceiling_revokes_immediately(
         assert (await c.get("/api/deals/")).status_code == 200
 
     org = db.query(Organization).filter(Organization.id == acme.org_id).one()
-    org.granted_modules = ["contacts"]
+    org.pinned_plan = "free"      # the free plan sells no CRM
     db.flush()
 
     async with client_for(acme) as c:
@@ -155,17 +155,16 @@ async def test_a_lapsed_org_can_read_but_not_write(db: Session, _override_db, ac
     this replaced — so a test that could still flip one would be testing a
     fiction.
 
-    Uses AGENTS rather than contacts on purpose: the org's ceiling is now
-    derived from the owner's plan, and `contacts` is not in either self-serve
-    plan (it only ever arrives on a staff-granted ceiling). Asserting on a
-    module the plan does not include would 404 on the read and prove nothing.
+    Uses AGENTS because the org's plan here is derived from the owner's
+    billing, and the tier is narrowed to agents — so this asserts on a module
+    the viewer definitely has, rather than accidentally testing entitlement.
     """
     org = db.query(Organization).filter(Organization.id == acme.org_id).one()
     owner = db.query(Account).filter(Account.id == acme.account_id).one()
     owner.subscription_status = "canceled"
     owner.subscription_lapsed_at = datetime.now(timezone.utc) - timedelta(days=1)
     org.owner_account_id = owner.id
-    org.ceiling_managed_by = "subscription"
+    org.pinned_plan = None       # follow the owner's billing, which just lapsed
     _narrow_tier_to(db, acme, ["agents"])
     db.flush()
 

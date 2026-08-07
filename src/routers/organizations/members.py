@@ -43,7 +43,7 @@ from src.routers.auth.background_tasks.send_login_code_email_ses import (
     send_login_code_email_ses,
 )
 from src.services import audit
-from src.services.organizations import GRANTED_BY_GRANT, freeze_ceiling
+from src.services.organizations import GRANTED_BY_GRANT, pin_plan
 from src.utils.errors import handle_db_error
 
 logger = logging.getLogger(__name__)
@@ -255,11 +255,10 @@ async def invite_member(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT,
                                 detail="They are already in this organization.")
 
-        # This workspace is becoming a TEAM. Pin its ceiling at what the owner
-        # currently has, so the people about to join do not lose modules when
-        # the owner's card expires. Idempotent for an org that is already
-        # granted.
-        freeze_ceiling(db, organization)
+        # This workspace is becoming a TEAM. Pin it to the plan the owner is
+        # on, so the people about to join do not lose modules when the owner's
+        # card expires. Idempotent for an org that is already pinned.
+        pin_plan(db, organization)
 
         member = OrganizationMember(
             org_id=org.org_id,

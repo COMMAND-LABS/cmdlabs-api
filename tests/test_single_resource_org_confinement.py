@@ -35,7 +35,7 @@ def _join(db: Session, account_id: int, org: Organization, tier_key: str):
               .filter(OrganizationTier.org_id == org.id,
                       OrganizationTier.tier_key == tier_key).first()):
         db.add(OrganizationTier(org_id=org.id, tier_key=tier_key,
-                                label=tier_key, modules=list(org.granted_modules)))
+                                label=tier_key, modules=list(MODULE_KEYS)))
     db.add(OrganizationMember(org_id=org.id, account_id=account_id,
                               tier_key=tier_key, granted_by="grant",
                               is_owner=False))

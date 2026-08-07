@@ -142,13 +142,14 @@ class Organization(Base):
     consequences that nothing needed. Cheap to reintroduce; impossible to
     withdraw once links point at it.
 
-    `granted_modules` is the ceiling: which modules this org may use at all.
-    Bespoke per org, no plan table. For a PERSONAL org it is the whole
+    THE CEILING IS ALWAYS A PLAN, and `pinned_plan` is the only thing stored
+    about it. Which modules this org may use at all is
+    plans_registry.PLAN_MODULES[plan], where plan is either pinned here or read
+    from the owner's subscription. For a PERSONAL org that is the whole
     entitlement, because its single member is its owner and an owner bypasses
-    the tier layer — so this is the column billing raises and lowers. Tiers
-    only start mattering once an org has someone in it who is not the owner.
-    Resolution intersects at read time (services/modules.py), so lowering a
-    ceiling takes effect on the very next request with no cascade.
+    the tier layer; tiers only start mattering once an org has somebody in it
+    who is not the owner. Resolved at read time (services/modules.py), so a
+    change to a plan reaches every org on their next request.
     """
     __tablename__ = 'organizations'
 
@@ -156,13 +157,20 @@ class Organization(Base):
     name = Column(String(255), nullable=False)
     owner_account_id = Column(Integer, ForeignKey('accounts.id', ondelete='SET NULL'),
                               nullable=True, index=True)
-    granted_modules = Column(JSONB, nullable=False, server_default='[]')
-    # Who owns granted_modules. 'subscription' means the Stripe webhook writes
-    # it; 'grant' means a human did and billing must never undo it. The same
-    # asymmetry as OrganizationMember.granted_by, one level up — which is where
-    # it has to live now that the ceiling is a personal org's entitlement.
-    ceiling_managed_by = Column(String(20), nullable=False,
-                                server_default='subscription')
+    # The plan this org gets NO MATTER WHAT ITS OWNER PAYS. NULL — the normal
+    # case — means "follow the owner's subscription".
+    #
+    # This is the comp, and it is the whole of it. The same asymmetry
+    # OrganizationMember.granted_by encodes one level down: staff giving
+    # somebody access is a promise, and no webhook may quietly withdraw it.
+    #
+    # A PLAN, NOT A LIST OF MODULES. It used to be a frozen `granted_modules`
+    # snapshot guarded by a `ceiling_managed_by` flag, and a snapshot is a
+    # cache: every module added to a plan afterwards never reached a comped
+    # org. All three comped orgs on the platform silently ended up without
+    # `courses` and `spaces` that way. Pinning the plan tracks PLAN_MODULES as
+    # it grows, so there is nothing left to backfill and nothing to go stale.
+    pinned_plan = Column(String(20), nullable=True)
     # NO status COLUMN. There used to be one holding 'active' | 'read_only',
     # enforced on every write and written by absolutely nothing — every org on
     # the platform sat at 'active' including the one whose subscription had
@@ -177,8 +185,10 @@ class Organization(Base):
     created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
 
     __table_args__ = (
-        CheckConstraint("ceiling_managed_by IN ('subscription','grant')",
-                        name='ck_org_ceiling_managed_by'),
+        # NULL passes a CHECK, which is what makes "follow billing" the default
+        # without a sentinel value standing in for it.
+        CheckConstraint("pinned_plan IN ('free','premium')",
+                        name='ck_org_pinned_plan'),
     )
 
     owner = relationship('Account', foreign_keys=[owner_account_id])

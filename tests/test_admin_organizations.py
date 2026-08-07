@@ -12,6 +12,8 @@ properties are pinned here:
 from datetime import datetime, timedelta, timezone
 
 import pytest
+
+from src.config import plans_registry as plans
 from httpx import ASGITransport, AsyncClient
 
 from src.db.models import Account, Organization, OrganizationMember, OrganizationTier
@@ -49,8 +51,7 @@ async def staff_client(_override_db, staff_account) -> AsyncClient:
 
 @pytest.fixture()
 def seeded_orgs(db, test_org, test_account):
-    acme = Organization(name="Acme",
-                        granted_modules=["contacts", "deals"])
+    acme = Organization(name="Acme", pinned_plan="premium")
     # An org whose owner's card failed two days ago. Its state is not stored
     # anywhere — it is this timestamp, read through plans.billing_state — so
     # seeding it means seeding the OWNER, which is the point.
@@ -61,10 +62,9 @@ def seeded_orgs(db, test_org, test_account):
     )
     db.add(lapsed_owner)
     db.flush()
-    lapsed = Organization(name="Lapsed Co",
-                          granted_modules=["contacts"],
-                          owner_account_id=lapsed_owner.id,
-                          ceiling_managed_by="subscription")
+    # No pin: its plan follows lapsed_owner's subscription, which is the
+    # whole point of the fixture.
+    lapsed = Organization(name="Lapsed Co", owner_account_id=lapsed_owner.id)
     db.add_all([acme, lapsed])
     db.flush()
     db.add(OrganizationTier(org_id=acme.id, tier_key="member", label="Member",
@@ -103,13 +103,15 @@ async def test_staff_can_list(staff_client: AsyncClient, seeded_orgs):
 # content
 # ---------------------------------------------------------------------------
 
-async def test_summary_reports_counts_and_ceiling(staff_client: AsyncClient, seeded_orgs):
+async def test_summary_reports_counts_and_plan(staff_client: AsyncClient, seeded_orgs):
     resp = await staff_client.get(ADMIN_ORGS_URL)
     row = next(o for o in resp.json()["organizations"] if o["name"] == "Acme")
 
     assert row["member_count"] == 1
     assert row["tier_count"] == 1
-    assert row["granted_modules"] == ["contacts", "deals"]
+    assert row["pinned_plan"] == "premium"
+    assert row["modules"] == plans.modules_for_plan(plans.PLAN_PREMIUM), (
+        "what a pinned plan opens is read from the registry, not stored")
     # `is_personal` used to mean "has no slug" and this org had one, so it read
     # False despite having a single member. It now means what it says — one
     # member — and this fixture builds exactly that.
@@ -137,8 +139,8 @@ async def test_response_carries_no_tenant_data(staff_client: AsyncClient, seeded
     # "staff can administer an org" and "staff can quietly read it".
     allowed = {
         "id", "name", "is_personal", "billing_state", "owner_account_id",
-        "owner_email", "member_count", "tier_count", "granted_modules",
-        "ceiling_managed_by", "created_at",
+        "owner_email", "member_count", "tier_count", "modules",
+        "pinned_plan", "created_at",
     }
     for org in body["organizations"]:
         assert set(org.keys()) <= allowed, f"unexpected field(s): {set(org) - allowed}"

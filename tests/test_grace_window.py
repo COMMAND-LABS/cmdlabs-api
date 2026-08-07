@@ -107,10 +107,9 @@ def test_past_grace_drops_to_free():
 # resolved against a real org
 # ---------------------------------------------------------------------------
 
-def _org_owned_by(db: Session, account: Account, *, managed_by="subscription"):
-    org = Organization(name="Lapsing Co", granted_modules=["home"],
-                       owner_account_id=account.id,
-                       ceiling_managed_by=managed_by)
+def _org_owned_by(db: Session, account: Account, *, pinned_plan=None):
+    org = Organization(name="Lapsing Co", owner_account_id=account.id,
+                       pinned_plan=pinned_plan)
     db.add(org)
     db.flush()
     return org
@@ -151,31 +150,32 @@ def test_past_the_window_the_org_is_writable_again_on_free(db: Session):
     assert entitlement.grace_ends_at is None
 
 
-def test_a_comped_org_is_never_made_read_only_by_billing(db: Session):
+def test_a_pinned_org_is_never_made_read_only_by_billing(db: Session):
     """The comp promise, restated one level up.
 
-    Staff setting a ceiling by hand is a promise the billing path must not
-    quietly withdraw — the same asymmetry ceiling_managed_by already encodes
-    for the modules themselves. A comped org has no subscription to lapse, so
-    a cancelled card on the owner's account says nothing about it.
+    Staff pinning a plan is a promise the billing path must not quietly
+    withdraw — the same asymmetry OrganizationMember.granted_by encodes one
+    level down. A pinned org has no subscription to lapse, so a cancelled card
+    on the owner's account says nothing about it in either direction.
     """
     owner = Account(id=7303, email="comped@x.test", subscription_status="canceled",
                     subscription_lapsed_at=_at(1))
     db.add(owner)
     db.flush()
-    org = _org_owned_by(db, owner, managed_by="grant")
+    org = _org_owned_by(db, owner, pinned_plan=plans.PLAN_PREMIUM)
 
     entitlement = modules.org_entitlement(db, org.id, now=NOW)
 
     assert entitlement.read_only is False
-    assert entitlement.ceiling == ["home"], "the granted ceiling, untouched"
+    assert entitlement.plan == plans.PLAN_PREMIUM
+    assert entitlement.ceiling == plans.modules_for_plan(plans.PLAN_PREMIUM), (
+        "the pinned plan, untouched")
 
 
 def test_an_ownerless_org_is_not_locked(db: Session):
     """Nobody could fix the payment, so refusing writes would strand it."""
-    org = Organization(name="Orphan", granted_modules=["home"],
-                       owner_account_id=None,
-                       ceiling_managed_by="subscription")
+    org = Organization(name="Orphan", owner_account_id=None,
+                       pinned_plan=None)
     db.add(org)
     db.flush()
 

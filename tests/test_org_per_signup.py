@@ -23,13 +23,19 @@ from src.db.models import (
     OrganizationMember,
     OrganizationTier,
 )
+from src.config import plans_registry as plans
 from src.services import modules
+
+# Read from the registry rather than hardcoded: these are what the plans
+# contain right now, and a test that restated them would just be a second
+# place to update.
+FREE_CEILING = plans.modules_for_plan(plans.PLAN_FREE)
+PREMIUM_CEILING = plans.modules_for_plan(plans.PLAN_PREMIUM)
 from src.services.organizations import (
-    FREE_CEILING,
-    PREMIUM_CEILING,
+    ceiling_for_account,
     ensure_membership,
     own_org_for,
-    freeze_ceiling,
+    pin_plan,
 )
 
 
@@ -100,7 +106,7 @@ def test_tiers_are_seeded_so_the_workspace_can_become_a_team(db: Session):
     tiers = {t.tier_key: t for t in db.query(OrganizationTier).filter(
         OrganizationTier.org_id == org.id).all()}
     assert set(tiers) == {"owner", "member"}
-    assert tiers["owner"].modules == list(org.granted_modules)
+    assert tiers["owner"].modules == FREE_CEILING
     assert tiers["member"].modules == [], (
         "an invited member must get what the owner deliberately checks, "
         "never a default nobody chose")
@@ -115,7 +121,8 @@ def test_a_free_signup_sees_exactly_the_free_modules(db: Session):
     ensure_membership(db, acct)
     org = own_org_for(db, acct.id)
 
-    assert list(org.granted_modules) == FREE_CEILING
+    assert org.pinned_plan is None, "a signup follows their own subscription"
+    assert modules.ceiling_for(db, org.id) == FREE_CEILING
 
     from src.deps import OrgContext
     ctx = OrgContext(account_id=acct.id, org_id=org.id, tier_key="owner", is_owner=True, is_super_admin=False)
@@ -146,27 +153,54 @@ def test_subscribing_widens_the_ceiling_and_a_lapse_takes_it_back(db: Session):
     assert modules.ceiling_for(db, org.id) == FREE_CEILING, "a lapse takes it back"
 
 
-def test_a_comped_ceiling_survives_billing(db: Session):
+def test_a_pinned_plan_survives_billing(db: Session):
     """The comp, one level up from OrganizationMember.granted_by.
 
     A client given paid access without a subscription must not lose it the
-    first time an unrelated Stripe event fires. 'grant' is never recomputed —
-    that asymmetry is the whole reason the column still exists.
+    first time an unrelated Stripe event fires. A pin is never recomputed —
+    that asymmetry is the whole reason the column exists.
     """
     acct = _account(db, 8109)
     ensure_membership(db, acct)
     org = own_org_for(db, acct.id)
 
-    org.granted_modules = ["home", "agents", "contacts", "settings"]
-    org.ceiling_managed_by = "grant"
+    org.pinned_plan = plans.PLAN_PREMIUM
     db.flush()
 
     acct.subscription_status = "canceled"
     db.flush()
 
-    assert modules.ceiling_for(db, org.id) == [
-        "home", "agents", "contacts", "settings"], (
-        "billing must never undo a staff grant")
+    assert modules.ceiling_for(db, org.id) == PREMIUM_CEILING, (
+        "billing must never undo a staff pin")
+
+
+def test_a_pinned_plan_follows_the_plan_as_it_grows(db: Session):
+    """THE BUG THIS REPLACED, pinned as a test.
+
+    A pin used to store the resolved module LIST, which made it a snapshot:
+    every module added to the plan afterwards never reached the pinned org.
+    All three pinned orgs on the platform lost `courses` and `spaces` that way,
+    silently. Pinning the PLAN means a plan that grows reaches them too.
+    """
+    acct = _account(db, 8113)
+    ensure_membership(db, acct)
+    org = own_org_for(db, acct.id)
+    org.pinned_plan = plans.PLAN_PREMIUM
+    db.flush()
+
+    before = modules.ceiling_for(db, org.id)
+
+    original = plans.PLAN_MODULES[plans.PLAN_PREMIUM]
+    try:
+        # A module added to the product AFTER this org was pinned.
+        plans.PLAN_MODULES[plans.PLAN_PREMIUM] = original + ("organization",)
+        after = modules.ceiling_for(db, org.id)
+    finally:
+        plans.PLAN_MODULES[plans.PLAN_PREMIUM] = original
+
+    assert "organization" not in before
+    assert "organization" in after, (
+        "a pinned org must pick up what its plan gains, with no backfill")
 
 
 def test_billing_only_follows_the_owner_s_subscription(db: Session):
@@ -194,13 +228,12 @@ def test_billing_only_follows_the_owner_s_subscription(db: Session):
         db, own_org_for(db, acct.id).id) == PREMIUM_CEILING
 
 
-def test_becoming_a_team_freezes_the_ceiling(db: Session):
+def test_becoming_a_team_pins_the_plan(db: Session):
     """A colleague must not lose Contacts because the founder's card expired.
 
-    Until somebody else is let in, the ceiling follows the owner's plan. The
-    moment it stops being one person's workspace, the derived value is written
-    down and ownership passes to 'grant' — because the people it would now move
-    are no longer the person paying.
+    Until somebody else is let in, the plan follows the owner's subscription.
+    The moment it stops being one person's workspace it is pinned — because the
+    people it would now move are no longer the person paying.
     """
     acct = _account(db, 8112)
     acct.subscription_status = "active"
@@ -208,13 +241,12 @@ def test_becoming_a_team_freezes_the_ceiling(db: Session):
     org = own_org_for(db, acct.id)
     assert modules.ceiling_for(db, org.id) == PREMIUM_CEILING
 
-    freeze_ceiling(db, org)
+    pin_plan(db, org)
     db.flush()
 
-    assert org.ceiling_managed_by == "grant"
-    assert list(org.granted_modules) == PREMIUM_CEILING
+    assert org.pinned_plan == plans.PLAN_PREMIUM
 
     acct.subscription_status = "canceled"
     db.flush()
     assert modules.ceiling_for(db, org.id) == PREMIUM_CEILING, (
-        "the team keeps what it had when it became a team")
+        "the team keeps the plan it had when it became a team")

@@ -35,11 +35,6 @@ from src.config import plans_registry as plans
 from src.config.modules_registry import MODULE_KEYS, normalize
 from src.db.models import Account, Organization, OrganizationTier
 
-# Mirrors services.organizations.GRANTED_BY_SUBSCRIPTION. Duplicated rather
-# than imported: this file is read on every request and importing the service
-# layer from it would invert the dependency direction.
-GRANTED_BY_SUBSCRIPTION = "subscription"
-
 logger = logging.getLogger(__name__)
 
 
@@ -48,13 +43,15 @@ class OrgEntitlement:
     """What an org may open, and whether it may be changed.
 
     ONE OBJECT because it is one derivation. Both answers come from the same
-    two facts — the org's ceiling_managed_by, and the owner's billing — and
-    computing them separately is how they end up disagreeing: an org showing
-    premium modules while refusing every write, or the reverse.
+    two facts — whether the org has a pinned plan, and the owner's billing —
+    and computing them separately is how they end up disagreeing: an org
+    showing premium modules while refusing every write, or the reverse.
     """
+    # The plan in force: 'free' | 'premium'.
+    plan: str
     ceiling: list
     # True during the grace window after a lapse: the modules stay, the writes
-    # stop. Never true for a comped org — see below.
+    # stop. Never true for a pinned org — see below.
     read_only: bool
     # When read-only turns into a downgrade to free. None when nothing lapsed.
     grace_ends_at: datetime | None
@@ -64,58 +61,57 @@ def org_entitlement(db: Session, org_id: int,
                     now: datetime | None = None) -> OrgEntitlement:
     """What this org may use, and whether it may write.
 
-    DERIVED WHEN BILLING OWNS IT, STORED WHEN A HUMAN DOES. One column was
-    doing two jobs:
+    A CEILING IS ALWAYS A PLAN — either one pinned by staff, or the one the
+    owner is paying for. Nothing is stored except which of those two it is.
 
-        ceiling_managed_by='subscription'  a CACHE of the owner's plan
-        ceiling_managed_by='grant'         bespoke, set by staff, authoritative
+    This used to store the answer instead of the question: a `granted_modules`
+    list, plus a `ceiling_managed_by` flag saying whether billing was allowed
+    to rewrite it. Deriving the billing case removed one copy; the comped case
+    kept the other, and a copy with no invalidation path is a value that
+    drifts. It did: every module added to a plan after an org was comped never
+    reached it, and all three comped orgs on the platform quietly lost
+    `courses` and `spaces` without anyone touching them.
 
-    Only the second needs storing. The first was a copy of a dict lookup, and a
-    copy with no invalidation path is a value that drifts — which is exactly
-    what happened three times: adding `courses`, then `spaces`, then discovering
-    the platform org had missed both. Each needed a hand-written backfill
-    migration, and each was found by somebody noticing a menu item was absent.
-
-    Computed here, editing config/plans_registry.PLAN_MODULES takes effect on
-    everybody's next request. There is no backfill to forget.
-
-    A GRANT IS NEVER RECOMPUTED, AND NEVER GOES READ-ONLY. Staff raising a
-    client's ceiling by hand is a promise, and this function must not quietly
-    withdraw it — same asymmetry OrganizationMember.granted_by encodes one
-    level down. A comped org has no subscription to lapse, so billing has
-    nothing to say about it in either direction.
+    A PIN IS NEVER RECOMPUTED DOWNWARD, AND NEVER GOES READ-ONLY. Staff giving
+    a client a plan is a promise, and this function must not withdraw it — the
+    same asymmetry OrganizationMember.granted_by encodes one level down. A
+    pinned org has no subscription to lapse, so billing has nothing to say
+    about it in either direction.
     """
-    row = (db.query(Organization.granted_modules,
-                    Organization.ceiling_managed_by,
-                    Organization.owner_account_id)
+    row = (db.query(Organization.pinned_plan, Organization.owner_account_id)
              .filter(Organization.id == org_id).first())
     if row is None:
-        return OrgEntitlement(ceiling=[], read_only=False, grace_ends_at=None)
+        return OrgEntitlement(plan=plans.PLAN_FREE, ceiling=[],
+                              read_only=False, grace_ends_at=None)
 
-    granted, managed_by, owner_account_id = row
-    if managed_by != GRANTED_BY_SUBSCRIPTION:
-        return OrgEntitlement(ceiling=normalize(granted), read_only=False,
-                              grace_ends_at=None)
+    pinned_plan, owner_account_id = row
+    if pinned_plan is not None:
+        return OrgEntitlement(plan=pinned_plan,
+                              ceiling=plans.modules_for_plan(pinned_plan),
+                              read_only=False, grace_ends_at=None)
 
-    # Billing owns it: read the plan rather than the copy of it. An org with no
-    # owner (the account was deleted) falls back to what was last stored, which
-    # is the conservative answer — never wider than it already was, and never
-    # read-only, since there is nobody who could fix the payment.
+    # An org with no owner (the account was deleted) gets the free plan and is
+    # never locked: there is nobody who could fix a payment, so refusing writes
+    # would strand it for good.
     if owner_account_id is None:
-        return OrgEntitlement(ceiling=normalize(granted), read_only=False,
-                              grace_ends_at=None)
+        return OrgEntitlement(plan=plans.PLAN_FREE,
+                              ceiling=plans.modules_for_plan(plans.PLAN_FREE),
+                              read_only=False, grace_ends_at=None)
 
     owner = (db.query(Account.subscription_status,
                       Account.subscription_lapsed_at)
                .filter(Account.id == owner_account_id).first())
     if owner is None:
-        return OrgEntitlement(ceiling=normalize(granted), read_only=False,
-                              grace_ends_at=None)
+        return OrgEntitlement(plan=plans.PLAN_FREE,
+                              ceiling=plans.modules_for_plan(plans.PLAN_FREE),
+                              read_only=False, grace_ends_at=None)
 
     subscription_status, lapsed_at = owner
     state = plans.billing_state(subscription_status, lapsed_at, now)
+    plan = plans.plan_for_state(state)
     return OrgEntitlement(
-        ceiling=plans.modules_for_plan(plans.plan_for_state(state)),
+        plan=plan,
+        ceiling=plans.modules_for_plan(plan),
         read_only=(state == plans.BILLING_GRACE),
         grace_ends_at=(plans.grace_ends_at(lapsed_at)
                        if state == plans.BILLING_GRACE else None),

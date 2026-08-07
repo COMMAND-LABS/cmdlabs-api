@@ -13,8 +13,13 @@ modules_registry.py, which is where the module keys themselves live.
 PLAN vs TIER vs CEILING — three words, three different axes
 -----------------------------------------------------------
     PLAN     what the PLATFORM sells to a customer      free | premium
-    CEILING  where a plan is stored on an org           organizations.granted_modules
+    CEILING  the modules a plan opens for an org        derived from the plan
     TIER     how an org OWNER divides their ceiling     organization_tiers
+
+A CEILING IS ALWAYS A PLAN. It is either the plan the owner pays for, or one
+pinned by staff (organizations.pinned_plan) so billing cannot take it away.
+There is no third form and, in particular, no stored list of modules: see
+PLAN_MODULES below for why that mattered.
 
 A plan is not a tier, and the difference is not cosmetic. Tier rows are
 editable by the org's own owner (PUT /api/organizations/tiers/{key}/modules),
@@ -71,14 +76,44 @@ PLAN_LABELS = {
 
 # What each plan includes. Keys must exist in modules_registry.MODULES.
 #
-# `courses` is in BOTH: the catalog is how somebody on the free plan sees what
-# the paid one contains, so gating the browser itself would defeat the point.
-# Which COURSES they can open is decided per course by Course.required_plan,
-# not by hiding the module.
+# THE ONLY PLACE THIS IS WRITTEN DOWN, and it has to stay that way. It used to
+# have a rival: an org could carry a frozen LIST of modules instead, which is
+# what "comp this client" was implemented as. A list is a snapshot, so every
+# module added to a plan afterwards simply never reached the comped orgs —
+# all three of them ended up missing `courses` and `spaces` without anybody
+# doing anything wrong. Comping now pins a PLAN (organizations.pinned_plan),
+# so it tracks this table as it grows.
+#
+# PREMIUM IS A STRICT SUPERSET OF FREE. Nothing is only-on-free; upgrading can
+# never take a screen away. Asserted in tests/test_course_plans.py.
+#
+# `courses` and `spaces` are in BOTH: the catalog is how somebody on the free
+# plan sees what the paid one contains, so gating the browser itself would
+# defeat the point. Which COURSES they can open is decided per course by
+# Course.required_plan, not by hiding the module.
+#
+# TWO MODULE KEYS ARE DELIBERATELY IN NEITHER PLAN, and that is not an
+# oversight — it is the same oversight this table just stopped having, so it
+# is written down:
+#
+#   membership    how you PAY. Gating it would let a lapsed account be unable
+#                 to fix its own billing. Always-visible in the UI
+#                 (roles.ts ALWAYS_VISIBLE) and always-allowed on the API
+#                 (/api/billing in modules_registry.ALWAYS_ALLOWED_PREFIXES).
+#   organization  the owner's console. Gated on OWNERSHIP rather than on the
+#                 plan — routers/organizations/overview.py and tiers.py use
+#                 _require_owner — so an owner whose plan happened to omit it
+#                 could not administer their own org while the API served
+#                 them perfectly well.
+#
+# Neither has any route_prefixes in modules_registry, so nothing on the API
+# consults them at all.
 PLAN_MODULES = {
-    PLAN_FREE: ("home", "courses", "spaces", "membership", "settings"),
-    PLAN_PREMIUM: ("agents", "agent_chat", "credentials", "courses", "spaces",
-                   "membership", "settings"),
+    PLAN_FREE: ("home", "courses", "spaces", "prompts", "settings"),
+    PLAN_PREMIUM: ("home", "agents", "agent_chat", "contacts", "contact_lists",
+                   "companies", "deals", "prompts", "knowledge_bases", "access",
+                   "credentials", "email_templates", "email_campaigns",
+                   "courses", "spaces", "analytics", "settings"),
 }
 
 

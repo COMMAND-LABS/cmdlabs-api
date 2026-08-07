@@ -39,7 +39,7 @@ async def _resolve(db, account_id, cookies=None, auth_type="jwt"):
 def other_org(db) -> Organization:
     org = Organization(
         name="Acme",
-        granted_modules=[],
+        pinned_plan="premium",
     )
     db.add(org)
     db.flush()

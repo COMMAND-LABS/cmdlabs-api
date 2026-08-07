@@ -50,69 +50,56 @@ TIER_MEMBER = "member"
 # too and are gone: nothing read them, and a plan is not a tier.
 TIER_ORG_OWNER = "org_owner"
 
-# Entitlement provenance. 'subscription' is owned by the Stripe webhook and
-# lapses with billing; 'grant' is set by a human and is NEVER written by any
-# webhook — that asymmetry is what lets staff comp a client into paid access.
+# Membership provenance. Unrelated to the org's PLAN, which is now a single
+# nullable column (Organization.pinned_plan) rather than a flag over a stored
+# module list.
 GRANTED_BY_SUBSCRIPTION = "subscription"
 GRANTED_BY_GRANT = "grant"
 
 ACTIVE_SUBSCRIPTION_STATUSES = plans.ACTIVE_SUBSCRIPTION_STATUSES
 
-# The plan module sets, by their old names.
-#
-# These used to be literal lists here, named after the COLUMN they are written
-# to rather than the thing they are. The definition now lives in
-# config/plans_registry.py — one answer to "what does premium include?" — and
-# these stay as aliases because a handful of tests and readers still reach for
-# them. Migration e3f4a5b6c7d8 seeded its own point-in-time copy and must not
-# follow either of them as the product changes.
-FREE_CEILING = plans.modules_for_plan(plans.PLAN_FREE)
-PREMIUM_CEILING = plans.modules_for_plan(plans.PLAN_PREMIUM)
-
-
 def ceiling_for_account(account: Account) -> list:
-    """The modules a new personal workspace starts with — i.e. their plan.
+    """The modules this account's plan opens, right now.
 
-    Derived from the subscription rather than accounts.role, for the same
-    reason the backfill migrations do it that way: a row whose role has drifted
-    out of agreement with Stripe would otherwise be handed paid modules that no
-    webhook would ever take back.
-
-    For a personal workspace the ceiling IS the plan. It is stored one level
-    above the tier layer on purpose — tiers are editable by the org's own
-    owner, and every self-serve signup owns their workspace, so a plan
-    expressed as a tier would be a plan the customer could rewrite. See
-    config/plans_registry.py.
+    A thin read of config/plans_registry — the one answer to "what does premium
+    include?". Two module-set constants used to live here instead, named after
+    the COLUMN they were written to rather than the thing they were; the column
+    is gone and so are they.
     """
     return plans.modules_for_plan(plans.plan_for_account(account))
 
 
-def freeze_ceiling(db: Session, org: Organization) -> None:
-    """Pin an org's ceiling at what it currently resolves to. Caller commits.
+
+def pin_plan(db: Session, org: Organization) -> None:
+    """Pin an org to the plan it is on right now. Caller commits.
 
     Called when a workspace becomes a TEAM — the moment somebody who is not the
-    owner is let in. Until then the ceiling is derived from the owner's plan and
-    follows their subscription; afterwards it must not, because the people it
-    would move are no longer the person paying. A colleague should not lose
-    Contacts because the founder's card expired.
+    owner is let in. Until then the plan is read from the owner's subscription;
+    afterwards it must not be, because the people it would move are no longer
+    the person paying. A colleague should not lose Contacts because the
+    founder's card expired.
 
-    So the derived value is written down and ownership of the column passes to
-    'grant', which no automated path ever rewrites. Idempotent: an org that is
-    already granted is left exactly as it is.
+    PINS THE PLAN, NOT THE MODULE LIST. This used to write down the resolved
+    modules and set a flag saying billing could no longer touch them, which
+    made the pin a snapshot: every module added to a plan afterwards never
+    reached the org. All three pinned orgs on the platform lost `courses` and
+    `spaces` that way, silently, and it read as a missing menu item rather than
+    as a stale cache. A pinned plan tracks PLAN_MODULES as it grows.
+
+    Idempotent: an org that is already pinned is left exactly as it is.
     """
-    if org.ceiling_managed_by != GRANTED_BY_SUBSCRIPTION:
+    if org.pinned_plan is not None:
         return
 
     from src.services import modules
 
-    frozen = modules.ceiling_for(db, org.id)
-    org.granted_modules = frozen
-    org.ceiling_managed_by = GRANTED_BY_GRANT
+    plan = modules.org_entitlement(db, org.id).plan
+    org.pinned_plan = plan
     audit.record_org_change(
         db, event_type=audit.ORG_CEILING_CHANGE, org_id=org.id,
-        detail=f"frozen on becoming a team: {','.join(frozen) or '(none)'}",
+        detail=f"pinned to the {plan} plan on becoming a team",
     )
-    logger.info("[ORG] %s ceiling frozen at %s — now a team", org.id, frozen)
+    logger.info("[ORG] %s pinned to the %s plan — now a team", org.id, plan)
 
 
 def is_solo(db: Session, org_id: int) -> bool:
@@ -238,12 +225,10 @@ def _create_personal_org(db: Session, account: Account) -> Organization:
     org = Organization(
         name=name,
         owner_account_id=account.id,
-        granted_modules=ceiling_for_account(account),
-        # Billing owns this org's ceiling until staff overrides it, at which
-        # point admin.set_ceiling flips this to 'grant' and the webhook stops
-        # touching it. That is the comp mechanism, one level up from
-        # OrganizationMember.granted_by.
-        ceiling_managed_by=GRANTED_BY_SUBSCRIPTION,
+        # pinned_plan stays NULL: this workspace follows its owner's
+        # subscription, which is what every self-serve signup should do. Staff
+        # pin a plan (admin.set_plan), and the moment somebody else is let in
+        # pin_plan() does it automatically — see there for why.
     )
     db.add(org)
     db.flush()
@@ -253,14 +238,14 @@ def _create_personal_org(db: Session, account: Account) -> Organization:
     # `member` starts with nothing: an invited person gets what the owner
     # deliberately checks in the matrix, never a default they did not choose.
     db.add(OrganizationTier(org_id=org.id, tier_key=TIER_OWNER, label="Owner",
-                            modules=list(org.granted_modules)))
+                            modules=ceiling_for_account(account)))
     db.add(OrganizationTier(org_id=org.id, tier_key=TIER_MEMBER, label="Member",
                             modules=[]))
     db.flush()
 
     audit.record_org_change(
         db, event_type=audit.ORG_CREATE, org_id=org.id,
-        detail=",".join(org.granted_modules) or "(none)",
+        detail=f"created on the {plans.plan_for_account(account)} plan",
         actor_account_id=account.id,
     )
     return org

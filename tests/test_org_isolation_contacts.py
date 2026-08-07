@@ -114,7 +114,7 @@ async def test_a_signup_never_shares_an_org_with_another_signup(
     # A 'subscription' ceiling is derived from the owner's plan and ignores the
     # column, so writing it alone would leave this account on the free plan and
     # the request below would 404 for the wrong reason.
-    org_a.granted_modules = list(MODULE_KEYS)
+    org_a.pinned_plan = "premium"
     org_a.ceiling_managed_by = "grant"
     db.flush()
     async with client_for(Tenant(org=org_a, account=a)) as c:
