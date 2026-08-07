@@ -1,31 +1,25 @@
 """
 Pydantic request/response models for agent access grants.
 """
-from typing import Optional
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 
 
 class CreateGrantRequest(BaseModel):
-    """Share an agent with a group OR an individual (by email). Exactly one."""
-    accessGroupId: Optional[int] = None
-    granteeEmail: Optional[str] = None
+    """Share an agent with ONE named person.
 
-    @model_validator(mode="after")
-    def _exactly_one(self):
-        if (self.accessGroupId is None) == (self.granteeEmail is None):
-            raise ValueError("Provide exactly one of accessGroupId or granteeEmail")
-        return self
+    Sharing with a set of people is putting the agent in a SPACE
+    (POST /api/spaces/{id}/resources) — a different table, because a space's
+    audience deliberately crosses org boundaries and a grant may not.
+    """
+    granteeEmail: str
 
 
 class AgentAccessGrantResponse(BaseModel):
     id: int
     agent_id: int
-    # Exactly one of these is set.
-    access_group_id: Optional[int] = None
-    grantee_account_id: Optional[int] = None
+    grantee_account_id: int
     label: str
-    target_type: str  # 'group' | 'individual'
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

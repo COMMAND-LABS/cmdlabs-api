@@ -9,6 +9,8 @@ properties are pinned here:
   - the response carries counts and configuration only. Staff administer orgs
     from this page; reading an org's rows still requires joining it.
 """
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -21,7 +23,7 @@ ADMIN_ORGS_URL = "/api/admin/organizations"
 
 @pytest.fixture()
 def staff_account(db, test_org):
-    account = Account(id=900, email="staff@cmdlabs.io", role="admin",
+    account = Account(id=900, email="staff@cmdlabs.io", is_staff=True,
                       default_org_id=test_org.id)
     db.add(account)
     db.flush()
@@ -47,10 +49,22 @@ async def staff_client(_override_db, staff_account) -> AsyncClient:
 
 @pytest.fixture()
 def seeded_orgs(db, test_org, test_account):
-    acme = Organization(slug="acme", name="Acme",
-                        granted_modules=["contacts", "deals"], status="active")
-    lapsed = Organization(slug="lapsed-co", name="Lapsed Co",
-                          granted_modules=["contacts"], status="read_only")
+    acme = Organization(name="Acme",
+                        granted_modules=["contacts", "deals"])
+    # An org whose owner's card failed two days ago. Its state is not stored
+    # anywhere — it is this timestamp, read through plans.billing_state — so
+    # seeding it means seeding the OWNER, which is the point.
+    lapsed_owner = Account(
+        id=7701, email="lapsed-owner@x.test",
+        subscription_status="canceled",
+        subscription_lapsed_at=datetime.now(timezone.utc) - timedelta(days=2),
+    )
+    db.add(lapsed_owner)
+    db.flush()
+    lapsed = Organization(name="Lapsed Co",
+                          granted_modules=["contacts"],
+                          owner_account_id=lapsed_owner.id,
+                          ceiling_managed_by="subscription")
     db.add_all([acme, lapsed])
     db.flush()
     db.add(OrganizationTier(org_id=acme.id, tier_key="member", label="Member",
@@ -80,8 +94,8 @@ async def test_staff_can_list(staff_client: AsyncClient, seeded_orgs):
     resp = await staff_client.get(ADMIN_ORGS_URL)
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    slugs = [o["slug"] for o in body["organizations"]]
-    assert "root" in slugs and "acme" in slugs and "lapsed-co" in slugs
+    names = [o["name"] for o in body["organizations"]]
+    assert "CMD LABS" in names and "Acme" in names and "Lapsed Co" in names
     assert body["total"] == len(body["organizations"])
 
 
@@ -91,19 +105,28 @@ async def test_staff_can_list(staff_client: AsyncClient, seeded_orgs):
 
 async def test_summary_reports_counts_and_ceiling(staff_client: AsyncClient, seeded_orgs):
     resp = await staff_client.get(ADMIN_ORGS_URL)
-    row = next(o for o in resp.json()["organizations"] if o["slug"] == "acme")
+    row = next(o for o in resp.json()["organizations"] if o["name"] == "Acme")
 
     assert row["member_count"] == 1
     assert row["tier_count"] == 1
     assert row["granted_modules"] == ["contacts", "deals"]
-    assert row["is_personal"] is False
+    # `is_personal` used to mean "has no slug" and this org had one, so it read
+    # False despite having a single member. It now means what it says — one
+    # member — and this fixture builds exactly that.
+    assert row["is_personal"] is True
 
 
-async def test_suspended_org_is_visible_as_read_only(staff_client: AsyncClient, seeded_orgs):
-    """A lapsed org must still appear — it is suspended, not deleted."""
+async def test_a_lapsed_org_is_visible_and_says_so(staff_client: AsyncClient, seeded_orgs):
+    """A lapsed org must still appear — it is read-only, not deleted.
+
+    And the state is DERIVED here, from the owner's subscription, rather than
+    read from a column on the org. Staff seeing 'grace' is staff seeing the
+    real answer to "why can't they save anything", which was the whole reason
+    the stored column was worse than useless: it always said 'active'.
+    """
     resp = await staff_client.get(ADMIN_ORGS_URL)
-    row = next(o for o in resp.json()["organizations"] if o["slug"] == "lapsed-co")
-    assert row["status"] == "read_only"
+    row = next(o for o in resp.json()["organizations"] if o["name"] == "Lapsed Co")
+    assert row["billing_state"] == "grace"
 
 
 async def test_response_carries_no_tenant_data(staff_client: AsyncClient, seeded_orgs):
@@ -113,7 +136,7 @@ async def test_response_carries_no_tenant_data(staff_client: AsyncClient, seeded
     # deliberately, which is the point: this test is the thing standing between
     # "staff can administer an org" and "staff can quietly read it".
     allowed = {
-        "id", "slug", "name", "is_personal", "status", "owner_account_id",
+        "id", "name", "is_personal", "billing_state", "owner_account_id",
         "owner_email", "member_count", "tier_count", "granted_modules",
         "ceiling_managed_by", "created_at",
     }

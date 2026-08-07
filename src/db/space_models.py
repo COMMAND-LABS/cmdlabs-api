@@ -40,9 +40,8 @@ level up.
 
 WHY A SEPARATE MODULE
 ---------------------
-Same reason catalog_models.py is separate: these tables do not belong to any
-tenant, and keeping that boundary visible in the file layout is worth a little
-awkwardness. Registered on Base.metadata from db/models.py, so Alembic and
+These tables belong to no tenant, and keeping that boundary visible in the
+file layout is worth a little awkwardness. Registered on Base.metadata from db/models.py, so Alembic and
 tests/conftest.py both see them.
 """
 from sqlalchemy import (
@@ -96,10 +95,11 @@ class Space(Base):
     __tablename__ = 'spaces'
 
     id = Column(Integer, primary_key=True, index=True)
-    # Public identity, in URLs. Set once at creation and never exposed for
-    # editing — same argument as an org slug: it is what links point at, and a
-    # released name is one somebody else could assume.
-    slug = Column(String(64), nullable=False)
+    # No slug. It was added by symmetry with organizations, and organizations
+    # then dropped theirs: the id already identifies a space in every route,
+    # and a permanent public name is a decision with squatting and
+    # link-stability consequences that nothing here needs yet. Easy to add
+    # later; impossible to take back once links point at it.
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
 
@@ -123,7 +123,6 @@ class Space(Base):
                         nullable=False)
 
     __table_args__ = (
-        UniqueConstraint('slug', name='uq_spaces_slug'),
         CheckConstraint(
             "join_policy IN ('invite','request','open')",
             name='ck_spaces_join_policy'),
@@ -132,7 +131,7 @@ class Space(Base):
     )
 
     def __repr__(self):
-        return f'<Space {self.id}: {self.slug}>'
+        return f'<Space {self.id}: {self.name}>'
 
 
 class SpaceTier(Base):
@@ -245,3 +244,58 @@ class SpaceJoinRequest(Base):
     def __repr__(self):
         return (f'<SpaceJoinRequest space={self.space_id} '
                 f'account={self.account_id} {self.status}>')
+
+
+class SpaceResource(Base):
+    """A resource shared INTO a space by whoever owns it.
+
+    WHY SHARING RATHER THAN DUAL-HOMING. A course is a pure enablement, so it
+    moves into a space wholesale (courses.space_id, one home per row). An agent
+    or a knowledge base cannot: it carries credentials, quotas and a billing
+    relationship, all of which belong to the org that runs it. So it stays in
+    its org and a space is granted READ access to it.
+
+    That is a cross-org read arm, and it is the same one-directional shape the
+    catalog had — with the platform-only restriction lifted. It is safe for the
+    same reason: the row can only be added by somebody who OWNS the resource,
+    so "Acme shares Acme's agent" is expressible and "Acme shares Beta's agent"
+    is not. Enforced in the router, asserted in tests.
+
+    This replaced catalog_items + catalog_grants. Two tables became one, and
+    the audience went from "an org, optionally narrowed to a group" to "the
+    members of a space" — which is the one membership question the platform now
+    asks everywhere.
+    """
+    __tablename__ = 'space_resources'
+
+    id = Column(Integer, primary_key=True, index=True)
+    space_id = Column(Integer, ForeignKey('spaces.id', ondelete='CASCADE'),
+                      nullable=False, index=True)
+    # Deliberately narrow. CRM rows are tenant data and may never be shared —
+    # the same whitelist the catalog carried, for the same reason.
+    resource_type = Column(String(20), nullable=False)
+    # No foreign key: the referenced table varies by resource_type, and a
+    # dangling row is handled by the readers (it simply matches nothing)
+    # rather than by a constraint that cannot span two tables.
+    resource_id = Column(Integer, nullable=False)
+    # Attribution, never authority. Who may share is re-checked at write time.
+    added_by_account_id = Column(Integer, ForeignKey('accounts.id',
+                                                     ondelete='SET NULL'),
+                                 nullable=True)
+    created_at = Column(DateTime(timezone=True), default=func.now(),
+                        nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('space_id', 'resource_type', 'resource_id',
+                         name='uq_space_resource'),
+        CheckConstraint("resource_type IN ('agent','vector_store')",
+                        name='ck_space_resource_type'),
+    )
+
+    def __repr__(self):
+        return (f'<SpaceResource space={self.space_id} '
+                f'{self.resource_type}={self.resource_id}>')
+
+
+# Resource types a space may share. Mirrors the CHECK above.
+SHAREABLE_RESOURCE_TYPES = ('agent', 'vector_store')

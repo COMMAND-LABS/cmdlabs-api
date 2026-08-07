@@ -14,8 +14,6 @@ from src.db.models import (
     Credential,
     AccessGrant,
     CredentialDefault,
-    AccessGroup,
-    AccessGroupMember,
     Account,
 )
 from src.services import access
@@ -103,8 +101,11 @@ async def list_credentials(
 def _build_shared_labels(db, account_id: int, shared_ids: set) -> dict:
     """
     Map each shared credential id -> a human-readable label describing how the
-    caller can access it. Direct individual shares win ("Shared by <owner>");
-    otherwise the access-group name is used.
+    caller can access it: "Shared by <owner>".
+
+    One shape, because a credential grant names one person. There is no space
+    arm to fall back to — a credential is an API key with a bill attached and
+    space_resources refuses the type outright.
     """
     labels: dict = {}
 
@@ -123,21 +124,5 @@ def _build_shared_labels(db, account_id: int, shared_ids: set) -> dict:
     )
     for cred_id, owner_email in direct_rows:
         labels[cred_id] = f"Shared by {owner_email}"
-
-    # Group shares the caller reaches via membership: label with the group name.
-    group_rows = (
-        db.query(AccessGrant.resource_id, AccessGroup.name)
-        .join(AccessGroup, AccessGroup.id == AccessGrant.principal_id)
-        .join(AccessGroupMember, AccessGroupMember.access_group_id == AccessGroup.id)
-        .filter(
-            AccessGrant.resource_type == access.CREDENTIAL,
-            AccessGrant.principal_type == access.GROUP,
-            AccessGroupMember.account_id == account_id,
-            AccessGrant.resource_id.in_(shared_ids),
-        )
-        .all()
-    )
-    for cred_id, group_name in group_rows:
-        labels.setdefault(cred_id, f"Shared via {group_name}")
 
     return labels

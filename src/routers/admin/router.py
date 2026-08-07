@@ -7,7 +7,6 @@ staff would otherwise need to belong to an org to discover which orgs exist.
 """
 from fastapi import APIRouter
 
-from .catalog import router as catalog_router
 from .organization_detail import router as org_detail_router
 from .organizations import router as org_admin_router
 from .list_organizations import router as list_organizations_router
@@ -15,6 +14,5 @@ from .list_organizations import router as list_organizations_router
 router = APIRouter()
 
 router.include_router(list_organizations_router)
-router.include_router(catalog_router)
 router.include_router(org_admin_router)
 router.include_router(org_detail_router)

@@ -53,14 +53,27 @@ def premium_user(db: Session):
 # the plan itself
 # ---------------------------------------------------------------------------
 
-def test_a_plan_is_the_subscription_not_the_role(db: Session):
-    """accounts.role is a cache of Stripe; the subscription is the fact."""
-    account = Account(id=9810, email="drifted@x.test", role="premium",
-                      subscription_status=None)
+def test_a_plan_is_read_from_the_subscription_every_time(db: Session):
+    """There is no stored plan, so there is nothing that can disagree.
+
+    This test used to build an account whose `role` column said 'premium' while
+    Stripe said nothing, and assert the subscription won. That drift is no
+    longer expressible: the column is gone and the plan is computed on every
+    read, so the only thing left to check is that the computation follows the
+    status as it changes.
+    """
+    account = Account(id=9810, email="drifted@x.test", subscription_status=None)
     assert plans.plan_for_account(account) == plans.PLAN_FREE
 
     account.subscription_status = "trialing"
     assert plans.plan_for_account(account) == plans.PLAN_PREMIUM
+
+    account.subscription_status = "canceled"
+    assert plans.plan_for_account(account) == plans.PLAN_FREE
+
+    # Staff is a separate column and billing never touches it.
+    account.is_staff = True
+    assert plans.plan_for_account(account) == plans.PLAN_FREE
 
 
 def test_both_plans_include_the_courses_module():

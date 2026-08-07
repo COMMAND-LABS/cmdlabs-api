@@ -1,13 +1,16 @@
 """
-Revoke an agent access grant by grant id (agent owner or, for group grants, a
-manager of the granted group). Operates on the unified AccessGrant table.
+Revoke an agent access grant by grant id. Agent owner only.
+
+It used to also admit a manager of the granted GROUP. Groups are spaces now,
+and a space share is revoked from the space (DELETE
+/api/spaces/{id}/resources/{row}) by its owner — so the second authority moved
+with the thing it was an authority over rather than being dropped.
 """
 from fastapi import APIRouter, HTTPException, status, Request
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims
-from src.db.models import Agent, AccessGroup, AccessGrant
+from src.db.models import Agent, AccessGrant
 from src.services import access
 from src.services.access_admin import record_access_event
-from src.services.access_group_roles import is_group_manager
 from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
@@ -22,7 +25,7 @@ async def revoke_grant(
     jwt: jwt_dependency,
     request: Request,
 ):
-    """Revoke a grant on this agent. Agent owner, or a manager of the granted group."""
+    """Revoke a grant on this agent. Agent owner only."""
     try:
         account_id = account_id_from_claims(jwt)
 
@@ -39,13 +42,7 @@ async def revoke_grant(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grant not found")
 
         if agent.account_id != account_id:
-            # Non-owner may only revoke a group grant they manage.
-            allowed = False
-            if grant.principal_type == access.GROUP:
-                group = db.query(AccessGroup).filter(AccessGroup.id == grant.principal_id).first()
-                allowed = bool(group and is_group_manager(db, group, account_id))
-            if not allowed:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have permission to revoke this grant")
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have permission to revoke this grant")
 
         record_access_event(
             db,

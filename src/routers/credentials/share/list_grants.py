@@ -38,10 +38,8 @@ async def list_credential_grants(
             CredentialGrantResponse(
                 id=g.id,
                 credential_id=credential_id,
-                access_group_id=g.principal_id if g.principal_type == access.GROUP else None,
-                grantee_account_id=g.principal_id if g.principal_type == access.ACCOUNT else None,
+                grantee_account_id=g.principal_id,
                 label=grant_label(db, g),
-                target_type="group" if g.principal_type == access.GROUP else "individual",
                 created_at=g.created_at,
             )
             for g in grants

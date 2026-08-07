@@ -57,10 +57,15 @@ class ReverseAuditItem(BaseModel):
 
 
 class SharedGrant(BaseModel):
+    # Negative for a SPACE share. The two live in different tables with their
+    # own id sequences, so a positive id alone would be ambiguous — and this
+    # list is read by people deciding what to revoke.
     grant_id: int
-    label: str          # group name or grantee email
-    target_type: str    # 'group' | 'individual'
+    label: str          # the grantee's email, or "Space: <name>"
     role: str
+    # 'person' | 'space'. The one thing a reader of this page most needs to
+    # know: a person is inside this org, a space deliberately is not.
+    reach: str = "person"
 
 
 class SharedResource(BaseModel):
@@ -178,7 +183,14 @@ async def shared_by_me(
     org: org_dependency,
     request: Request,
 ):
-    """Every resource the caller OWNS that is shared, with whom, and at what role."""
+    """Every resource the caller OWNS that is shared, with whom, and how far.
+
+    BOTH ARMS, because a report that shows only the org-confined one is worse
+    than no report: the arm it omits is the one that leaves the organization.
+    Grants and space shares are listed side by side and labelled with their
+    reach, so "who can see this?" is answered once rather than assembled from
+    this page plus a walk through every space you own.
+    """
     try:
         account_id = account_id_from_claims(jwt)
         ensure_account(db, account_id)
@@ -206,12 +218,26 @@ async def shared_by_me(
             if key not in owned:
                 continue
             by_resource.setdefault(key, []).append(
-                SharedGrant(
-                    grant_id=g.id,
-                    label=grant_label(db, g),
-                    target_type="group" if g.principal_type == access.GROUP else "individual",
-                    role=g.role,
-                )
+                SharedGrant(grant_id=g.id, label=grant_label(db, g),
+                            role=g.role, reach="person")
+            )
+
+        # The cross-org arm. Same list, labelled for what it is.
+        from src.db.space_models import Space, SpaceResource
+
+        shares = (
+            db.query(SpaceResource.id, SpaceResource.resource_type,
+                     SpaceResource.resource_id, Space.name)
+            .join(Space, Space.id == SpaceResource.space_id)
+            .all()
+        )
+        for row_id, rtype, rid, space_name in shares:
+            key = (rtype, rid)
+            if key not in owned:
+                continue
+            by_resource.setdefault(key, []).append(
+                SharedGrant(grant_id=-row_id, label=f"Space: {space_name}",
+                            role="read", reach="space")
             )
 
         return [

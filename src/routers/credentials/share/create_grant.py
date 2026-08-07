@@ -1,5 +1,8 @@
 """
-Share a credential with an access group or an individual (credential owner only).
+Share a credential with one named person (credential owner only).
+
+A credential is never shareable into a space: it is an API key with a bill
+attached, and a space's audience crosses orgs by design.
 
 Writes a unified AccessGrant (resource_type='credential', role='use').
 """
@@ -7,7 +10,7 @@ from fastapi import APIRouter, HTTPException, status, Request
 from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
 from src.db.models import Credential, AccessGrant
 from src.services import access
-from src.services.access_admin import resolve_principal, upsert_grant, record_access_event
+from src.services.access_admin import resolve_grantee, upsert_grant, record_access_event
 from .models import CreateCredentialGrantRequest, CredentialGrantResponse
 from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
@@ -25,7 +28,7 @@ async def create_credential_grant(
     org: org_dependency,
     request: Request,
 ):
-    """Share a credential with a group OR an individual. Owner only. Use-not-view."""
+    """Share a credential with one other person. Owner only. Use-not-view."""
     try:
         account_id = account_id_from_claims(jwt)
 
@@ -36,14 +39,13 @@ async def create_credential_grant(
         if not credential:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credential not found")
 
-        principal_type, principal_id, label = resolve_principal(
+        principal_type, principal_id, label = resolve_grantee(
             db,
             caller_account_id=account_id,
-            access_group_id=body.accessGroupId,
             grantee_email=body.granteeEmail,
         )
 
-        # Reject duplicate (a grant already exists for this principal on this credential).
+        # Reject duplicate (a grant already exists for this person on this credential).
         existing = db.query(AccessGrant).filter(
             AccessGrant.principal_type == principal_type,
             AccessGrant.principal_id == principal_id,
@@ -51,7 +53,7 @@ async def create_credential_grant(
             AccessGrant.resource_id == credential_id,
         ).first()
         if existing:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Credential is already shared with this principal")
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Credential is already shared with that person")
 
         grant = upsert_grant(
             db,
@@ -78,10 +80,8 @@ async def create_credential_grant(
         return CredentialGrantResponse(
             id=grant.id,
             credential_id=credential_id,
-            access_group_id=principal_id if principal_type == access.GROUP else None,
-            grantee_account_id=principal_id if principal_type == access.ACCOUNT else None,
+            grantee_account_id=principal_id,
             label=label,
-            target_type="group" if principal_type == access.GROUP else "individual",
             created_at=grant.created_at,
         )
     except HTTPException:

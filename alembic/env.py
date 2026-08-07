@@ -12,7 +12,6 @@ from src.db.models import Base # NOTE: for integrating SQLAlchemy schema with Al
 # their models were deleted, and emits `op.drop_table` for both. Do not remove.
 from src.db import feedback as _feedback_models  # noqa: F401
 from src.db import waitlist as _waitlist_models  # noqa: F401
-from src.db import catalog_models as _catalog_models  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

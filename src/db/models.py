@@ -7,24 +7,19 @@ from .service_name import ServiceName
 import datetime
 import uuid
 
-# Roles an Account can hold, ordered most → least privileged.
+# An account is one of two things, and they are stored differently on purpose:
 #
-#   admin   - staff. The full CRM dashboard. Never billed, and never promoted
-#             or demoted by billing.
-#   premium - a paying subscriber on the Premium plan. Held for exactly as long
-#             as Stripe reports an entitling subscription.
-#   free    - signed up, not paying. The default for every new account.
+#   STAFF     accounts.is_staff — granted out of band, never by an API path
+#   PAYING    derived per request from subscription_status, stored nowhere
+#             (config/plans_registry.plan_for_account → 'free' | 'premium')
 #
-# NOTE: distinct from AccessGroupMember.role ('admin' | 'member'), which is a
-# per-group relationship and has nothing to do with billing.
+# There used to be a single `role` column holding admin/premium/free. Two of
+# those three values were a cache of Stripe, and a cache with no invalidation
+# is a value that drifts — hence the reconciliation script that existed only to
+# drag it back. Deriving paid-ness removes the drift by removing the copy.
 #
-# Enforced by a CHECK constraint (not a PG enum) so the set can evolve with a
-# plain UPDATE to the constraint rather than an enum migration.
-ROLE_ADMIN = 'admin'
-ROLE_PREMIUM = 'premium'
-ROLE_FREE = 'free'
-ACCOUNT_ROLES = (ROLE_ADMIN, ROLE_PREMIUM, ROLE_FREE)
-DEFAULT_ACCOUNT_ROLE = ROLE_FREE
+# NOTE: SpaceMember.tier_key is a per-space relationship and never had anything
+# to do with billing either. It is untouched.
 
 # Stripe subscription statuses that mean "this account has paid and is entitled
 # to the Premium features". Deliberately excludes past_due/unpaid/incomplete:
@@ -32,21 +27,12 @@ DEFAULT_ACCOUNT_ROLE = ROLE_FREE
 ACTIVE_SUBSCRIPTION_STATUSES = ('active', 'trialing')
 
 
-def role_for_subscription(subscription_status: str | None, current_role: str) -> str:
-    """
-    The role an account should hold given what Stripe last said about it.
-
-    free <-> premium is derived from the subscription, never set by hand, so the
-    two can never drift: one function decides it, the webhook and the backfill
-    script both call it. Admins are staff and pass through untouched — billing
-    must never be able to demote them.
-
-    Cancellation is immediate rather than at period end, so a downgrade demotes
-    on the same request — entitlement never waits on a later webhook.
-    """
-    if current_role == ROLE_ADMIN:
-        return ROLE_ADMIN
-    return ROLE_PREMIUM if subscription_status in ACTIVE_SUBSCRIPTION_STATUSES else ROLE_FREE
+# role_for_subscription() lived here and is gone with the `role` column it
+# maintained. Its whole job was keeping a cached free/premium value in step
+# with subscription_status; paid-ness is now read from that status directly,
+# via config/plans_registry.plan_for_account(), so there is nothing left to
+# keep in step. Cancellation still takes effect on the same request, because a
+# derived value cannot lag.
 
 
 class Account(Base):
@@ -57,11 +43,17 @@ class Account(Base):
     reset_token = Column(String)
     stripe_customer_id = Column(String, nullable=True)
     newsletter_subscribed = Column(Boolean, default=False, nullable=False)
-    # See ACCOUNT_ROLES. Never settable by the account holder: free <-> member
-    # is derived from the subscription by role_for_subscription(), and admin is
-    # granted out of band. Not settable through PUT /accounts/me either way.
-    role = Column(String(20), nullable=False, default=DEFAULT_ACCOUNT_ROLE,
-                  server_default=DEFAULT_ACCOUNT_ROLE, index=True)
+    # Platform staff. Granted out of band by scripts/grant_staff.py —
+    # no API path sets it, so a compromised account cannot escalate itself and
+    # there is no "make admin" button to click by accident.
+    #
+    # This replaced a `role` column that also carried 'premium'/'free'. Those
+    # were a CACHE of subscription_status, which is the fact; keeping both meant
+    # keeping them in agreement, which is what role_for_subscription() and a
+    # reconciliation script existed to do. Paid-ness is now derived per request
+    # (config/plans_registry.plan_for_account) and stored nowhere.
+    is_staff = Column(Boolean, nullable=False, default=False,
+                      server_default=text('false'), index=True)
     # Subscription state, owned entirely by the Stripe webhook — nothing else
     # writes these. Entitlement is read from subscription_status, never from
     # "the customer has a payment method attached".
@@ -71,6 +63,15 @@ class Account(Base):
     stripe_subscription_id = Column(String, nullable=True, index=True)
     subscription_status = Column(String(30), nullable=True, index=True)
     subscription_current_period_end = Column(DateTime(timezone=True), nullable=True)
+    # WHEN the subscription stopped being an entitling one. Set by the webhook
+    # on the transition out of active/trialing, cleared on the way back in.
+    #
+    # THE ONLY THING STORED ABOUT A LAPSE. Everything a lapse causes is a
+    # comparison against this instant: within GRACE_DAYS the org keeps its
+    # modules and is refused writes; past it, the plan drops to free. There is
+    # no suspended flag, no scheduled job, and therefore nothing that can
+    # disagree with Stripe — see config/plans_registry.billing_state.
+    subscription_lapsed_at = Column(DateTime(timezone=True), nullable=True)
     login_otp = Column(String, nullable=True)
     login_otp_expires_at = Column(DateTime(timezone=True), nullable=True)
     # Which org this account lands in when no active-org cookie is present.
@@ -96,8 +97,9 @@ class Account(Base):
     org_memberships = relationship('OrganizationMember', back_populates='account',
                                    foreign_keys='OrganizationMember.account_id',
                                    cascade='all, delete-orphan')
-    access_groups = relationship('AccessGroup', back_populates='owner', cascade='all, delete-orphan')
-    group_memberships = relationship('AccessGroupMember', back_populates='account', cascade='all, delete-orphan')
+    # Space membership is deliberately NOT a relationship here. Spaces belong
+    # to no tenant and are queried through services/spaces.py so there is one
+    # place that decides who is in one; an ORM collection would be a second.
     tool_approvals = relationship('PendingToolApproval', back_populates='account', cascade='all, delete-orphan')
     email_events = relationship('EmailEvent', back_populates='account', cascade='all, delete-orphan')
     email_templates = relationship('EmailTemplate', back_populates='account', cascade='all, delete-orphan')
@@ -105,7 +107,6 @@ class Account(Base):
     email_campaign_ratings = relationship('EmailCampaignRating', back_populates='account', cascade='all, delete-orphan')
 
     __table_args__ = (
-        CheckConstraint("role IN ('admin','premium','free')", name='ck_accounts_role'),
     )
 
     @property
@@ -132,14 +133,14 @@ class Organization(Base):
     reason visibility depended on anything besides org_id. Migration
     e3f4a5b6c7d8 split the orgs apart and f4a5b6c7d8e9 dropped the column.
 
-    `slug` is NULL for a personal workspace: it has no public page until its
-    owner decides to create one. Immutable once set — it is the org's public
-    identity, so an auto-generated one would be a defect the owner is stuck
-    with. Postgres treats NULLs as distinct, so UNIQUE still holds.
-
-    Root (slug 'root') is now purely the PLATFORM org: staff only, and the home
-    of published catalog content. It is still an ordinary org — nothing works
-    because of its id — it simply has staff in it.
+    NO SLUG, AND NO SPECIAL ORG. Organizations used to carry an immutable
+    public `slug`, and the one whose slug was 'root' was the platform's own —
+    the home of catalog content and the org staff had to be placed in to work.
+    Both jobs are gone: staff bypass the module ceiling wherever they are, and
+    publishing became a Space. An id identifies an org in every route, so the
+    slug was a permanent public name carrying squatting and link-stability
+    consequences that nothing needed. Cheap to reintroduce; impossible to
+    withdraw once links point at it.
 
     `granted_modules` is the ceiling: which modules this org may use at all.
     Bespoke per org, no plan table. For a PERSONAL org it is the whole
@@ -152,9 +153,6 @@ class Organization(Base):
     __tablename__ = 'organizations'
 
     id = Column(Integer, primary_key=True, index=True)
-    # No index=True: the UniqueConstraint below already creates a backing index
-    # in Postgres, and declaring both makes autogenerate see permanent drift.
-    slug = Column(String(64), nullable=True)
     name = Column(String(255), nullable=False)
     owner_account_id = Column(Integer, ForeignKey('accounts.id', ondelete='SET NULL'),
                               nullable=True, index=True)
@@ -165,16 +163,20 @@ class Organization(Base):
     # it has to live now that the ceiling is a personal org's entitlement.
     ceiling_managed_by = Column(String(20), nullable=False,
                                 server_default='subscription')
-    # 'read_only' when an org_owner subscription lapses: members keep reading
-    # and exporting, writes are refused. Never deletion — losing a team's data
-    # on a failed payment is not a recoverable mistake.
-    status = Column(String(20), nullable=False, server_default='active')
+    # NO status COLUMN. There used to be one holding 'active' | 'read_only',
+    # enforced on every write and written by absolutely nothing — every org on
+    # the platform sat at 'active' including the one whose subscription had
+    # been cancelled, so the protection it appeared to provide had never once
+    # fired.
+    #
+    # Read-only is now DERIVED from the owner's accounts.subscription_lapsed_at
+    # (config/plans_registry.billing_state, resolved per request in deps.py).
+    # A stored copy could only ever be a cache of that, and a cache of a
+    # billing fact with no invalidation path is the exact shape of bug that
+    # made the ceiling wrong three times.
     created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
 
     __table_args__ = (
-        UniqueConstraint('slug', name='uq_organizations_slug'),
-        CheckConstraint("status IN ('active','read_only')",
-                        name='ck_organizations_status'),
         CheckConstraint("ceiling_managed_by IN ('subscription','grant')",
                         name='ck_org_ceiling_managed_by'),
     )
@@ -185,13 +187,8 @@ class Organization(Base):
     tiers = relationship('OrganizationTier', back_populates='org',
                          cascade='all, delete-orphan')
 
-    @property
-    def is_personal(self) -> bool:
-        """A workspace with no public page — one member, who owns it."""
-        return self.slug is None
-
     def __repr__(self):
-        return f'<Organization {self.id}: {self.slug or "(personal)"}>'
+        return f'<Organization {self.id}: {self.name}>'
 
 
 class OrganizationTier(Base):
@@ -611,15 +608,31 @@ class Course(Base):
     name — renaming the folder must not revoke access. Same rule as
     config/modules_registry.py, for the same reason.
 
-    Access is the machinery that already exists:
-      visibility='org'     -> every member of the org (tenant_predicate)
-      visibility='granted' -> only AccessGrant holders (account or group)
+    ONE HOME PER ROW
+    ----------------
+    A course lives in an ORG or in a SPACE, never both and never neither:
+
+        org_id   set -> every member of that org may open it
+        space_id set -> every member of that space may open it
+
+    Enforced by ck_courses_one_home, not by convention. The moment a row could
+    belong to both, "who can see this?" becomes a join across two membership
+    tables and stops having a single answer — which is the property that makes
+    access here auditable at all.
+
+    CONTAINER MEMBERSHIP IS THE GRANT. A space course needs no visibility rule
+    of its own: being in the space is what opens it. That is the whole point of
+    a space, and it is why this table does not need a second access mechanism
+    layered on top of the one it already has.
     """
     __tablename__ = 'courses'
 
     id = Column(Integer, primary_key=True, index=True)
+    # Exactly one of org_id / space_id is set. See ck_courses_one_home.
     org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
-                    nullable=False, index=True)
+                    nullable=True, index=True)
+    space_id = Column(Integer, ForeignKey('spaces.id', ondelete='CASCADE'),
+                      nullable=True, index=True)
     course_key = Column(String(64), nullable=False)
     title = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
@@ -637,7 +650,12 @@ class Course(Base):
                         nullable=False)
 
     __table_args__ = (
+        # Postgres treats NULLs as distinct, so each of these constrains only
+        # the rows that actually live in that kind of container.
         UniqueConstraint('org_id', 'course_key', name='uq_course_org_key'),
+        UniqueConstraint('space_id', 'course_key', name='uq_course_space_key'),
+        CheckConstraint('(org_id IS NULL) <> (space_id IS NULL)',
+                        name='ck_courses_one_home'),
         CheckConstraint("visibility IN ('org','granted','catalog')",
                         name='ck_courses_visibility'),
         CheckConstraint("required_plan IN ('free','premium')",
@@ -645,61 +663,8 @@ class Course(Base):
     )
 
     def __repr__(self):
-        return f'<Course {self.course_key} org={self.org_id}>'
-
-
-class AccessGroup(Base):
-    """
-    Named group owned by an account. The owner can add/remove members
-    and other account holders (agent owners) can grant the group access
-    to their agents.
-    """
-    __tablename__ = 'access_groups'
-    
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(255), nullable=False)
-    owner_account_id = Column(Integer, ForeignKey('accounts.id', ondelete='CASCADE'), nullable=False, index=True)
-    # Groups are intra-org. Nullable during the expand phase of the migration;
-    # tightened once every row is backfilled.
-    org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
-                    nullable=True, index=True)
-    created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now(), nullable=False)
-    
-    owner = relationship('Account', back_populates='access_groups')
-    members = relationship('AccessGroupMember', back_populates='group', cascade='all, delete-orphan')
-    # Grants TO this group live in access_grants (principal_type 'group'); see
-    # services/access.py. Removed on group delete via access.revoke_grants_for_principal.
-
-    def __repr__(self):
-        return f'<AccessGroup {self.id}: {self.name}>'
-
-
-class AccessGroupMember(Base):
-    """
-    Junction table linking accounts to access groups they are members of.
-    Only the group owner can add/remove members.
-    """
-    __tablename__ = 'access_group_members'
-    
-    id = Column(Integer, primary_key=True, index=True)
-    access_group_id = Column(Integer, ForeignKey('access_groups.id', ondelete='CASCADE'), nullable=False, index=True)
-    account_id = Column(Integer, ForeignKey('accounts.id', ondelete='CASCADE'), nullable=False, index=True)
-    # 'admin' members can co-manage the group (add/remove members, rename, manage grants);
-    # 'member' is a plain member. The group owner is tracked separately on AccessGroup and
-    # is never an access_group_members row.
-    role = Column(String(50), nullable=False, server_default='member')
-    created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
-
-    __table_args__ = (
-        UniqueConstraint('access_group_id', 'account_id', name='uq_access_group_members_group_account'),
-    )
-
-    group = relationship('AccessGroup', back_populates='members')
-    account = relationship('Account', back_populates='group_memberships')
-    
-    def __repr__(self):
-        return f'<AccessGroupMember group={self.access_group_id} account={self.account_id}>'
+        home = f'org={self.org_id}' if self.org_id else f'space={self.space_id}'
+        return f'<Course {self.course_key} {home}>'
 
 
 class VectorStore(Base):
@@ -760,10 +725,26 @@ class AccessGrant(Base):
     (AgentAccessGrant / VectorStoreAccessGrant / CredentialAccessGrant). One model
     means one resolver (services/access.py) and one audit query.
 
-    - principal_type/principal_id: 'account' (an individual) or 'group' (an access
-      group). Individuals and groups are both first-class; expansion to accounts
-      lives only in access.members_of.
-    - resource_type/resource_id: 'agent' | 'vector_store' | 'credential' + row id.
+    ONE NAMED PERSON, INSIDE ONE ORG. That is the whole of what this table can
+    express, and the narrowness is the point.
+
+    `principal_type` used to admit 'group' as well, so a grant could name an
+    access group. Groups are now spaces, and a space's audience deliberately
+    crosses org boundaries — which this table's org confinement (below, and in
+    accessible_resource_ids) may not. Rather than teach the most
+    security-sensitive filter in the codebase an exception, the cross-org arm
+    lives in its own table, space_resources, where "this can be read from
+    another org" is visible in the schema instead of hidden in a predicate.
+
+    So there are exactly two ways to reach somebody else's resource, and you
+    can tell which one you are looking at by the table name:
+
+        access_grants     a person, inside this org        (never crosses)
+        space_resources   the members of a space           (crosses, one way)
+
+    - principal_type/principal_id: 'account' + the account's id.
+    - resource_type/resource_id: 'agent' | 'vector_store' | 'credential' +
+      row id.
     - role: 'read' | 'write' | 'use'. Interpreted per resource type — vector_store
       uses read/write; agent and credential use 'use'. (For credentials 'use' means
       use server-side, never view the plaintext.)
@@ -781,7 +762,7 @@ class AccessGrant(Base):
     # is a live cross-tenant read path.
     org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
                     nullable=True, index=True)
-    principal_type = Column(String(20), nullable=False)   # 'account' | 'group'
+    principal_type = Column(String(20), nullable=False)   # 'account' — see above
     principal_id = Column(Integer, nullable=False)
     resource_type = Column(String(20), nullable=False)    # 'agent' | 'vector_store' | 'credential'
     resource_id = Column(Integer, nullable=False)
@@ -792,8 +773,12 @@ class AccessGrant(Base):
     __table_args__ = (
         UniqueConstraint('principal_type', 'principal_id', 'resource_type', 'resource_id',
                          name='uq_access_grant_principal_resource'),
-        CheckConstraint("principal_type IN ('account','group')", name='ck_access_grant_principal_type'),
-        CheckConstraint("resource_type IN ('agent','vector_store','credential')", name='ck_access_grant_resource_type'),
+        CheckConstraint("principal_type IN ('account')", name='ck_access_grant_principal_type'),
+        # 'course' was added to the DATABASE by c7d8e9f0a1b2 and never here, so
+        # the model has been claiming a narrower rule than the one in force.
+        # Harmless while nothing rebuilt the constraint from the model, which
+        # is exactly why it went unnoticed — tests/conftest now does.
+        CheckConstraint("resource_type IN ('agent','vector_store','credential','course')", name='ck_access_grant_resource_type'),
         CheckConstraint("role IN ('read','write','use')", name='ck_access_grant_role'),
         Index('ix_access_grants_resource', 'resource_type', 'resource_id'),
         Index('ix_access_grants_principal', 'principal_type', 'principal_id'),
@@ -868,7 +853,8 @@ class AccessGrantEvent(Base):
             "'staff.join',"
             "'space.create','space.archive',"
             "'space.member_add','space.member_remove',"
-            "'space.request','space.request_approve','space.request_deny')",
+            "'space.request','space.request_approve','space.request_deny',"
+            "'space.resource_add','space.resource_remove')",
             name='ck_access_grant_event_type'),
         Index('ix_access_grant_events_resource', 'resource_type', 'resource_id'),
     )
@@ -1421,24 +1407,15 @@ class EmailCampaignRating(Base):
 # ---------------------------------------------------------------------------
 # Model registration
 # ---------------------------------------------------------------------------
-# Imported for its SIDE EFFECT of attaching the catalog tables to
-# Base.metadata, not for any name it exports — hence the noqa.
-#
-# The catalog lives in its own module because it belongs to the PLATFORM
-# rather than to any tenant, and keeping that boundary visible in the file
-# layout is worth a little awkwardness. But every consumer of Base.metadata
-# needs those tables: Alembic autogenerate would otherwise propose dropping
-# them, and tests/conftest.py's create_all would not build them at all
-# (which surfaces as "relation catalog_items does not exist" from any query
-# that reaches the catalog arm).
+# Imported for its SIDE EFFECT of attaching these tables to Base.metadata,
+# not for any name it exports — hence the noqa. Alembic autogenerate would
+# otherwise propose dropping them, and tests/conftest.py's create_all would
+# not build them at all.
 #
 # Registering here rather than in each consumer means there is ONE place to
 # get this right instead of one per entry point.
-from . import catalog_models  # noqa: F401,E402
-
 # Spaces are the platform's SECOND container — shared content whose members
-# come from many orgs — and they are separate here for the same reason the
-# catalog is: they belong to no tenant, and the file layout should say so.
-# Same registration, same reasons: Alembic autogenerate and conftest's
-# create_all both read Base.metadata.
+# come from many orgs. They live in their own module because they belong to no
+# tenant, and the file layout should say so: everything in THIS file is either
+# tenant data or org-confined, and everything in that one deliberately is not.
 from . import space_models  # noqa: F401,E402

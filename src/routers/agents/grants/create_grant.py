@@ -1,14 +1,15 @@
 """
-Grant an access group permission to use an agent (agent owner only).
+Share an agent with one named person (agent owner only).
 
-Writes a unified AccessGrant (resource_type='agent', role='use').
+Writes a unified AccessGrant (resource_type='agent', role='use'). Sharing with
+a group of people is putting the agent in a space instead — see spaces/crud.py.
 """
 from fastapi import APIRouter, HTTPException, status, Request
 from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
 from src.services.org_scope import AGENT, VECTOR_STORE, resource_predicate, scoped_resources
 from src.db.models import Agent, AccessGrant
 from src.services import access
-from src.services.access_admin import resolve_principal, upsert_grant, record_access_event
+from src.services.access_admin import resolve_grantee, upsert_grant, record_access_event
 from .models import CreateGrantRequest, AgentAccessGrantResponse
 from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
@@ -25,7 +26,7 @@ async def create_grant(
     org: org_dependency,
     request: Request,
 ):
-    """Grant an access group permission to use this agent. Agent owner + group manager."""
+    """Let one other person in this org use this agent. Agent owner only."""
     try:
         account_id = account_id_from_claims(jwt)
 
@@ -36,11 +37,9 @@ async def create_grant(
         if not agent:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
-        # Share with a group OR an individual; group targets enforce is_group_manager.
-        principal_type, principal_id, label = resolve_principal(
+        principal_type, principal_id, label = resolve_grantee(
             db,
             caller_account_id=account_id,
-            access_group_id=body.accessGroupId,
             grantee_email=body.granteeEmail,
         )
 
@@ -51,7 +50,7 @@ async def create_grant(
             AccessGrant.resource_id == agent_id,
         ).first()
         if existing:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Agent is already shared with this principal")
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Agent is already shared with this person")
 
         grant = upsert_grant(
             db,
@@ -78,10 +77,8 @@ async def create_grant(
         return AgentAccessGrantResponse(
             id=grant.id,
             agent_id=agent_id,
-            access_group_id=principal_id if principal_type == access.GROUP else None,
-            grantee_account_id=principal_id if principal_type == access.ACCOUNT else None,
+            grantee_account_id=principal_id,
             label=label,
-            target_type="group" if principal_type == access.GROUP else "individual",
             created_at=grant.created_at,
         )
     except HTTPException:

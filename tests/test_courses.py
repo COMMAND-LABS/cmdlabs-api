@@ -15,7 +15,7 @@ calls instead, and these tests pin its behaviour.
 import pytest
 from sqlalchemy.orm import Session
 
-from src.db.models import AccessGroup, AccessGroupMember, Course, OrganizationTier
+from src.db.models import Course, OrganizationTier
 from tests.org_isolation import client_for, make_tenant
 
 COURSES = "/api/courses"
@@ -104,20 +104,20 @@ async def test_a_granted_course_is_hidden_until_granted(
         assert (await c.get(f"{COURSES}/")).json() == []
 
 
-async def test_a_group_grant_opens_it_for_that_department(
+async def test_a_grant_opens_it_for_the_person_named(
     db: Session, _override_db, acme, student
 ):
+    """One grant, one person.
+
+    This used to be "a group grant opens it for that department". Groups are
+    spaces now, and reaching a SET of people means putting the course in a
+    space (courses.space_id) rather than naming a set from a grant row.
+    """
     course = _course(db, acme, "advanced", visibility="granted")
-    group = AccessGroup(org_id=acme.org_id, name="Sales",
-                        owner_account_id=acme.account_id)
-    db.add(group); db.flush()
-    db.add(AccessGroupMember(access_group_id=group.id,
-                             account_id=student.account_id, role="member"))
-    db.flush()
 
     async with client_for(acme) as c:
         granted = await c.post(f"{COURSES}/{course.id}/access-grants",
-                               json={"accessGroupId": group.id})
+                               json={"granteeEmail": student.account.email})
     assert granted.status_code == 201, granted.text
 
     async with client_for(student) as c:

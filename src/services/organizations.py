@@ -15,11 +15,10 @@ contacts. That flag existed for exactly one row and was the only reason row
 visibility depended on anything besides org_id. Migrations e3f4a5b6c7d8 and
 f4a5b6c7d8e9 split the orgs apart and removed it.
 
-Root is now purely the PLATFORM org: staff only, and the home of published
-catalog content. That separation is also what makes publishing honest — root
-used to be the platform's content org and the public lobby at once, so
-"belongs to the platform org" could not tell a staff-authored lesson from a
-stranger's private agent.
+There is no longer a special org. Root used to be the platform's own — where
+catalog content lived and where staff had to be placed to work at all. Staff
+now bypass the module ceiling wherever they are, and publishing became a Space,
+so the platform's org is an ordinary tenant like any customer's.
 
 WHY THE CEILING, NOT THE TIER
 -----------------------------
@@ -44,17 +43,11 @@ from src.services import audit
 
 logger = logging.getLogger(__name__)
 
-# The platform's own org. Staff only.
-PLATFORM_SLUG = "root"
-ROOT_SLUG = PLATFORM_SLUG  # back-compat for existing importers
-
 TIER_OWNER = "owner"
 TIER_MEMBER = "member"
 
-# Retained because the root org still carries these and the migration seeded
-# them; a personal workspace uses `owner` instead.
-TIER_FREE = "free"
-TIER_PREMIUM = "premium"
+# The tier staff hold in the platform org. TIER_FREE / TIER_PREMIUM lived here
+# too and are gone: nothing read them, and a plan is not a tier.
 TIER_ORG_OWNER = "org_owner"
 
 # Entitlement provenance. 'subscription' is owned by the Stripe webhook and
@@ -77,17 +70,6 @@ FREE_CEILING = plans.modules_for_plan(plans.PLAN_FREE)
 PREMIUM_CEILING = plans.modules_for_plan(plans.PLAN_PREMIUM)
 
 
-def get_org_by_slug(db: Session, slug: str) -> Organization | None:
-    return db.query(Organization).filter(Organization.slug == slug).first()
-
-
-def get_platform_org(db: Session) -> Organization | None:
-    return get_org_by_slug(db, PLATFORM_SLUG)
-
-
-get_root_org = get_platform_org  # back-compat
-
-
 def ceiling_for_account(account: Account) -> list:
     """The modules a new personal workspace starts with — i.e. their plan.
 
@@ -105,14 +87,68 @@ def ceiling_for_account(account: Account) -> list:
     return plans.modules_for_plan(plans.plan_for_account(account))
 
 
-def personal_org_for(db: Session, account_id: int) -> Organization | None:
-    """The workspace this account owns, if it has one."""
+def freeze_ceiling(db: Session, org: Organization) -> None:
+    """Pin an org's ceiling at what it currently resolves to. Caller commits.
+
+    Called when a workspace becomes a TEAM — the moment somebody who is not the
+    owner is let in. Until then the ceiling is derived from the owner's plan and
+    follows their subscription; afterwards it must not, because the people it
+    would move are no longer the person paying. A colleague should not lose
+    Contacts because the founder's card expired.
+
+    So the derived value is written down and ownership of the column passes to
+    'grant', which no automated path ever rewrites. Idempotent: an org that is
+    already granted is left exactly as it is.
+    """
+    if org.ceiling_managed_by != GRANTED_BY_SUBSCRIPTION:
+        return
+
+    from src.services import modules
+
+    frozen = modules.ceiling_for(db, org.id)
+    org.granted_modules = frozen
+    org.ceiling_managed_by = GRANTED_BY_GRANT
+    audit.record_org_change(
+        db, event_type=audit.ORG_CEILING_CHANGE, org_id=org.id,
+        detail=f"frozen on becoming a team: {','.join(frozen) or '(none)'}",
+    )
+    logger.info("[ORG] %s ceiling frozen at %s — now a team", org.id, frozen)
+
+
+def is_solo(db: Session, org_id: int) -> bool:
+    """True when this org has exactly one member.
+
+    `Organization.is_personal` used to answer this by testing `slug IS NULL`,
+    which actually meant "has not been named yet" — a different question that
+    happened to give the same answer while naming was required before
+    inviting. It stopped being true the moment staff could join an unnamed org.
+
+    Counted rather than stored. It is one indexed count, it cannot drift, and
+    the alternative is a column that has to be maintained on every membership
+    change for the sake of a label.
+    """
+    return (db.query(OrganizationMember)
+              .filter(OrganizationMember.org_id == org_id).count()) == 1
+
+
+def own_org_for(db: Session, account_id: int) -> Organization | None:
+    """The workspace this account owns, if it has one.
+
+    Was `personal_org_for`, and keyed on `slug IS NULL` — which meant "has not
+    been named yet" and was read as "is a workspace of one". Those came apart
+    the moment anything could add a member without naming the org. Ownership is
+    the honest key: an account owns the org created for it at signup, whether
+    or not anybody else has since joined.
+    """
     return (
         db.query(Organization)
-        .filter(Organization.owner_account_id == account_id,
-                Organization.slug.is_(None))
+        .filter(Organization.owner_account_id == account_id)
         .first()
     )
+
+
+# Old name, kept briefly for readers. Prefer own_org_for.
+personal_org_for = own_org_for
 
 
 def ensure_membership(db: Session, account: Account,
@@ -192,18 +228,17 @@ def ensure_membership(db: Session, account: Account,
 def _create_personal_org(db: Session, account: Account) -> Organization:
     """A workspace of one, owned by its only member.
 
-    No slug. A personal workspace has no public page, and inventing
-    `user-273` would hand the owner a permanent identity they never chose —
-    slugs are immutable precisely because they are public. They pick one if and
-    when they turn this into a team.
+    No public identity to invent. Orgs used to carry an immutable `slug`, and
+    this deliberately left it NULL rather than generating `user-273` — a
+    permanent public name nobody chose. The column is gone, so the property is
+    now structural: an org is its id, and its display name is a label the owner
+    can change.
     """
     name = (account.email or "").split("@")[0] or "Workspace"
     org = Organization(
-        slug=None,
         name=name,
         owner_account_id=account.id,
         granted_modules=ceiling_for_account(account),
-        status="active",
         # Billing owns this org's ceiling until staff overrides it, at which
         # point admin.set_ceiling flips this to 'grant' and the webhook stops
         # touching it. That is the comp mechanism, one level up from
@@ -231,48 +266,5 @@ def _create_personal_org(db: Session, account: Account) -> Organization:
     return org
 
 
-def sync_ceiling_to_subscription(db: Session, account: Account) -> None:
-    """Move a personal workspace's ceiling to match what Stripe last said.
-
-    This is what makes subscribing DO something now that the ceiling is a
-    personal org's entitlement. Without it a new subscriber would get
-    accounts.role='premium' and see no new modules at all.
-
-    Refuses to touch an org whose ceiling_managed_by is 'grant'. That is the
-    comp: staff raise a client's ceiling by hand, the column flips, and no
-    webhook can ever take it back. Same asymmetry as granted_by, and the reason
-    a comped client does not silently lose access the first time an unrelated
-    billing event fires.
-
-    Caller commits.
-    """
-    org = personal_org_for(db, account.id)
-    if org is None:
-        return
-    if org.ceiling_managed_by != GRANTED_BY_SUBSCRIPTION:
-        logger.info(
-            "[BILLING] org %s ceiling is staff-granted — leaving it alone", org.id)
-        return
-
-    target = ceiling_for_account(account)
-    if list(org.granted_modules or []) == target:
-        return
-
-    org.granted_modules = target
-    audit.record_org_change(
-        db, event_type=audit.ORG_CEILING_CHANGE, org_id=org.id,
-        detail=",".join(target) or "(none)",
-        actor_account_id=account.id,
-    )
-    logger.info("[BILLING] org %s ceiling -> %s (subscription %s)",
-                org.id, target, account.subscription_status)
 
 
-def default_tier_for(account: Account) -> tuple[str, str]:
-    """Retained for callers that still ask. A personal workspace's member is
-    its owner, so the tier is inert there — the ceiling is the entitlement."""
-    if account.role == "admin":
-        return TIER_ORG_OWNER, GRANTED_BY_GRANT
-    if account.subscription_status in ACTIVE_SUBSCRIPTION_STATUSES:
-        return TIER_PREMIUM, GRANTED_BY_SUBSCRIPTION
-    return TIER_FREE, GRANTED_BY_GRANT

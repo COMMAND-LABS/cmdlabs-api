@@ -38,8 +38,8 @@ async def _resolve(db, account_id, cookies=None, auth_type="jwt"):
 @pytest.fixture()
 def other_org(db) -> Organization:
     org = Organization(
-        slug="acme", name="Acme",
-        granted_modules=[], status="active",
+        name="Acme",
+        granted_modules=[],
     )
     db.add(org)
     db.flush()
@@ -53,7 +53,6 @@ def other_org(db) -> Organization:
 async def test_falls_back_to_default_org_without_cookie(db, test_account, test_org):
     ctx = await _resolve(db, test_account.id)
     assert ctx.org_id == test_org.id
-    assert ctx.org_slug == "root"
     assert ctx.tier_key == "free"
 
 
@@ -69,8 +68,7 @@ async def test_cookie_selects_a_joined_org(db, test_account, test_org, other_org
     assert ctx.tier_key == "premium"
     assert ctx.is_owner is True
     # Org-level facts travel with the org, not the account.
-    assert ctx.org_slug == other_org.slug
-    assert ctx.is_personal is False   # it has a slug, so it is a real org
+    assert ctx.org_id == other_org.id
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +151,7 @@ async def test_super_admin_does_not_bypass_org_membership(db, test_org, other_or
     Reading another org's data requires joining it, which leaves a membership
     row that org can see. An invisible bypass would make the audit log a lie.
     """
-    staff = Account(id=500, email="staff@cmdlabs.io", role="admin",
+    staff = Account(id=500, email="staff@cmdlabs.io", is_staff=True,
                     default_org_id=test_org.id)
     db.add(staff)
     db.flush()

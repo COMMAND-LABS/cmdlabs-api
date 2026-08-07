@@ -9,17 +9,21 @@ each sitting directly below a singular version that got the column right.
 Nothing caught them because neither bulk endpoint had a test at all, and the
 singular ones passing says nothing about the loop underneath.
 
-The group case is the same defect one layer over: a NULL org_id on an
-AccessGroup is accepted by the database and then rejected by
-access.assert_same_org, which treats an unclassified org as "cannot be used to
-cross". So every newly created group was silently unshareable while every group
-created before the migration kept working — the worst shape a bug can have.
+The SPACE case is the same defect one layer over. A space created through the
+API has to end up with an owner_org_id, and a share has to end up reachable by
+that space's members. Each half succeeds on its own, so only running the
+sequence shows a break.
+
+(This was written about access groups, whose org_id was nullable and whose NULL
+was then read as "cannot be used to cross" — every newly created group was
+silently unshareable while older ones kept working, the worst shape a bug can
+have. Groups are spaces now; the sequence test survived the rename because what
+it protects is the sequence, not the table.)
 """
 from sqlalchemy.orm import Session
 
 from src.db.models import (
     AccessGrant,
-    AccessGroup,
     Account,
     Agent,
     Company,
@@ -28,6 +32,7 @@ from src.db.models import (
     ContactList,
     ContactListMember,
 )
+from src.db.space_models import Space, SpaceResource
 from tests.org_isolation import client_for, make_tenant
 
 
@@ -79,13 +84,13 @@ async def test_bulk_add_company_contacts_sets_org_id(db: Session, _override_db):
     assert rows and all(r.org_id == tenant.org_id for r in rows)
 
 
-async def test_a_new_group_can_actually_be_granted(db: Session, _override_db):
-    """Create a group through the API, then share an agent with it.
+async def test_a_new_space_can_actually_be_shared_into(db: Session, _override_db):
+    """Create a space through the API, then share an agent into it.
 
-    The two halves have to run together: creating the group succeeded on its
-    own, and granting failed on its own, so only the sequence shows the bug.
+    The two halves have to run together: creating the space succeeds on its
+    own, and sharing fails on its own, so only the sequence shows the bug.
     """
-    tenant = make_tenant(db, slug="grp-org", account_id=9403,
+    tenant = make_tenant(db, slug="space-org", account_id=9403,
                          data_scope="shared")
     agent = Agent(org_id=tenant.org_id, account_id=tenant.account_id,
                   name="Helper", config={})
@@ -93,39 +98,62 @@ async def test_a_new_group_can_actually_be_granted(db: Session, _override_db):
     db.flush()
 
     async with client_for(tenant) as c:
-        created = await c.post("/api/access-groups/", json={"name": "Sales"})
+        created = await c.post("/api/spaces/", json={"name": "Sales"})
         assert created.status_code == 201, created.text
-        group_id = created.json()["id"]
+        space_id = created.json()["id"]
 
-        granted = await c.post(f"/api/agents/{agent.id}/access-grants",
-                               json={"accessGroupId": group_id})
+        shared = await c.post(f"/api/spaces/{space_id}/resources",
+                              json={"resource_type": "agent",
+                                    "resource_id": agent.id})
 
-    assert granted.status_code == 201, granted.text
+    assert shared.status_code == 201, shared.text
 
-    group = db.query(AccessGroup).filter(AccessGroup.id == group_id).one()
-    assert group.org_id == tenant.org_id, "a group with no org cannot be granted"
-    grant = (db.query(AccessGrant)
-               .filter(AccessGrant.resource_id == agent.id).one())
-    assert grant.org_id == tenant.org_id
+    space = db.query(Space).filter(Space.id == space_id).one()
+    assert space.owner_org_id == tenant.org_id, (
+        "a space with no owning org has nobody accountable for it")
+    row = (db.query(SpaceResource)
+             .filter(SpaceResource.resource_id == agent.id).one())
+    assert row.space_id == space_id
 
 
-async def test_a_group_cannot_absorb_an_outsider(db: Session, _override_db):
-    """Group membership is how resources reach people, so adding someone from
-    another org here would route around the tenant boundary — the grant check
-    validates the GROUP's org, never each member's."""
-    tenant = make_tenant(db, slug="grp-closed", account_id=9404,
+async def test_a_space_can_absorb_an_outsider_and_still_leaks_nothing(
+    db: Session, _override_db
+):
+    """The inverse of the rule this test used to assert, and deliberately so.
+
+    An access group REFUSED a member from another org, because group membership
+    was routed through the same-org grant check and an outsider in a group
+    would have been a way around the tenant boundary.
+
+    A space accepts one — that is the entire point of the second container. It
+    is safe for a different reason: membership grants what was PUT IN the
+    space and nothing else, so the outsider still cannot see the owner's org.
+    """
+    tenant = make_tenant(db, slug="space-closed", account_id=9404,
                          data_scope="shared")
-    other = make_tenant(db, slug="grp-outsider", account_id=9405,
+    other = make_tenant(db, slug="space-outsider", account_id=9405,
                         data_scope="shared")
 
     outsider_email = db.query(Account.email).filter(
         Account.id == other.account_id).scalar()
 
-    async with client_for(tenant) as c:
-        created = await c.post("/api/access-groups/", json={"name": "Sales"})
-        group_id = created.json()["id"]
-        resp = await c.post(f"/api/access-groups/{group_id}/members",
-                            json={"email": outsider_email})
+    private = Agent(org_id=tenant.org_id, account_id=tenant.account_id,
+                    name="Not shared", config={})
+    db.add(private)
+    db.flush()
 
-    assert resp.status_code == 404, (
-        "an account from another org must not be addable to this org's group")
+    async with client_for(tenant) as c:
+        created = await c.post("/api/spaces/", json={"name": "Sales"})
+        space_id = created.json()["id"]
+        invited = await c.post(f"/api/spaces/{space_id}/members",
+                               json={"email": outsider_email})
+
+    assert invited.status_code in (200, 201), invited.text
+
+    async with client_for(other) as c:
+        agents = await c.get("/api/agents/")
+
+    assert agents.status_code == 200, agents.text
+    ids = [a["id"] for a in agents.json()]
+    assert private.id not in ids, (
+        "being in somebody's space must not surface their other agents")

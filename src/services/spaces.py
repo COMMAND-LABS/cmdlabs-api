@@ -27,7 +27,6 @@ sometimes meant "the tenant" and sometimes meant "one of several containers",
 which is precisely the ambiguity the single tenancy rule exists to avoid.
 """
 import logging
-import re
 
 from sqlalchemy.orm import Session
 
@@ -46,14 +45,6 @@ from src.services import audit
 
 logger = logging.getLogger(__name__)
 
-# Same shape as an org slug: lowercase, starts alphanumeric, 2-63 chars.
-SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
-
-# Names that would impersonate the platform or collide with a route.
-RESERVED_SLUGS = {
-    "new", "browse", "admin", "cmdlabs", "cmd-labs", "support", "help",
-    "billing", "security", "official", "staff", "system", "api", "settings",
-}
 
 
 def space_ids_for(db: Session, account_id: int) -> set:
@@ -106,23 +97,8 @@ def visible_space(db: Session, space_id: int, account_id: int) -> Space | None:
     return space if is_member(db, space_id, account_id) else None
 
 
-def slug_problem(db: Session, slug: str) -> tuple | None:
-    """Why `slug` cannot be used, as (status_code, message), or None.
 
-    One function for validation everywhere, so a name the form accepts is
-    never one the write path refuses.
-    """
-    if not SLUG_PATTERN.match(slug):
-        return (422, "Use 2-63 characters: lowercase letters, numbers and "
-                     "hyphens, starting with a letter or number.")
-    if slug in RESERVED_SLUGS:
-        return (409, "That name is reserved.")
-    if db.query(Space.id).filter(Space.slug == slug).first():
-        return (409, "That name is taken.")
-    return None
-
-
-def create_space(db: Session, *, slug: str, name: str, description: str | None,
+def create_space(db: Session, *, name: str, description: str | None,
                  owner_account_id: int, owner_org_id: int,
                  discoverable: bool, join_policy: str) -> Space:
     """A space, with its creator as its first member and owner.
@@ -136,7 +112,7 @@ def create_space(db: Session, *, slug: str, name: str, description: str | None,
     discovering the tier list is empty. Caller commits.
     """
     space = Space(
-        slug=slug, name=name, description=description,
+        name=name, description=description,
         owner_account_id=owner_account_id, owner_org_id=owner_org_id,
         discoverable=discoverable, join_policy=join_policy,
         status=SPACE_ACTIVE,

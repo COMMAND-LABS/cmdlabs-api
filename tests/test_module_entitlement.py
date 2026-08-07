@@ -20,6 +20,8 @@ from src.db.models import (
     OrganizationMember,
     OrganizationTier,
 )
+from src.config.modules_registry import MODULE_KEYS
+from src.deps import OrgContext
 from src.main import app
 from src.services import audit, modules
 from tests.conftest import ROOT_ORG_ID, make_token
@@ -31,7 +33,7 @@ TIERS = "/api/organizations/tiers"
 
 @pytest.fixture()
 def staff(db: Session, test_org: Organization):
-    a = Account(id=8800, email="ceil@cmdlabs.io", role="admin",
+    a = Account(id=8800, email="ceil@cmdlabs.io", is_staff=True,
                 default_org_id=ROOT_ORG_ID)
     db.add(a); db.flush()
     db.add(OrganizationMember(org_id=ROOT_ORG_ID, account_id=a.id,
@@ -70,7 +72,7 @@ def acme(db: Session):
 
 
 def _member_of(db, tenant, account_id, tier_key):
-    m = make_tenant(db, slug=tenant.org.slug, account_id=account_id,
+    m = make_tenant(db, slug=tenant.org.name.lower().replace(" ", "-"), account_id=account_id,
                     data_scope="shared", tier_key=tier_key, is_owner=False)
     return m
 
@@ -273,3 +275,63 @@ async def test_staff_still_cannot_read_data_without_joining(
     resp = await staff_client.get("/api/contacts/")
     assert resp.status_code == 200
     assert row.id not in {c["id"] for c in resp.json()["contacts"]}
+
+
+def test_staff_are_never_the_last_to_open_a_new_module(db: Session, test_org):
+    """A ceiling can fall behind the registry; staff must not fall with it.
+
+    Every new module has to be added to an org's stored ceiling, and no billing
+    event or backfill touches a staff-set one — which is how `courses` and
+    `spaces` both shipped invisible to staff. Fixed by removing the cap rather
+    than by keeping a column in step with the registry.
+    """
+    narrow = Organization(name="Stale",
+                          granted_modules=["home"])
+    db.add(narrow)
+    db.flush()
+
+    staff = OrgContext(account_id=1, org_id=narrow.id, tier_key="owner", is_owner=True, is_super_admin=True)
+    assert modules.effective_modules(db, staff) == list(MODULE_KEYS)
+
+
+def test_a_tenant_ceiling_is_still_exactly_what_was_granted(db: Session):
+    """The platform rule must not leak into anybody else's org.
+
+    If this ever equals the full registry, the special case above has stopped
+    being special and every tenant has silently been given everything.
+    """
+    tenant = make_tenant(db, slug="ceiling-tenant", account_id=8890,
+                         tier_key="owner", is_owner=True)
+    org = db.query(Organization).filter(Organization.id == tenant.org_id).one()
+    org.granted_modules = ["home", "contacts"]
+    db.flush()
+
+    assert modules.ceiling_for(db, tenant.org_id) == ["home", "contacts"]
+    assert len(modules.ceiling_for(db, tenant.org_id)) < len(MODULE_KEYS)
+
+
+def test_a_non_staff_member_of_the_platform_org_is_still_capped_by_their_tier(
+    db: Session, test_org,
+):
+    """The safety argument for the rule above, asserted rather than assumed.
+
+    Root still holds at least one account from when it was the public lobby.
+    Widening its ceiling must not widen them: they are not an owner, so their
+    modules are ceiling ∩ tier, and the tier is what holds.
+    """
+    stray = make_tenant(db, slug="root", account_id=8891, tier_key="free",
+                        is_owner=False)
+    tier = (db.query(OrganizationTier)
+              .filter(OrganizationTier.org_id == test_org.id,
+                      OrganizationTier.tier_key == "free").first())
+    if tier is None:
+        tier = OrganizationTier(org_id=test_org.id, tier_key="free",
+                                label="Free", modules=["home", "settings"])
+        db.add(tier)
+    tier.modules = ["home", "settings"]
+    db.flush()
+
+    ctx = OrgContext(account_id=stray.account_id, org_id=test_org.id,
+                     tier_key="free", is_owner=False,
+                     is_super_admin=False)
+    assert modules.effective_modules(db, ctx) == ["home", "settings"]

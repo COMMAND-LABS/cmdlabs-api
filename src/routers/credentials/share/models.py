@@ -1,36 +1,28 @@
 """
 Pydantic request/response models for credential access grants.
 """
-from typing import Optional
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict
 
 
 class CreateCredentialGrantRequest(BaseModel):
-    """
-    Share a credential with EITHER an access group OR an individual (by email).
-    Exactly one of accessGroupId / granteeEmail must be provided.
-    """
-    accessGroupId: Optional[int] = None
-    granteeEmail: Optional[str] = None
+    """Share a credential with ONE named person, by email.
 
-    @model_validator(mode="after")
-    def _exactly_one_target(self):
-        if (self.accessGroupId is None) == (self.granteeEmail is None):
-            raise ValueError("Provide exactly one of accessGroupId or granteeEmail")
-        return self
+    A credential can be shared with a person and NEVER with a space. It is an
+    API key with a bill attached: the org that owns it is the one being
+    charged, and a space's audience crosses orgs by design. Enforced by
+    space_resources' resource_type CHECK, which admits agents and knowledge
+    bases only.
+    """
+    granteeEmail: str
 
 
 class CredentialGrantResponse(BaseModel):
     id: int
     credential_id: int
-    # The target: exactly one of these is set.
-    access_group_id: Optional[int] = None
-    grantee_account_id: Optional[int] = None
-    # Human-readable label for display: group name, or grantee email.
+    grantee_account_id: int
+    # Human-readable label for display: the grantee's email.
     label: str
-    # 'group' | 'individual'
-    target_type: str
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

@@ -1,5 +1,9 @@
 """
-Share a course with a group or an individual inside the organization.
+Share a course with one named person inside the organization.
+
+Sharing a course with a SET of people is putting the course in a space
+(courses.space_id — the course moves home, because a course is a pure
+enablement and carries no credentials or quotas of its own).
 
 Deliberately thin. Every rule that matters already lives in
 services/access_admin.upsert_grant — same-org validation, the audit event, the
@@ -8,14 +12,14 @@ principal and gets out of the way. A second grant-writing path is how the
 same-org check ends up enforced in one place and not the other.
 
 Only reaches courses whose visibility is 'granted'. Granting an org-wide course
-to a group would be a row that changes nothing, and a row that looks like
-access without being it is worse than no row.
+to somebody who is already in the org would be a row that changes nothing, and
+a row that looks like access without being it is worse than no row.
 """
 import logging
-from typing import List, Optional
+from typing import List
 
 from fastapi import APIRouter, HTTPException, Request, status
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel
 
 from src.db.models import AccessGrant, Course
 from src.deps import db_dependency, org_dependency
@@ -24,7 +28,7 @@ from src.services import access
 from src.services.access_admin import (
     grant_label,
     record_access_event,
-    resolve_principal,
+    resolve_grantee,
     upsert_grant,
 )
 from src.services.org_scope import tenant_predicate
@@ -36,22 +40,14 @@ router = APIRouter()
 
 
 class CreateCourseGrantRequest(BaseModel):
-    """Share with a group OR an individual. Exactly one."""
-    accessGroupId: Optional[int] = None
-    granteeEmail: Optional[str] = None
-
-    @model_validator(mode="after")
-    def _exactly_one(self):
-        if (self.accessGroupId is None) == (self.granteeEmail is None):
-            raise ValueError("Provide exactly one of accessGroupId or granteeEmail")
-        return self
+    """Share with one named person, by email."""
+    granteeEmail: str
 
 
 class CourseGrantResponse(BaseModel):
     id: int
     course_id: int
     label: str
-    target_type: str          # 'group' | 'individual'
 
 
 def _owned_course(db, org, course_id: int) -> Course:
@@ -77,11 +73,8 @@ async def list_course_grants(course_id: int, db: db_dependency,
                             AccessGrant.org_id == org.org_id)
                     .all())
         return [
-            CourseGrantResponse(
-                id=g.id, course_id=course.id, label=grant_label(db, g),
-                target_type=("group" if g.principal_type == access.GROUP
-                             else "individual"),
-            )
+            CourseGrantResponse(id=g.id, course_id=course.id,
+                                label=grant_label(db, g))
             for g in grants
         ]
     except HTTPException:
@@ -107,10 +100,9 @@ async def create_course_grant(course_id: int, body: CreateCourseGrantRequest,
                        "narrow it.",
             )
 
-        principal_type, principal_id, _label = resolve_principal(
+        principal_type, principal_id, _label = resolve_grantee(
             db,
             caller_account_id=org.account_id,
-            access_group_id=body.accessGroupId,
             grantee_email=body.granteeEmail,
         )
 
@@ -135,11 +127,8 @@ async def create_course_grant(course_id: int, body: CreateCourseGrantRequest,
         )
         db.commit()
         db.refresh(grant)
-        return CourseGrantResponse(
-            id=grant.id, course_id=course.id, label=grant_label(db, grant),
-            target_type=("group" if principal_type == access.GROUP
-                         else "individual"),
-        )
+        return CourseGrantResponse(id=grant.id, course_id=course.id,
+                                   label=grant_label(db, grant))
     except HTTPException:
         raise
     except Exception as e:

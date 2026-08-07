@@ -1,5 +1,6 @@
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Annotated
 from sqlalchemy.orm import Session
 from fastapi import Depends, HTTPException, status, Request
@@ -201,16 +202,20 @@ class OrgContext:
     row anyone in that org can see. An invisible read bypass would make the
     audit log meaningless and would give every query two behaviors.
 
-    `org_slug` is None for a personal workspace, which has no public page until
-    its owner creates one.
     """
     account_id: int
     org_id: int
-    org_slug: str | None
     tier_key: str
     is_owner: bool
     is_super_admin: bool
-    org_status: str          # 'active' | 'read_only'
+    # True during the GRACE window after the owner's subscription lapsed:
+    # everything still opens, nothing may be changed. Derived per request from
+    # the owner's accounts.subscription_lapsed_at, never stored — see
+    # config/plans_registry and services/modules.org_entitlement.
+    read_only: bool = False
+    # When read-only becomes a downgrade to free. Passed to the UI so the
+    # banner can say WHEN rather than just "soon". None unless read_only.
+    grace_ends_at: datetime | None = None
     # The self-serve plan this ACCOUNT is on, per Stripe — 'free' | 'premium'.
     # A third axis, and the narrowest: it gates the platform course catalog and
     # nothing else. Module access still comes from ceiling ∩ tier, and row
@@ -219,14 +224,9 @@ class OrgContext:
     plan: str = plans.PLAN_FREE
 
     @property
-    def is_personal(self) -> bool:
-        """A workspace with one member, who owns it."""
-        return self.org_slug is None
-
-    @property
     def is_read_only(self) -> bool:
-        """True when the org's subscription lapsed: reads and exports only."""
-        return self.org_status == "read_only"
+        """Kept as the name every call site already reads."""
+        return self.read_only
 
 
 async def get_org_context(
@@ -288,14 +288,21 @@ async def get_org_context(
         )
 
     member, org = row
+    # One query, and it decides BOTH what opens and whether it may be written.
+    # Resolved here rather than at each call site so a request cannot see a
+    # ceiling computed at one instant and a writability computed at another.
+    from src.services import modules as modules_service
+
+    entitlement = modules_service.org_entitlement(db, org.id)
+
     return OrgContext(
         account_id=account_id,
         org_id=org.id,
-        org_slug=org.slug,
         tier_key=member.tier_key,
         is_owner=member.is_owner,
-        is_super_admin=(account.role == "admin"),
-        org_status=org.status,
+        is_super_admin=account.is_staff,
+        read_only=entitlement.read_only,
+        grace_ends_at=entitlement.grace_ends_at,
         plan=plans.plan_for_account(account),
     )
 
@@ -341,24 +348,44 @@ def require_module(module_key: str):
                 detail="Not found",
             )
 
-        # An org whose owner's subscription lapsed keeps reading and exporting
-        # but cannot write. Deleting or freezing their data outright is not a
-        # recoverable mistake; refusing writes is.
-        if ctx.is_read_only and request.method not in ("GET", "HEAD", "OPTIONS"):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="This organization is read-only. Reactivate the "
-                       "subscription to make changes.",
-            )
+        _refuse_writes_while_read_only(ctx, request)
 
     return _check
+
+
+def _refuse_writes_while_read_only(ctx: "OrgContext", request: Request) -> None:
+    """During the grace window after a lapse: read everything, change nothing.
+
+    The middle ground between "still fully paid" and "dropped to free". Nothing
+    is deleted and nothing disappears from the screen — losing a team's data,
+    or even the sight of it, over a failed card is not a recoverable mistake.
+    Refusing writes is.
+
+    COVERAGE IS THE MODULE REGISTRY'S, deliberately and imperfectly. This runs
+    inside require_module, so the routes it guards are exactly the module-gated
+    ones. Everything in ALWAYS_ALLOWED_PREFIXES is exempt, and the important
+    half of that is right: /api/billing MUST stay writable or a read-only org
+    could not pay its way out, and /api/auth must keep working. The half that
+    is merely tolerable is that /api/organizations writes — renaming the org,
+    inviting a member — also slip through. They are org configuration rather
+    than customer data, so nothing is lost or corrupted; it is simply looser
+    than the banner implies. Fixing it means guarding those routes by hand,
+    which is a decision to take on purpose rather than by widening this.
+    """
+    if ctx.is_read_only and request.method not in ("GET", "HEAD", "OPTIONS"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This workspace is read-only while the subscription is "
+                   "lapsed. Your data is all still here — update the payment "
+                   "method to make changes again.",
+        )
 
 
 async def require_super_admin(
     db: Session = Depends(get_db),
     auth: dict = Depends(get_current_user_or_api_key),
 ) -> Account:
-    """Platform staff only. Granted out of band via scripts/sync_account_roles.py.
+    """Platform staff only. Granted out of band via scripts/grant_staff.py.
 
     Deliberately NOT built on OrgContext: administering the platform is not an
     action inside any one org, so requiring an active-org membership would be
@@ -372,7 +399,7 @@ async def require_super_admin(
     `org_id == ctx.org_id` hold with zero exceptions.
     """
     account = ensure_account(db, account_id_from_claims(auth))
-    if account.role != 'admin':
+    if not account.is_staff:
         # 404 rather than 403: the admin surface should not confirm its own
         # existence to a non-staff caller.
         raise HTTPException(

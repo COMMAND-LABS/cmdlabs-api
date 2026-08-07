@@ -68,6 +68,8 @@ SPACE_MEMBER_REMOVE = "space.member_remove"
 SPACE_REQUEST = "space.request"
 SPACE_REQUEST_APPROVE = "space.request_approve"
 SPACE_REQUEST_DENY = "space.request_deny"
+SPACE_RESOURCE_ADD = "space.resource_add"
+SPACE_RESOURCE_REMOVE = "space.resource_remove"
 
 # Resource types beyond the original agent | vector_store | credential.
 RESOURCE_ORGANIZATION = "organization"

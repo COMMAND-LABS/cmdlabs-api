@@ -19,12 +19,13 @@ A member is added with granted_by='grant'. Their access comes from the ORG's
 standing, never from a personal subscription they were never asked to buy, and
 no Stripe webhook will ever touch their row.
 
-WHY A SLUG IS REQUIRED FIRST
-----------------------------
-A personal workspace has no slug. Inviting somebody turns it into a team, and a
-team is a thing with a name — it appears in a switcher, in an audit log, and
-eventually at /@{slug}. Asking for it once, here, is better than generating one
-nobody chose and can never change.
+NO NAMING STEP
+--------------
+Inviting somebody used to require claiming a permanent public slug first, on
+the reasoning that a team is a thing with a name. Organizations no longer have
+slugs — an id identifies them everywhere — so the gate is gone and inviting is
+one step. The DISPLAY name is still editable, and now it is the only name there
+is.
 """
 import logging
 import random
@@ -42,25 +43,12 @@ from src.routers.auth.background_tasks.send_login_code_email_ses import (
     send_login_code_email_ses,
 )
 from src.services import audit
-from src.services.organizations import GRANTED_BY_GRANT
+from src.services.organizations import GRANTED_BY_GRANT, freeze_ceiling
 from src.utils.errors import handle_db_error
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# Lowercase, starts alphanumeric, 2-63 chars. Matches what a subdomain would
-# allow, so `acme.cmdlabs.io` stays possible without a second rule later.
-SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
-
-# Slugs that must never become an org, because they would collide with a route
-# or impersonate the platform. The @ sigil in /@{slug} makes collision with
-# app routes structurally impossible, so this list only has to cover names that
-# would be misleading rather than every page that might ever exist.
-RESERVED_SLUGS = {
-    "root", "admin", "administrator", "cmdlabs", "cmd-labs", "support",
-    "help", "billing", "security", "official", "staff", "system", "api",
-}
 
 OTP_TTL_MINUTES = 10
 
@@ -79,8 +67,6 @@ class MemberResponse(BaseModel):
 class MembersPageResponse(BaseModel):
     org_id: int
     org_name: str
-    # None until the workspace is named. The UI asks for one before inviting.
-    org_slug: Optional[str] = None
     can_manage: bool
     members: List[MemberResponse]
     # Tier keys an invite may choose from, so the dropdown cannot offer a tier
@@ -108,20 +94,8 @@ class InviteRequest(BaseModel):
         return v
 
 
-class NameOrgRequest(BaseModel):
-    slug: str = Field(description="Public identifier, lowercase. Immutable.")
-    name: Optional[str] = None
-
-
-class SlugAvailability(BaseModel):
-    slug: str
-    available: bool
-    # Why not, in the same words the write path would use. None when available.
-    reason: Optional[str] = None
-
-
 class RenameOrgRequest(BaseModel):
-    name: str = Field(description="Display name. Editable, unlike the slug.")
+    name: str = Field(description="Display name. The only name an org has.")
 
     @field_validator("name")
     @classmethod
@@ -151,27 +125,6 @@ def _require_owner(org):
 
 def _load_org(db, org_id: int) -> Organization:
     return db.query(Organization).filter(Organization.id == org_id).one()
-
-
-def _slug_problem(db, slug: str) -> Optional[tuple]:
-    """Why `slug` cannot be taken, as (status_code, message), or None.
-
-    ONE function for the availability check and the write, so the form can
-    never call something available that the PUT then refuses. The status code
-    travels with the message because the two callers need different ones —
-    422 for a malformed slug, 409 for one that is reserved or already someone
-    else's — and splitting the rules to preserve that distinction is exactly
-    how the two would drift apart.
-    """
-    if not SLUG_PATTERN.match(slug):
-        return (status.HTTP_422_UNPROCESSABLE_ENTITY,
-                "Use 2-63 characters: lowercase letters, numbers and hyphens, "
-                "starting with a letter or number.")
-    if slug in RESERVED_SLUGS:
-        return (status.HTTP_409_CONFLICT, "That name is reserved.")
-    if db.query(Organization.id).filter(Organization.slug == slug).first():
-        return (status.HTTP_409_CONFLICT, "That name is taken.")
-    return None
 
 
 def _owner_count(db, org_id: int) -> int:
@@ -205,7 +158,6 @@ async def list_members(db: db_dependency, org: org_dependency, request: Request)
         return MembersPageResponse(
             org_id=org.org_id,
             org_name=organization.name,
-            org_slug=organization.slug,
             can_manage=org.is_owner,
             members=[
                 MemberResponse(
@@ -223,104 +175,17 @@ async def list_members(db: db_dependency, org: org_dependency, request: Request)
         raise handle_db_error(e, "[LIST MEMBERS]")
 
 
-@router.get("/slug/available", response_model=SlugAvailability)
-@limiter.limit("30/minute")
-async def check_slug(
-    slug: str, db: db_dependency, org: org_dependency, request: Request,
-):
-    """Whether a name can still be claimed — for the naming form.
-
-    Deliberately narrow. Only an owner of a STILL-UNNAMED org may ask, because
-    that is the only caller with a use for the answer, and answering it for
-    anyone else would turn an immutable public identifier into a directory
-    anybody could enumerate one guess at a time. An org that already has a slug
-    gets the same 404 as a non-owner: naming happens once, so the question is
-    moot the moment it is answered.
-
-    Rate limited at a third of the write path's neighbours for the same reason.
-    The check is advisory in any case — PUT /slug re-validates, and the unique
-    constraint settles a race between two owners typing the same name.
-    """
-    try:
-        _require_owner(org)
-        organization = _load_org(db, org.org_id)
-        if organization.slug is not None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                detail="Not found")
-
-        candidate = (slug or "").strip().lower()
-        problem = _slug_problem(db, candidate)
-        return SlugAvailability(
-            slug=candidate,
-            available=problem is None,
-            reason=None if problem is None else problem[1],
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[CHECK SLUG]")
-
-
-@router.put("/slug", response_model=MembersPageResponse)
-@limiter.limit("10/minute")
-async def name_organization(
-    body: NameOrgRequest, db: db_dependency, org: org_dependency, request: Request,
-):
-    """Give a personal workspace a public identity. Once only.
-
-    IMMUTABLE by design. A slug is the org's public name — it goes in URLs,
-    emails, and eventually /@{slug} — so letting it change would break every
-    link that ever pointed at it and would let one org quietly assume a name
-    another had built a reputation on. Renaming the DISPLAY name stays free.
-    """
-    try:
-        _require_owner(org)
-        organization = _load_org(db, org.org_id)
-
-        if organization.slug is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="This organization already has a name and it cannot be "
-                       "changed. Its display name can.",
-            )
-
-        slug = (body.slug or "").strip().lower()
-        problem = _slug_problem(db, slug)
-        if problem:
-            raise HTTPException(status_code=problem[0], detail=problem[1])
-
-        organization.slug = slug
-        if body.name:
-            organization.name = body.name.strip()
-
-        audit.record_org_change(
-            db, event_type=audit.ORG_CREATE, org_id=org.org_id,
-            detail=f"named '{slug}'", actor_account_id=org.account_id,
-        )
-        db.commit()
-        return await list_members(db=db, org=org, request=request)
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[NAME ORG]")
-
-
 @router.put("/name", response_model=MembersPageResponse)
 @limiter.limit("30/minute")
 async def rename_organization(
     body: RenameOrgRequest, db: db_dependency, org: org_dependency, request: Request,
 ):
-    """Change the display name. Never the slug.
+    """Change the display name.
 
-    The two are deliberately different kinds of thing. The SLUG is identity —
-    public, in URLs, immutable, and the reason renaming cannot quietly let one
-    org assume a name another built a reputation on. The NAME is a label: it is
-    what members see in the switcher, and being stuck with a typo in it forever
-    would be a silly thing to enforce.
-
-    The API promised this in the 409 it returns from /slug ("its display name
-    can [be changed]") before anything implemented it. This is that promise.
+    The only name an org has, now that slugs are gone. It is a label — what
+    members see in the switcher and what the audit log snapshots — not an
+    identity, so renaming is free and the id is what anything durable points
+    at.
     """
     try:
         _require_owner(org)
@@ -362,12 +227,6 @@ async def invite_member(
         _require_owner(org)
         organization = _load_org(db, org.org_id)
 
-        if organization.slug is None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Name your organization before inviting people to it.",
-            )
-
         # The tier must exist HERE. Without this an invite could name a tier
         # from another org — or a typo — and the member would resolve to no
         # modules at all, which looks like a permissions bug rather than a
@@ -395,6 +254,12 @@ async def invite_member(
         if existing:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT,
                                 detail="They are already in this organization.")
+
+        # This workspace is becoming a TEAM. Pin its ceiling at what the owner
+        # currently has, so the people about to join do not lose modules when
+        # the owner's card expires. Idempotent for an org that is already
+        # granted.
+        freeze_ceiling(db, organization)
 
         member = OrganizationMember(
             org_id=org.org_id,
@@ -544,8 +409,8 @@ async def remove_member(
         account = db.query(Account).filter(Account.id == account_id).first()
         if account and account.default_org_id == org.org_id:
             own = (db.query(Organization.id)
-                     .filter(Organization.owner_account_id == account_id,
-                             Organization.slug.is_(None)).first())
+                     .filter(Organization.owner_account_id == account_id)
+                     .first())
             account.default_org_id = own[0] if own else None
 
         db.commit()

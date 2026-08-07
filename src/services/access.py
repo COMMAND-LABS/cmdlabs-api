@@ -5,8 +5,15 @@ Single source of truth for "can this account access this resource (at this role)
 and "who can access this resource / what can this account reach?" — across agents,
 vector stores (knowledge bases), credentials, and courses. Replaces the per-resource
 modules (agent_access / vector_store_access / credential_access): every grant is an
-AccessGrant row (principal × resource × role), and the account-vs-group distinction
-lives only in members_of().
+AccessGrant row (principal × resource × role).
+
+A PRINCIPAL IS A PERSON. It used to be a person OR an access group, and this
+file carried the expansion (members_of) that turned the second into the first.
+Groups became spaces, and a space's audience crosses org boundaries by design —
+which the org confinement below may not. So the cross-org arm moved to its own
+table (space_resources, read through org_scope.shared_resource_ids) and what
+is left here is one row meaning one named person inside one org. The expansion
+step is gone rather than renamed: there is nothing left to expand.
 
 CANONICAL FILE. Mirrored byte-for-byte into kalygo3-agent-api
 (src/services/access.py) via the repo-root sync scripts. Edit the ai-api copy,
@@ -20,9 +27,7 @@ from sqlalchemy import and_
 
 from src.db.models import (
     AccessGrant,
-    AccessGroupMember,
     Account,
-    AccessGroup,
     Agent,
     Course,
     Credential,
@@ -36,9 +41,8 @@ VECTOR_STORE = "vector_store"
 CREDENTIAL = "credential"
 COURSE = "course"
 
-# Principal type constants
+# Principal type constant. Singular on purpose — see the module docstring.
 ACCOUNT = "account"
-GROUP = "group"
 
 # Role ranking for read/write resources. 'use' is matched exactly.
 _ROLE_RANK = {"read": 1, "write": 2}
@@ -49,23 +53,6 @@ def role_satisfies(grant_role: str, required: str) -> bool:
     if required == "use":
         return grant_role == "use"
     return _ROLE_RANK.get(grant_role, 0) >= _ROLE_RANK.get(required, 0)
-
-
-def members_of(db: Session, principal_type: str, principal_id: int) -> set:
-    """Expand a principal to the set of account ids it represents.
-
-    The ONLY place the account-vs-group distinction is resolved.
-    """
-    if principal_type == ACCOUNT:
-        return {principal_id}
-    if principal_type == GROUP:
-        rows = (
-            db.query(AccessGroupMember.account_id)
-            .filter(AccessGroupMember.access_group_id == principal_id)
-            .all()
-        )
-        return {r[0] for r in rows}
-    return set()
 
 
 def _resource_owner(db: Session, resource_type: str, resource_id: int):
@@ -132,31 +119,18 @@ def assert_same_org(db: Session, org_id: int, principal_type: str, principal_id:
             f"not org {org_id}"
         )
 
-    if principal_type == ACCOUNT:
-        is_member = (
-            db.query(OrganizationMember.id)
-            .filter(
-                OrganizationMember.org_id == org_id,
-                OrganizationMember.account_id == principal_id,
-            )
-            .first()
+    is_member = (
+        db.query(OrganizationMember.id)
+        .filter(
+            OrganizationMember.org_id == org_id,
+            OrganizationMember.account_id == principal_id,
         )
-        if not is_member:
-            raise CrossOrgGrantError(
-                f"account {principal_id} is not a member of org {org_id}"
-            )
-    elif principal_type == GROUP:
-        row = (
-            db.query(AccessGroup.org_id)
-            .filter(AccessGroup.id == principal_id)
-            .first()
+        .first()
+    )
+    if not is_member:
+        raise CrossOrgGrantError(
+            f"account {principal_id} is not a member of org {org_id}"
         )
-        # A group predating org scoping has org_id NULL; treat that as "not yet
-        # classified" rather than as a match, so it cannot be used to cross.
-        if row is None or row[0] != org_id:
-            raise CrossOrgGrantError(
-                f"group {principal_id} does not belong to org {org_id}"
-            )
 
 
 def can_access(
@@ -169,9 +143,13 @@ def can_access(
 ) -> bool:
     """True if *account_id* can access the resource at >= *required* role.
 
-    Org check, then owner short-circuit, then a single indexed query over grants
-    to the account directly OR to a group it belongs to, filtered to roles that
-    satisfy required.
+    Org check, then owner short-circuit, then a single indexed query over the
+    grants naming this account, filtered to roles that satisfy required.
+
+    Deliberately does NOT consult space shares. This function answers "may they
+    act on it", and a space share is a read: what it widens is what appears in
+    a list (org_scope.visible_resource_predicate), not what may be written or
+    reconfigured. A caller wanting the read answer should ask that predicate.
 
     ``org_id`` CONFINES the answer to one organization, and every caller with a
     request context must pass it. This is the single-resource twin of the filter
@@ -205,36 +183,17 @@ def can_access(
         return True
 
     grant_q = (
-        db.query(AccessGrant.principal_type, AccessGrant.principal_id, AccessGrant.role)
+        db.query(AccessGrant.role)
         .filter(
             AccessGrant.resource_type == resource_type,
             AccessGrant.resource_id == resource_id,
+            AccessGrant.principal_type == ACCOUNT,
+            AccessGrant.principal_id == account_id,
         )
     )
     if org_id is not None:
         grant_q = grant_q.filter(AccessGrant.org_id == org_id)
-    grants = grant_q.all()
-    if not grants:
-        return False
-
-    # Group ids the account belongs to (computed once, only if needed).
-    group_ids = None
-    for principal_type, principal_id, role in grants:
-        if not role_satisfies(role, required):
-            continue
-        if principal_type == ACCOUNT and principal_id == account_id:
-            return True
-        if principal_type == GROUP:
-            if group_ids is None:
-                group_ids = {
-                    r[0]
-                    for r in db.query(AccessGroupMember.access_group_id)
-                    .filter(AccessGroupMember.account_id == account_id)
-                    .all()
-                }
-            if principal_id in group_ids:
-                return True
-    return False
+    return any(role_satisfies(role, required) for (role,) in grant_q.all())
 
 
 def accessible_resource_ids(
@@ -259,31 +218,25 @@ def accessible_resource_ids(
     that already exist, which is the half that protects data written before the
     check landed.
 
+    UNCONDITIONAL, and it stays that way. Cross-org sharing is a real feature —
+    it is what a space is for — and the temptation is to let one kind of grant
+    opt out of this filter. That would put "may cross a tenant boundary" inside
+    a loop body where it can only be found by reading the code. It lives in a
+    different table instead (org_scope.shared_resource_ids).
+
     ``None`` means "do not confine", and exists only for callers that have no
     request context at all (maintenance scripts). Prefer passing an org.
     """
-    group_ids = {
-        r[0]
-        for r in db.query(AccessGroupMember.access_group_id)
-        .filter(AccessGroupMember.account_id == account_id)
-        .all()
-    }
     grant_q = (
-        db.query(AccessGrant.resource_id, AccessGrant.role, AccessGrant.principal_type, AccessGrant.principal_id)
-        .filter(AccessGrant.resource_type == resource_type)
+        db.query(AccessGrant.resource_id, AccessGrant.role)
+        .filter(AccessGrant.resource_type == resource_type,
+                AccessGrant.principal_type == ACCOUNT,
+                AccessGrant.principal_id == account_id)
     )
     if org_id is not None:
         grant_q = grant_q.filter(AccessGrant.org_id == org_id)
-    grants = grant_q.all()
-    out = set()
-    for resource_id, role, principal_type, principal_id in grants:
-        if not role_satisfies(role, required):
-            continue
-        if (principal_type == ACCOUNT and principal_id == account_id) or (
-            principal_type == GROUP and principal_id in group_ids
-        ):
-            out.add(resource_id)
-    return out
+    return {resource_id for resource_id, role in grant_q.all()
+            if role_satisfies(role, required)}
 
 
 # ── Mutation helpers (app-level cascade, since grants use polymorphic columns) ──
@@ -299,7 +252,7 @@ def revoke_grants_for_resource(db: Session, resource_type: str, resource_id: int
 
 
 def revoke_grants_for_principal(db: Session, principal_type: str, principal_id: int) -> int:
-    """Delete all grants held by a principal (call when an account/group is deleted)."""
+    """Delete all grants held by a principal (call when an account is deleted)."""
     n = (
         db.query(AccessGrant)
         .filter(AccessGrant.principal_type == principal_type, AccessGrant.principal_id == principal_id)
@@ -315,7 +268,7 @@ def effective_accounts(db: Session, resource_type: str, resource_id: int) -> lis
     Resolve a resource's access to individual accounts, for audit.
 
     Returns a list of dicts: {account_id, email, role, via} where via is
-    'owner' | 'direct' | 'group:<name>'. When an account is reachable by multiple
+    'owner' | 'direct' | 'space:<name>'. When an account is reachable by multiple
     paths the highest role wins (and 'owner' supersedes all).
     """
     owner = _resource_owner(db, resource_type, resource_id)
@@ -337,18 +290,16 @@ def effective_accounts(db: Session, resource_type: str, resource_id: int) -> lis
         )
         .all()
     )
-    # Pre-fetch group names for labeling.
-    group_names = {
-        gid: name
-        for gid, name in db.query(AccessGroup.id, AccessGroup.name).all()
-    }
     for principal_type, principal_id, role in grants:
         if principal_type == ACCOUNT:
             _consider(principal_id, role, "direct")
-        elif principal_type == GROUP:
-            via = f"group:{group_names.get(principal_id, principal_id)}"
-            for acct_id in members_of(db, GROUP, principal_id):
-                _consider(acct_id, role, via)
+
+    # Spaces the resource has been shared into. Without this arm the audit
+    # would answer "who can reach this?" with a number that is too small,
+    # which is the one kind of wrong answer an access audit may not give.
+    for space_id, space_name, account_id in _space_reach(db, resource_type,
+                                                         resource_id):
+        _consider(account_id, "read", f"space:{space_name or space_id}")
 
     if not best:
         return []
@@ -362,6 +313,25 @@ def effective_accounts(db: Session, resource_type: str, resource_id: int) -> lis
     ]
 
 
+def _space_reach(db: Session, resource_type: str, resource_id: int) -> list:
+    """(space_id, space_name, account_id) for everyone a space share reaches.
+
+    Imported locally: spaces belong to no tenant and live in their own module,
+    and importing them at the top of the file that owns the org-confined rule
+    invites the two from being read as one mechanism.
+    """
+    from src.db.space_models import Space, SpaceMember, SpaceResource
+
+    return (
+        db.query(SpaceResource.space_id, Space.name, SpaceMember.account_id)
+        .join(Space, Space.id == SpaceResource.space_id)
+        .join(SpaceMember, SpaceMember.space_id == SpaceResource.space_id)
+        .filter(SpaceResource.resource_type == resource_type,
+                SpaceResource.resource_id == resource_id)
+        .all()
+    )
+
+
 def _role_priority(role: str) -> int:
     """Ordering for 'best role wins' in audit (owner highest)."""
     return {"read": 1, "use": 1, "write": 2, "owner": 3}.get(role, 0)
@@ -369,49 +339,42 @@ def _role_priority(role: str) -> int:
 
 def resources_for_account(db: Session, account_id: int) -> list:
     """
-    Reverse audit: every resource *account_id* can reach via grants (direct or
-    group), with the role and path. Does NOT include resources it owns (callers
-    add those if needed). Returns list of
-    {resource_type, resource_id, role, via}.
+    Reverse audit: every resource *account_id* can reach that it does not own,
+    with the role and the path it came by. Returns list of
+    {resource_type, resource_id, role, via}, where `via` is 'direct' for a
+    grant naming this person and 'space:<name>' for one of their spaces.
     """
-    group_rows = (
-        db.query(AccessGroupMember.access_group_id)
-        .filter(AccessGroupMember.account_id == account_id)
-        .all()
-    )
-    group_ids = {r[0] for r in group_rows}
-    group_names = {
-        gid: name for gid, name in db.query(AccessGroup.id, AccessGroup.name).all()
-    }
+    from src.db.space_models import Space, SpaceMember, SpaceResource
 
     grants = (
-        db.query(
-            AccessGrant.resource_type,
-            AccessGrant.resource_id,
-            AccessGrant.role,
-            AccessGrant.principal_type,
-            AccessGrant.principal_id,
-        )
-        .filter(
-            (
-                (AccessGrant.principal_type == ACCOUNT)
-                & (AccessGrant.principal_id == account_id)
-            )
-            | (
-                (AccessGrant.principal_type == GROUP)
-                & (AccessGrant.principal_id.in_(group_ids) if group_ids else False)
-            )
-        )
+        db.query(AccessGrant.resource_type, AccessGrant.resource_id,
+                 AccessGrant.role)
+        .filter(AccessGrant.principal_type == ACCOUNT,
+                AccessGrant.principal_id == account_id)
         .all()
     )
 
     best: dict = {}  # (rtype, rid) -> {role, via}
-    for rtype, rid, role, ptype, pid in grants:
-        via = "direct" if ptype == ACCOUNT else f"group:{group_names.get(pid, pid)}"
+
+    def _consider(rtype, rid, role, via):
         key = (rtype, rid)
         cur = best.get(key)
         if cur is None or _role_priority(role) > _role_priority(cur["role"]):
             best[key] = {"role": role, "via": via}
+
+    for rtype, rid, role in grants:
+        _consider(rtype, rid, role, "direct")
+
+    shares = (
+        db.query(SpaceResource.resource_type, SpaceResource.resource_id,
+                 Space.name)
+        .join(Space, Space.id == SpaceResource.space_id)
+        .join(SpaceMember, SpaceMember.space_id == SpaceResource.space_id)
+        .filter(SpaceMember.account_id == account_id)
+        .all()
+    )
+    for rtype, rid, space_name in shares:
+        _consider(rtype, rid, "read", f"space:{space_name}")
 
     return [
         {"resource_type": rtype, "resource_id": rid, "role": info["role"], "via": info["via"]}

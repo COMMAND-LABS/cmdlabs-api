@@ -25,12 +25,9 @@ def _ctx(tenant, *, account_id=None):
     return OrgContext(
         account_id=account_id or tenant.account_id,
         org_id=tenant.org_id,
-        org_slug=tenant.org.slug,
         tier_key="member",
         is_owner=False,
-        is_super_admin=False,
-        org_status="active",
-    )
+        is_super_admin=False)
 
 
 def _contact(org_id, account_id, email):

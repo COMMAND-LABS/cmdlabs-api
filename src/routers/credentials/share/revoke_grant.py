@@ -6,7 +6,7 @@ account(s) ("unsharing removes default").
 """
 from fastapi import APIRouter, HTTPException, status, Request
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims
-from src.db.models import Credential, AccessGrant, AccessGroupMember
+from src.db.models import Credential, AccessGrant
 from src.services import access
 from src.services.access_admin import record_access_event
 from src.services.credential_access import prune_unusable_defaults_for_account
@@ -44,16 +44,9 @@ async def revoke_credential_grant(
         if not grant:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grant not found")
 
-        # Accounts losing this access path → prune their orphaned defaults after delete.
-        if grant.principal_type == access.ACCOUNT:
-            affected = [grant.principal_id]
-        else:
-            affected = [
-                r[0]
-                for r in db.query(AccessGroupMember.account_id)
-                .filter(AccessGroupMember.access_group_id == grant.principal_id)
-                .all()
-            ]
+        # The account losing this access path → prune its orphaned defaults
+        # after the delete. One account, because a grant names one person.
+        affected = [grant.principal_id]
 
         record_access_event(
             db,

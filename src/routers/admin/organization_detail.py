@@ -1,12 +1,12 @@
 """
-Platform-admin browsers: an org's members, and its access groups.
+Platform-admin browsers: an org's members, and the spaces it is answerable for.
 
 ADMINISTER IS NOT READ, AND THIS FILE IS WHERE THAT LINE SITS
 ------------------------------------------------------------
-Staff can see WHO is in an org and WHICH groups exist with whom in them,
-without joining. That is access metadata — the answer to "who can reach our
-data?" — and staff need it to support a customer, audit a complaint, or work
-out why somebody cannot open a screen.
+Staff can see WHO is in an org and WHICH spaces it owns, without joining. That
+is access metadata — the answer to "who can reach our data?" — and staff need
+it to support a customer, audit a complaint, or work out why somebody cannot
+open a screen.
 
 Staff cannot see the org's DATA from here: not a contact, not a deal, not the
 contents of a knowledge base. Reading those still means joining the org, which
@@ -28,13 +28,12 @@ from sqlalchemy import func as sa_func
 from pydantic import BaseModel
 
 from src.db.models import (
-    AccessGroup,
-    AccessGroupMember,
     Account,
     Organization,
     OrganizationMember,
     OrganizationTier,
 )
+from src.db.space_models import Space, SpaceMember
 from src.deps import db_dependency, super_admin_dependency
 from src.rate_limit import limiter
 from src.utils.errors import handle_db_error
@@ -56,23 +55,34 @@ class AdminMember(BaseModel):
     created_at: Optional[datetime] = None
 
 
-class AdminGroupMember(BaseModel):
+class AdminSpaceMember(BaseModel):
     account_id: int
     email: str
-    role: str
-    # False when someone is in a group but no longer in the org that owns it.
-    # A stale group row grants nothing (grants are org-confined) but it reads
-    # like access, so it is worth surfacing rather than hiding.
+    tier_key: str
+    is_owner: bool
+    # False when this member is not in the org that owns the space. NOT an
+    # anomaly — it is the normal case and the reason spaces exist. Surfaced so
+    # staff reading "who can reach this content" can see at a glance that the
+    # answer deliberately runs past the org's own member list.
     in_org: bool
 
 
-class AdminGroup(BaseModel):
+class AdminSpace(BaseModel):
+    """A space this ORG is accountable for. Attribution, never access.
+
+    Being the owner org grants nobody anything: a space's content is reached by
+    SpaceMember rows and by nothing else. What this list answers is "what is
+    this customer publishing, and who is it reaching" — which is exactly the
+    question support gets when somebody outside the org reports seeing content.
+    """
     id: int
     name: str
+    discoverable: bool
+    join_policy: str
     owner_account_id: Optional[int] = None
     owner_email: Optional[str] = None
     member_count: int
-    members: List[AdminGroupMember]
+    members: List[AdminSpaceMember]
 
 
 class AdminTier(BaseModel):
@@ -84,17 +94,40 @@ class AdminTier(BaseModel):
 
 class OrganizationDetailResponse(BaseModel):
     id: int
-    slug: Optional[str] = None
     name: str
     is_personal: bool
-    status: str
+    # 'active' | 'grace' | 'lapsed'. Derived from the owner's subscription.
+    billing_state: str
     granted_modules: List[str]
     ceiling_managed_by: str
     owner_account_id: Optional[int] = None
     created_at: Optional[datetime] = None
     members: List[AdminMember]
     tiers: List[AdminTier]
-    groups: List[AdminGroup]
+    spaces: List[AdminSpace]
+
+
+
+def _billing_state(db, org) -> str:
+    """'active' | 'grace' | 'lapsed', for the org's OWNER.
+
+    The support question this answers is "why can't they save anything?", and
+    the answer is almost always that they are mid-grace. Derived here rather
+    than stored, like everywhere else it is asked.
+    """
+    from src.config import plans_registry as plans
+
+    if org.ceiling_managed_by != "subscription":
+        # Comped. Billing has nothing to say about it in either direction.
+        return plans.BILLING_ACTIVE
+    if org.owner_account_id is None:
+        return plans.BILLING_ACTIVE
+    owner = (db.query(Account.subscription_status,
+                      Account.subscription_lapsed_at)
+               .filter(Account.id == org.owner_account_id).first())
+    if owner is None:
+        return plans.BILLING_ACTIVE
+    return plans.billing_state(owner[0], owner[1])
 
 
 def _org_or_404(db, org_id: int) -> Organization:
@@ -110,7 +143,7 @@ def _org_or_404(db, org_id: int) -> Organization:
 async def organization_detail(
     org_id: int, db: db_dependency, staff: super_admin_dependency, request: Request,
 ):
-    """One org: its members, its tiers, and its access groups.
+    """One org: its members, its tiers, and the spaces it is answerable for.
 
     Assembled in one response rather than three endpoints because the question
     staff actually have is "what does this org look like", and answering it
@@ -166,40 +199,43 @@ async def organization_detail(
             ).order_by(OrganizationTier.id.asc()).all()
         ]
 
-        groups = []
-        group_rows = (db.query(AccessGroup)
-                        .filter(AccessGroup.org_id == org_id)
-                        .order_by(AccessGroup.name.asc()).all())
-        for g in group_rows:
-            gm = (
-                db.query(AccessGroupMember, Account)
-                .join(Account, Account.id == AccessGroupMember.account_id)
-                .filter(AccessGroupMember.access_group_id == g.id)
+        spaces = []
+        space_rows = (db.query(Space)
+                        .filter(Space.owner_org_id == org_id)
+                        .order_by(Space.name.asc()).all())
+        for sp in space_rows:
+            sm = (
+                db.query(SpaceMember, Account)
+                .join(Account, Account.id == SpaceMember.account_id)
+                .filter(SpaceMember.space_id == sp.id)
                 .order_by(Account.email.asc())
                 .all()
             )
             owner_email = (db.query(Account.email)
-                             .filter(Account.id == g.owner_account_id).scalar())
-            groups.append(AdminGroup(
-                id=g.id, name=g.name, owner_account_id=g.owner_account_id,
-                owner_email=owner_email, member_count=len(gm),
+                             .filter(Account.id == sp.owner_account_id).scalar())
+            spaces.append(AdminSpace(
+                id=sp.id, name=sp.name, discoverable=sp.discoverable,
+                join_policy=sp.join_policy,
+                owner_account_id=sp.owner_account_id,
+                owner_email=owner_email, member_count=len(sm),
                 members=[
-                    AdminGroupMember(
-                        account_id=agm.account_id, email=acct.email,
-                        role=agm.role,
-                        in_org=(agm.account_id in member_account_ids),
+                    AdminSpaceMember(
+                        account_id=member.account_id, email=acct.email,
+                        tier_key=member.tier_key, is_owner=member.is_owner,
+                        in_org=(member.account_id in member_account_ids),
                     )
-                    for agm, acct in gm
+                    for member, acct in sm
                 ],
             ))
 
         return OrganizationDetailResponse(
-            id=org.id, slug=org.slug, name=org.name,
-            is_personal=org.is_personal, status=org.status,
+            id=org.id, name=org.name,
+            is_personal=(len(members) == 1),
+            billing_state=_billing_state(db, org),
             granted_modules=ceiling,
             ceiling_managed_by=org.ceiling_managed_by,
             owner_account_id=org.owner_account_id, created_at=org.created_at,
-            members=members, tiers=tiers, groups=groups,
+            members=members, tiers=tiers, spaces=spaces,
         )
     except HTTPException:
         raise
@@ -207,58 +243,56 @@ async def organization_detail(
         raise handle_db_error(e, "[ADMIN ORG DETAIL]")
 
 
-class GroupSearchItem(BaseModel):
+class SpaceSearchItem(BaseModel):
     id: int
     name: str
-    org_id: Optional[int] = None
-    org_name: Optional[str] = None
-    org_slug: Optional[str] = None
+    owner_org_id: Optional[int] = None
+    owner_org_name: Optional[str] = None
+    discoverable: bool
     member_count: int
 
 
-@router.get("/groups", response_model=List[GroupSearchItem])
+@router.get("/spaces", response_model=List[SpaceSearchItem])
 @limiter.limit("60/minute")
-async def all_groups(
+async def all_spaces(
     db: db_dependency, staff: super_admin_dependency, request: Request,
     q: Optional[str] = None, limit: int = 200,
 ):
-    """Every access group on the platform, across all orgs.
+    """Every space on the platform, across all orgs.
 
     The cross-org view exists for the question the per-org page cannot answer:
-    "which org is this group in?" — asked when somebody reports access they
-    should not have and only knows the group's name.
+    "who is publishing this?" — asked when somebody reports reaching content
+    and only knows what it was called.
 
-    A group with org_id NULL is listed too, and deliberately so. It predates
-    org scoping, grants nothing (assert_same_org treats an unclassified org as
-    unusable), and is exactly the kind of leftover that should be visible
-    rather than filtered out of the one screen built to find it.
+    Names and counts only. A space's CONTENT is not listed here for the same
+    reason a tenant's contacts are not: staff administer access, and reading
+    what is in a space means joining it.
     """
     try:
         limit = max(1, min(limit, 500))
         query = (
-            db.query(AccessGroup, Organization)
-            .outerjoin(Organization, Organization.id == AccessGroup.org_id)
+            db.query(Space, Organization)
+            .outerjoin(Organization, Organization.id == Space.owner_org_id)
         )
         if q:
-            query = query.filter(AccessGroup.name.ilike(f"%{q.strip()}%"))
-        rows = query.order_by(AccessGroup.name.asc()).limit(limit).all()
+            query = query.filter(Space.name.ilike(f"%{q.strip()}%"))
+        rows = query.order_by(Space.name.asc()).limit(limit).all()
 
         counts = dict(
-            db.query(AccessGroupMember.access_group_id,
-                     sa_func.count(AccessGroupMember.id))
-            .group_by(AccessGroupMember.access_group_id).all()
+            db.query(SpaceMember.space_id, sa_func.count(SpaceMember.id))
+            .group_by(SpaceMember.space_id).all()
         )
         return [
-            GroupSearchItem(
-                id=g.id, name=g.name,
-                org_id=o.id if o else None,
-                org_name=o.name if o else None,
-                org_slug=o.slug if o else None,
-                member_count=counts.get(g.id, 0),
+            SpaceSearchItem(
+                id=sp.id, name=sp.name,
+                owner_org_id=o.id if o else None,
+                owner_org_name=o.name if o else None,
+                discoverable=sp.discoverable,
+                member_count=counts.get(sp.id, 0),
             )
-            for g, o in rows
+            for sp, o in rows
         ]
     except HTTPException:
         raise
     except Exception as e:
-        raise handle_db_error(e, "[ADMIN GROUPS]")
+        raise handle_db_error(e, "[ADMIN SPACES]")

@@ -2,13 +2,14 @@
 List every organization on the platform. Super admin only.
 
 This is the administrative view: which orgs exist, how big they are, what
-module ceiling each has, and whether any is suspended. It returns no tenant
-data — staff read an org's contacts by joining that org, which is visible to
-its members.
+module ceiling each has, and where each one's billing stands. It returns no
+tenant data — staff read an org's contacts by joining that org, which is
+visible to its members.
 """
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import func as sa_func
 
+from src.config import plans_registry as plans
 from src.db.models import Account, Organization, OrganizationMember, OrganizationTier
 from src.deps import db_dependency, super_admin_dependency
 from src.rate_limit import limiter
@@ -49,20 +50,34 @@ async def list_organizations(
         )
 
         owner_ids = [o.owner_account_id for o in orgs if o.owner_account_id]
-        owner_emails = dict(
-            db.query(Account.id, Account.email)
-            .filter(Account.id.in_(owner_ids))
-            .all()
-        ) if owner_ids else {}
+        # One query for every owner, not one per org. Billing state is derived
+        # per org below from these two columns; asking the database again for
+        # each row would turn a staff page into a few hundred round trips.
+        owners = (
+            db.query(Account.id, Account.email, Account.subscription_status,
+                     Account.subscription_lapsed_at)
+            .filter(Account.id.in_(owner_ids)).all()
+        ) if owner_ids else []
+        owner_emails = {oid: email for oid, email, _, _ in owners}
+        owner_billing = {oid: (st, lapsed) for oid, _, st, lapsed in owners}
+
+        def _state(org) -> str:
+            """Comped orgs are always 'active': staff set their ceiling by
+            hand, so a payment says nothing about them in either direction."""
+            if org.ceiling_managed_by != "subscription":
+                return plans.BILLING_ACTIVE
+            billing = owner_billing.get(org.owner_account_id)
+            if billing is None:
+                return plans.BILLING_ACTIVE
+            return plans.billing_state(billing[0], billing[1])
 
         return OrganizationListResponse(
             organizations=[
                 OrganizationSummary(
                     id=o.id,
-                    slug=o.slug,
                     name=o.name,
-                    is_personal=o.is_personal,
-                    status=o.status,
+                    is_personal=(member_counts.get(o.id, 0) == 1),
+                    billing_state=_state(o),
                     ceiling_managed_by=o.ceiling_managed_by,
                     owner_account_id=o.owner_account_id,
                     owner_email=owner_emails.get(o.owner_account_id),

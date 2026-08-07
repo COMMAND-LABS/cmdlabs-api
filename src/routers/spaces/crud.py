@@ -28,7 +28,10 @@ from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import func
 
 from src.db.models import Account
+from src.db.models import Agent, VectorStore
 from src.db.space_models import (
+    SHAREABLE_RESOURCE_TYPES,
+    SpaceResource,
     GRANTED_BY_GRANT,
     GRANTED_BY_REQUEST,
     JOIN_INVITE,
@@ -50,6 +53,8 @@ from src.utils.errors import handle_db_error
 
 from .models import (
     CreateSpaceRequest,
+    ShareResourceRequest,
+    SharedResource,
     InviteToSpaceRequest,
     JoinRequestBody,
     JoinRequestResponse,
@@ -87,14 +92,15 @@ def _request_statuses(db, account_id: int, space_ids) -> dict:
 
 
 def _summary(space: Space, *, member: SpaceMember | None, member_count: int,
-             request_status: str) -> SpaceSummary:
+             request_status: str, viewer_account_id: int) -> SpaceSummary:
     return SpaceSummary(
-        id=space.id, slug=space.slug, name=space.name,
+        id=space.id, name=space.name,
         description=space.description, discoverable=space.discoverable,
         join_policy=space.join_policy, status=space.status,
         member_count=member_count,
         is_member=member is not None,
         is_owner=bool(member and member.is_owner),
+        viewer_account_id=viewer_account_id,
         request_status=request_status,
         created_at=space.created_at,
     )
@@ -109,7 +115,8 @@ def _summaries(db, org, rows: List[Space]) -> List[SpaceSummary]:
         SpaceMember.space_id.in_(ids or [0]))}
     return [
         _summary(s, member=mine.get(s.id), member_count=counts.get(s.id, 0),
-                 request_status=requests.get(s.id, "none"))
+                 request_status=requests.get(s.id, "none"),
+                 viewer_account_id=org.account_id)
         for s in rows
     ]
 
@@ -165,12 +172,8 @@ async def create_space(body: CreateSpaceRequest, db: db_dependency,
                        org: org_dependency, request: Request):
     """Create a space, owned by the caller and billed to their active org."""
     try:
-        problem = spaces.slug_problem(db, body.slug)
-        if problem:
-            raise HTTPException(status_code=problem[0], detail=problem[1])
-
         space = spaces.create_space(
-            db, slug=body.slug, name=body.name.strip(),
+            db, name=body.name.strip(),
             description=body.description,
             owner_account_id=org.account_id,
             # Attribution, never tenancy: who is accountable and who is billed.
@@ -228,7 +231,8 @@ def _detail(db, org, space: Space) -> SpaceDetail:
         ]
 
     base = _summary(space, member=member, member_count=count,
-                    request_status=requests.get(space.id, "none"))
+                    request_status=requests.get(space.id, "none"),
+                    viewer_account_id=org.account_id)
     return SpaceDetail(
         **base.model_dump(),
         tiers=[SpaceTierResponse(tier_key=t.tier_key, label=t.label,
@@ -263,7 +267,7 @@ async def get_space(space_id: int, db: db_dependency, org: org_dependency,
 @limiter.limit("30/minute")
 async def update_space(space_id: int, body: UpdateSpaceRequest,
                        db: db_dependency, org: org_dependency, request: Request):
-    """Owners only. The slug is not editable — it is the public identity."""
+    """Owners only."""
     try:
         space = _owned_space(db, space_id, org.account_id)
 
@@ -497,3 +501,142 @@ async def remove_member(space_id: int, account_id: int, db: db_dependency,
     except Exception as e:
         db.rollback()
         raise handle_db_error(e, "[REMOVE SPACE MEMBER]")
+
+
+# ---------------------------------------------------------------------------
+# sharing a resource into a space
+# ---------------------------------------------------------------------------
+
+# What each shareable type looks like. Deliberately a closed map: adding a CRM
+# table here would make tenant data shareable, so a new entry is a decision
+# somebody has to make on purpose rather than a string that happens to match.
+_SHAREABLE = {
+    "agent": (Agent, "account_id", "name"),
+    "vector_store": (VectorStore, "owner_account_id", "name"),
+}
+
+
+def _assert_may_share(db, org, resource_type: str, resource_id: int) -> None:
+    """You may only share something you own.
+
+    THE check this arm rests on. `shared_resource_ids` widens what a space's
+    members can read, so if anybody could add any row, joining a space would be
+    a way to read arbitrary tenants' agents. Requiring the resource to live in
+    the SHARER's org makes "Acme shares Acme's agent" expressible and "Acme
+    shares Beta's agent" impossible — the same one-directional argument the
+    catalog made, without needing a privileged org to make it.
+    """
+    if resource_type not in SHAREABLE_RESOURCE_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Only {', '.join(SHAREABLE_RESOURCE_TYPES)} may be shared. "
+                   f"CRM records are tenant data and are never shareable.")
+
+    model, _, _ = _SHAREABLE[resource_type]
+    owner_org_id = (db.query(model.org_id)
+                      .filter(model.id == resource_id).scalar())
+    if owner_org_id is None or owner_org_id != org.org_id:
+        logger.warning(
+            "[SPACE] account %s (org %s) tried to share %s %s it does not own",
+            org.account_id, org.org_id, resource_type, resource_id)
+        raise NOT_FOUND
+
+
+@router.get("/{space_id}/resources", response_model=List[SharedResource])
+@limiter.limit("60/minute")
+async def list_resources(space_id: int, db: db_dependency, org: org_dependency,
+                         request: Request):
+    """What is shared here. Members only — this is the space's content."""
+    try:
+        space = spaces.visible_space(db, space_id, org.account_id)
+        if space is None or not spaces.is_member(db, space.id, org.account_id):
+            raise NOT_FOUND
+        return _shared_resources(db, space.id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise handle_db_error(e, "[LIST SPACE RESOURCES]")
+
+
+def _shared_resources(db, space_id: int) -> List[SharedResource]:
+    rows = (db.query(SpaceResource)
+              .filter(SpaceResource.space_id == space_id)
+              .order_by(SpaceResource.id.asc()).all())
+
+    out: List[SharedResource] = []
+    for row in rows:
+        model, _, name_col = _SHAREABLE[row.resource_type]
+        name = (db.query(getattr(model, name_col))
+                  .filter(model.id == row.resource_id).scalar())
+        out.append(SharedResource(
+            id=row.id, resource_type=row.resource_type,
+            resource_id=row.resource_id,
+            # None when the underlying row is gone. Shown as unavailable rather
+            # than hidden: a dangling share is somebody's mistake to notice.
+            name=name,
+        ))
+    return out
+
+
+@router.post("/{space_id}/resources", status_code=status.HTTP_201_CREATED,
+             response_model=List[SharedResource])
+@limiter.limit("30/minute")
+async def share_resource(space_id: int, body: ShareResourceRequest,
+                         db: db_dependency, org: org_dependency,
+                         request: Request):
+    """Share an agent or knowledge base you own with this space's members."""
+    try:
+        space = _owned_space(db, space_id, org.account_id)
+        _assert_may_share(db, org, body.resource_type, body.resource_id)
+
+        existing = (db.query(SpaceResource)
+                      .filter(SpaceResource.space_id == space.id,
+                              SpaceResource.resource_type == body.resource_type,
+                              SpaceResource.resource_id == body.resource_id)
+                      .first())
+        if existing is None:
+            db.add(SpaceResource(
+                space_id=space.id, resource_type=body.resource_type,
+                resource_id=body.resource_id,
+                added_by_account_id=org.account_id))
+            audit.record_space(
+                db, event_type=audit.SPACE_RESOURCE_ADD, space_id=space.id,
+                space_name=space.name,
+                detail=f"{body.resource_type} {body.resource_id}",
+                actor_account_id=org.account_id)
+        db.commit()
+        return _shared_resources(db, space.id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise handle_db_error(e, "[SHARE SPACE RESOURCE]")
+
+
+@router.delete("/{space_id}/resources/{resource_row_id}",
+               status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("30/minute")
+async def unshare_resource(space_id: int, resource_row_id: int,
+                           db: db_dependency, org: org_dependency,
+                           request: Request):
+    """Stop sharing. Takes effect on the members' next request."""
+    try:
+        space = _owned_space(db, space_id, org.account_id)
+        row = (db.query(SpaceResource)
+                 .filter(SpaceResource.id == resource_row_id,
+                         SpaceResource.space_id == space.id).first())
+        if row is None:
+            raise NOT_FOUND
+
+        db.delete(row)
+        audit.record_space(
+            db, event_type=audit.SPACE_RESOURCE_REMOVE, space_id=space.id,
+            space_name=space.name,
+            detail=f"{row.resource_type} {row.resource_id}",
+            actor_account_id=org.account_id)
+        db.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise handle_db_error(e, "[UNSHARE SPACE RESOURCE]")

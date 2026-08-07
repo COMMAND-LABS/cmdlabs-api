@@ -14,12 +14,12 @@ class OrganizationSummary(BaseModel):
     """
     id: int
     # None for a personal workspace, which has no public page.
-    slug: Optional[str] = None
     name: str
     # True when the org has no public page (no slug). Kept because the row
     # renders the slug, NOT as a stand-in for "solo" — member_count says that.
     is_personal: bool
-    status: str                # 'active' | 'read_only'
+    # 'active' | 'grace' | 'lapsed' — the owner's billing, derived per request.
+    billing_state: str
     # Who owns granted_modules. 'grant' means staff set the ceiling by hand and
     # no webhook may undo it — i.e. this org is comped. Surfaced here because it
     # is the one fact about an org that appears nowhere else, and "who is on a

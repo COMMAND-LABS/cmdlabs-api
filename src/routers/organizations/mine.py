@@ -13,6 +13,8 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from sqlalchemy import func
+
 from src.db.models import Organization, OrganizationMember
 from src.deps import db_dependency, org_dependency
 from src.rate_limit import limiter
@@ -25,11 +27,9 @@ class MyOrganization(BaseModel):
     id: int
     name: str
     # None for a personal workspace, which has no public page.
-    slug: Optional[str] = None
     is_owner: bool
     is_personal: bool
     is_active: bool
-    status: str
 
 
 class MyOrganizationsResponse(BaseModel):
@@ -46,10 +46,16 @@ async def my_organizations(db: db_dependency, org: org_dependency, request: Requ
             .join(OrganizationMember,
                   OrganizationMember.org_id == Organization.id)
             .filter(OrganizationMember.account_id == org.account_id)
-            # A personal workspace sorts first: it is the one place a member can
-            # always reach, so it is the sane landing spot in a long list.
-            .order_by(Organization.slug.is_(None).desc(), Organization.name.asc())
+            .order_by(Organization.name.asc())
             .all()
+        )
+        # One count query for the whole list rather than a property per row —
+        # `is_personal` is now "has exactly one member", which is a count.
+        member_counts = dict(
+            db.query(OrganizationMember.org_id,
+                     func.count(OrganizationMember.id))
+              .filter(OrganizationMember.org_id.in_([o.id for o, _ in rows] or [0]))
+              .group_by(OrganizationMember.org_id).all()
         )
         return MyOrganizationsResponse(
             active_org_id=org.org_id,
@@ -57,11 +63,9 @@ async def my_organizations(db: db_dependency, org: org_dependency, request: Requ
                 MyOrganization(
                     id=o.id,
                     name=o.name,
-                    slug=o.slug,
                     is_owner=m.is_owner,
-                    is_personal=o.is_personal,
+                    is_personal=(member_counts.get(o.id, 0) == 1),
                     is_active=(o.id == org.org_id),
-                    status=o.status,
                 )
                 for o, m in rows
             ],

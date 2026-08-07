@@ -20,9 +20,10 @@ read filter does nothing about a row stamped with the principal's org rather
 than the resource's.
 """
 import pytest
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from src.db.models import AccessGrant, AccessGroup, Agent
+from src.db.models import AccessGrant, Agent
 from src.services import access
 from tests.org_isolation import client_for, make_tenant
 
@@ -107,26 +108,24 @@ def test_assert_same_org_rejects_a_non_member_principal(db: Session, acme, beta)
                                "agent", ours.id)
 
 
-def test_assert_same_org_rejects_a_group_from_another_org(db: Session, acme, beta):
+def test_a_grant_can_no_longer_name_anything_but_an_account(db: Session, acme):
+    """The group principal is gone, and the CHECK is what keeps it gone.
+
+    While `principal_type` admitted 'group', assert_same_org had to reason
+    about a second kind of principal with its own org — including groups
+    predating org scoping, whose NULL org had to be treated as "unusable"
+    rather than "matches". Groups are spaces now, and a space's audience
+    deliberately crosses orgs, which is why it lives in space_resources
+    instead of here. This asserts the column cannot quietly grow the arm back.
+    """
     ours = _agent(acme); db.add(ours); db.flush()
-    their_group = AccessGroup(name="Beta Team", owner_account_id=beta.account_id,
-                              org_id=beta.org_id)
-    db.add(their_group); db.flush()
 
-    with pytest.raises(access.CrossOrgGrantError, match="does not belong"):
-        access.assert_same_org(db, acme.org_id, "group", their_group.id,
-                               "agent", ours.id)
-
-
-def test_assert_same_org_rejects_an_unclassified_group(db: Session, acme):
-    """A group predating org scoping has org_id NULL. Treating that as a match
-    would make every legacy group a bridge between orgs, so it must refuse."""
-    ours = _agent(acme); db.add(ours); db.flush()
-    legacy = AccessGroup(name="Legacy", owner_account_id=acme.account_id, org_id=None)
-    db.add(legacy); db.flush()
-
-    with pytest.raises(access.CrossOrgGrantError):
-        access.assert_same_org(db, acme.org_id, "group", legacy.id, "agent", ours.id)
+    db.add(AccessGrant(org_id=acme.org_id, principal_type="group",
+                       principal_id=1, resource_type="agent",
+                       resource_id=ours.id, role="use"))
+    with pytest.raises(IntegrityError, match="ck_access_grant_principal_type"):
+        db.flush()
+    db.rollback()
 
 
 def test_assert_same_org_accepts_a_valid_intra_org_grant(db: Session, acme):

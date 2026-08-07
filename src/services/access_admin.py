@@ -2,9 +2,14 @@
 Grant administration helpers (ai-api only — agent-api never mutates grants).
 
 Thin CRUD over AccessGrant used by the per-resource sharing endpoints, plus
-principal resolution (group id or grantee email → principal). Keeping this in one
-place means every sharing endpoint creates grants identically and the audit view
-reads a single table.
+grantee resolution (email → account). Keeping this in one place means every
+sharing endpoint creates grants identically and the audit view reads a single
+table.
+
+A grant names ONE PERSON. Sharing with a set of people is sharing into a space
+(routers/spaces, space_resources), which is a different table on purpose — see
+the AccessGrant docstring. So there is no principal_type to resolve here any
+more; there is only "which account is this email".
 """
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
@@ -12,47 +17,32 @@ from sqlalchemy.orm import Session
 from src.db.models import (
     AccessGrant,
     AccessGrantEvent,
-    AccessGroup,
     Account,
     Agent,
     Credential,
     VectorStore,
 )
 from src.services import access
-from src.services.access_group_roles import is_group_manager
 
 
-def resolve_principal(
+def resolve_grantee(
     db: Session,
     *,
     caller_account_id: int,
-    access_group_id: int | None,
     grantee_email: str | None,
 ):
-    """
-    Resolve a sharing request to (principal_type, principal_id, label).
+    """Resolve an email to (principal_type, account_id, label).
 
-    Exactly one of access_group_id / grantee_email must be provided.
-    - group: caller must manage the group (owner/admin).
-    - individual: resolve by email; cannot grant to self.
-    Raises HTTPException on validation failure.
+    Still returns a principal_type, and it is always access.ACCOUNT. Kept in
+    the tuple rather than dropped so every call site keeps naming what it is
+    writing into the polymorphic column — a bare id is how the wrong constant
+    ends up there the day a second principal kind is added back.
     """
-    if (access_group_id is None) == (grantee_email is None):
+    if not grantee_email:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Provide exactly one of accessGroupId or granteeEmail",
+            detail="granteeEmail is required",
         )
-
-    if access_group_id is not None:
-        group = db.query(AccessGroup).filter(AccessGroup.id == access_group_id).first()
-        if not group:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Access group not found")
-        if not is_group_manager(db, group, caller_account_id):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You do not have permission to share with this group",
-            )
-        return access.GROUP, group.id, group.name
 
     target = db.query(Account).filter(Account.email == grantee_email).first()
     if not target:
@@ -122,14 +112,17 @@ def list_resource_grants(db: Session, resource_type: str, resource_id: int):
 
 
 def grant_label(db: Session, grant: AccessGrant) -> str:
-    """Display label for a grant: group name or grantee email."""
+    """Display label for a grant: the grantee's email."""
     return principal_label(db, grant.principal_type, grant.principal_id)
 
 
 def principal_label(db: Session, principal_type: str, principal_id: int) -> str:
-    if principal_type == access.GROUP:
-        row = db.query(AccessGroup.name).filter(AccessGroup.id == principal_id).first()
-        return row[0] if row else f"group #{principal_id}"
+    """A name for the audit log, resolved at WRITE time and then snapshotted.
+
+    Deliberately falls back to an id rather than raising: an event about a
+    principal that has since been deleted still has to render, and "account
+    #12" is a truthful thing to say about somebody who is gone.
+    """
     row = db.query(Account.email).filter(Account.id == principal_id).first()
     return row[0] if row else f"account #{principal_id}"
 
@@ -227,8 +220,8 @@ def revoke_principal_grants_logged(
 ) -> int:
     """Revoke every grant held by a principal, logging a 'revoke' event for each.
 
-    Use when a principal (e.g. an access group) is deleted. Call BEFORE deleting
-    the principal so its label snapshot resolves. Caller commits.
+    Use when an account is deleted. Call BEFORE deleting it so its label
+    snapshot resolves. Caller commits.
     """
     grants = (
         db.query(AccessGrant)

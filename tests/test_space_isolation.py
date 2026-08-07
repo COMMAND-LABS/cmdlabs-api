@@ -49,10 +49,10 @@ def outsider(db: Session):
                        tier_key="owner", is_owner=True)
 
 
-def _space(db, owner, *, slug="shared", discoverable=True,
+def _space(db, owner, *, name="Shared", discoverable=True,
            join_policy=JOIN_OPEN):
     space = spaces.create_space(
-        db, slug=slug, name=slug.title(), description="A shared place",
+        db, name=name, description="A shared place",
         owner_account_id=owner.account_id, owner_org_id=owner.org_id,
         discoverable=discoverable, join_policy=join_policy)
     db.flush()
@@ -72,7 +72,7 @@ async def test_joining_a_space_grants_no_access_to_the_owners_org(
     it. Their reach into the publisher's ORGANIZATION must remain exactly zero
     — same as before they joined, same as any stranger.
     """
-    space = _space(db, publisher, slug="open-space", join_policy=JOIN_OPEN)
+    space = _space(db, publisher, name="Open Space", join_policy=JOIN_OPEN)
     db.add(Contact(org_id=publisher.org_id, account_id=publisher.account_id,
                    email="private@publisher.test", first_name="Private"))
     db.add(Company(org_id=publisher.org_id, account_id=publisher.account_id,
@@ -110,7 +110,7 @@ def test_space_membership_never_widens_the_org_predicate(
     outsider's org scope is unchanged by space membership, because the two
     axes never meet.
     """
-    space = _space(db, publisher, slug="scope-space")
+    space = _space(db, publisher, name="Scope Space")
     spaces.add_member(db, space=space, account_id=outsider.account_id,
                       tier_key="member", actor_account_id=publisher.account_id)
     db.flush()
@@ -136,7 +136,7 @@ def test_the_owning_org_gets_no_automatic_access_to_the_space(
     """
     colleague = make_tenant(db, slug="publisher-co", account_id=9903,
                             tier_key="member", is_owner=False)
-    space = _space(db, publisher, slug="colleague-space", discoverable=False,
+    space = _space(db, publisher, name="Colleague Space", discoverable=False,
                    join_policy=JOIN_INVITE)
     db.flush()
 
@@ -153,7 +153,7 @@ def test_ownership_is_read_from_membership_not_from_the_column(
     Space.owner_account_id is attribution and survives removal. If _owned_space
     trusted it, somebody taken out of a space could still administer it.
     """
-    space = _space(db, publisher, slug="attribution-space")
+    space = _space(db, publisher, name="Attribution Space")
     spaces.add_member(db, space=space, account_id=outsider.account_id,
                       tier_key="owner", is_owner=True,
                       actor_account_id=publisher.account_id)
@@ -173,7 +173,7 @@ async def test_a_private_space_is_invisible_to_non_members(
     db: Session, _override_db, publisher, outsider,
 ):
     """The same 404 a nonexistent space returns, so it cannot be probed."""
-    space = _space(db, publisher, slug="hidden-space", discoverable=False,
+    space = _space(db, publisher, name="Hidden Space", discoverable=False,
                    join_policy=JOIN_INVITE)
     db.flush()
 
@@ -188,7 +188,7 @@ async def test_a_discoverable_space_can_be_seen_but_not_entered(
     db: Session, _override_db, publisher, outsider,
 ):
     """Browsing shows the shopfront and never the stock."""
-    space = _space(db, publisher, slug="shopfront", discoverable=True,
+    space = _space(db, publisher, name="Shopfront", discoverable=True,
                    join_policy=JOIN_REQUEST)
     db.flush()
 
@@ -206,7 +206,7 @@ async def test_a_member_cannot_enumerate_the_other_members(
     db: Session, _override_db, publisher, outsider,
 ):
     """Being in somebody's paid community is not a public fact."""
-    space = _space(db, publisher, slug="roster", join_policy=JOIN_OPEN)
+    space = _space(db, publisher, name="Roster", join_policy=JOIN_OPEN)
     db.flush()
 
     async with client_for(outsider) as c:
@@ -224,7 +224,7 @@ async def test_a_member_cannot_enumerate_the_other_members(
 async def test_an_invite_only_space_refuses_a_self_join(
     db: Session, _override_db, publisher, outsider,
 ):
-    space = _space(db, publisher, slug="invite-only", discoverable=True,
+    space = _space(db, publisher, name="Invite Only", discoverable=True,
                    join_policy=JOIN_INVITE)
     db.flush()
 
@@ -241,7 +241,7 @@ async def test_a_request_is_reused_rather_than_stacked(
     and 'have they asked before?' stays a single lookup."""
     from src.db.space_models import SpaceJoinRequest
 
-    space = _space(db, publisher, slug="queue", join_policy=JOIN_REQUEST)
+    space = _space(db, publisher, name="Queue", join_policy=JOIN_REQUEST)
     db.flush()
 
     async with client_for(outsider) as c:
@@ -260,7 +260,7 @@ async def test_approving_a_request_records_which_door_they_came_through(
     db: Session, _override_db, publisher, outsider,
 ):
     """`granted_by` is what makes the roster auditable in one query."""
-    space = _space(db, publisher, slug="approved", join_policy=JOIN_REQUEST)
+    space = _space(db, publisher, name="Approved", join_policy=JOIN_REQUEST)
     db.flush()
 
     async with client_for(outsider) as c:
@@ -283,7 +283,7 @@ async def test_an_invited_member_is_recorded_as_granted_not_subscribed(
     db: Session, _override_db, publisher, outsider,
 ):
     """The free invite and the paywall are one mechanism, one table."""
-    space = _space(db, publisher, slug="comped", join_policy=JOIN_INVITE)
+    space = _space(db, publisher, name="Comped", join_policy=JOIN_INVITE)
     db.flush()
 
     async with client_for(publisher) as c:
@@ -299,7 +299,7 @@ async def test_an_invited_member_is_recorded_as_granted_not_subscribed(
 async def test_only_an_owner_administers_a_space(
     db: Session, _override_db, publisher, outsider,
 ):
-    space = _space(db, publisher, slug="admin-only", join_policy=JOIN_OPEN)
+    space = _space(db, publisher, name="Admin Only", join_policy=JOIN_OPEN)
     db.flush()
 
     async with client_for(outsider) as c:
@@ -313,7 +313,7 @@ async def test_only_an_owner_administers_a_space(
 async def test_a_member_may_remove_themselves(
     db: Session, _override_db, publisher, outsider,
 ):
-    space = _space(db, publisher, slug="leavable", join_policy=JOIN_OPEN)
+    space = _space(db, publisher, name="Leavable", join_policy=JOIN_OPEN)
     db.flush()
 
     async with client_for(outsider) as c:
@@ -329,7 +329,7 @@ async def test_the_last_owner_cannot_leave(
     db: Session, _override_db, publisher,
 ):
     """A space nobody can administer cannot be repaired from inside."""
-    space = _space(db, publisher, slug="last-owner")
+    space = _space(db, publisher, name="Last Owner")
     db.flush()
 
     async with client_for(publisher) as c:
@@ -353,7 +353,7 @@ def test_space_events_are_not_filed_under_the_owners_org(
     """
     from src.db.models import AccessGrantEvent
 
-    space = _space(db, publisher, slug="audited")
+    space = _space(db, publisher, name="Audited")
     spaces.add_member(db, space=space, account_id=outsider.account_id,
                       tier_key="member", actor_account_id=publisher.account_id)
     db.flush()
@@ -369,10 +369,39 @@ def test_space_events_are_not_filed_under_the_owners_org(
         "labels are snapshotted so the entry survives a rename")
 
 
+async def test_the_org_overview_lists_owned_spaces_without_granting_them(
+    db: Session, _override_db, publisher, outsider,
+):
+    """The one place owner_org_id is read, and it must stay accountability.
+
+    An org owner sees which spaces their organization is answerable for. That
+    listing must not become a way in: the colleague who can see the space named
+    on this page is still not a member of it, and the API still 404s them.
+    """
+    space = _space(db, publisher, name="Billed Space", discoverable=False,
+                   join_policy=JOIN_INVITE)
+    db.commit()
+
+    async with client_for(publisher) as c:
+        body = (await c.get("/api/organizations/me/overview")).json()
+
+    listed = {s["name"]: s for s in body["owned_spaces"]}
+    assert "Billed Space" in listed
+    assert listed["Billed Space"]["member_count"] == 1
+
+    # A colleague in the owning org sees nothing of it.
+    colleague = make_tenant(db, slug="publisher-co", account_id=9904,
+                            tier_key="member", is_owner=False)
+    db.commit()
+    assert not spaces.is_member(db, space.id, colleague.account_id)
+    async with client_for(colleague) as c:
+        assert (await c.get(f"{SPACES}/{space.id}")).status_code == 404
+
+
 def test_every_door_leaves_the_same_shape_of_row(db: Session, publisher,
                                                  outsider):
     """One query answers 'who is in here, and why'."""
-    space = _space(db, publisher, slug="doors")
+    space = _space(db, publisher, name="Doors")
     spaces.add_member(db, space=space, account_id=outsider.account_id,
                       tier_key="member", granted_by="subscription",
                       actor_account_id=None)

@@ -12,6 +12,7 @@ Key design choices:
 """
 
 import os
+from pathlib import Path
 
 # --- FORCE-SET test environment BEFORE any application imports ---
 # Uses POSTGRES_TEST_URL if provided, otherwise defaults to local test DB.
@@ -75,120 +76,49 @@ TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_eng
 
 @pytest.fixture(scope="session", autouse=True)
 def _setup_database():
-    """Create all tables (and required PG enum types) once per test session.
+    """Bring the test database to head, the same way production gets there.
 
-    SAFETY: This fixture NEVER drops tables. Schema is additive only.
-    Data isolation is handled by per-test transaction rollback.
+    RUNS THE REAL MIGRATIONS. This used to be Base.metadata.create_all plus a
+    growing pile of reconcilers, and the pile was the tell: create_all adds
+    MISSING TABLES and never alters an existing one, so every schema change
+    that was not a brand-new table left the test database silently behind. Over
+    time that needed hand-written fix-ups for enum values, then for CHECK
+    constraints, and it still could not handle an added or dropped COLUMN — the
+    most common change of all.
+
+    The failures it produced were the expensive kind: not "the schema is old",
+    but a CheckViolation on a value the models consider legal, or a TypeError
+    naming a column that no longer exists. Every one of them read like a bug in
+    the code under test.
+
+    Running alembic instead means the test schema is built by exactly the
+    script that builds production, so a migration that would fail there fails
+    here first. It is also self-healing: a stale container is brought forward
+    on the next run rather than needing to be dropped by hand.
+
+    SAFETY: the production-host guard below runs BEFORE anything touches the
+    database, because this fixture now runs DDL rather than only adding tables.
     """
-    # Guard: refuse to run if the URL looks like a production database
-    if any(host in TEST_DATABASE_URL for host in ["supabase.co", "neon.tech", "rds.amazonaws.com"]):
+    if any(host in TEST_DATABASE_URL
+           for host in ["supabase.co", "neon.tech", "rds.amazonaws.com"]):
         raise RuntimeError(
             f"REFUSING to run tests: POSTGRES_URL points to a production-like host.\n"
             f"  URL: {TEST_DATABASE_URL[:50]}...\n"
             f"  Set POSTGRES_TEST_URL to a local/disposable database."
         )
 
-    with test_engine.connect() as conn:
-        conn.execute(text("""
-            DO $$ BEGIN
-                CREATE TYPE api_key_status_enum AS ENUM ('active', 'revoked');
-            EXCEPTION WHEN duplicate_object THEN NULL;
-            END $$;
-        """))
-        conn.execute(text("""
-            DO $$ BEGIN
-                CREATE TYPE operation_type_enum AS ENUM ('INGEST', 'DELETE', 'UPDATE');
-            EXCEPTION WHEN duplicate_object THEN NULL;
-            END $$;
-        """))
-        conn.execute(text("""
-            DO $$ BEGIN
-                CREATE TYPE operation_status_enum AS ENUM ('SUCCESS', 'FAILED', 'PARTIAL', 'PENDING');
-            EXCEPTION WHEN duplicate_object THEN NULL;
-            END $$;
-        """))
-        conn.execute(text("""
-            DO $$ BEGIN
-                CREATE TYPE emaileventtype AS ENUM (
-                    'send', 'send_to_ses', 'delivery', 'open',
-                    'bounce', 'complaint', 'click',
-                    'attempting', 'failed', 'other'
-                );
-            EXCEPTION WHEN duplicate_object THEN NULL;
-            END $$;
-        """))
-        conn.execute(text("""
-            DO $$ BEGIN
-                CREATE TYPE credential_type_enum AS ENUM (
-                    'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GOOGLE_GEMINI_API_KEY',
-                    'PINECONE_API_KEY', 'ELEVENLABS_API_KEY', 'SUPABASE',
-                    'AWS_SES', 'GOOGLE_OAUTH', 'GOOGLE_GMAIL_SMTP'
-                );
-            EXCEPTION WHEN duplicate_object THEN NULL;
-            END $$;
-        """))
-        conn.execute(text("""
-            DO $$ BEGIN
-                CREATE TYPE emailcampaignstatus AS ENUM (
-                    'draft', 'active', 'paused', 'completed'
-                );
-            EXCEPTION WHEN duplicate_object THEN NULL;
-            END $$;
-        """))
-        conn.commit()
+    from alembic import command
+    from alembic.config import Config
 
-    # The test database is a long-lived container, so the CREATE TYPE blocks
-    # above are skipped (duplicate_object) once it exists — leaving any enum
-    # created before new values were added permanently stale. Reconcile the
-    # values the models require with idempotent ADD VALUE statements. These must
-    # run outside a transaction block (Postgres restriction), hence AUTOCOMMIT.
-    with test_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-        for value in ("attempting", "failed"):
-            conn.execute(text(
-                f"ALTER TYPE emaileventtype ADD VALUE IF NOT EXISTS '{value}'"
-            ))
-
-    Base.metadata.create_all(bind=test_engine)
-
-    # Same staleness, one layer along: create_all adds MISSING TABLES and never
-    # alters existing ones, so a CHECK constraint that has been widened in the
-    # models still holds its old definition on a database created before the
-    # change. That surfaces as a CheckViolation on a value the models consider
-    # perfectly legal — a confusing failure that looks like a bug in the code
-    # under test rather than in the fixture.
-    #
-    # Reconciled from Base.metadata rather than from a hardcoded list, so this
-    # keeps working the next time a vocabulary grows. Only enumerated
-    # constraints need it: they are the ones that widen.
-    _reconcile_check_constraints(("access_grant_events",))
+    # env.py reads POSTGRES_URL, which the top of this file has already pinned
+    # to the test database — so there is no second place the URL could come
+    # from and no way for this to reach production.
+    config = Config(str(Path(__file__).resolve().parent.parent / "alembic.ini"))
+    config.set_main_option("script_location", "alembic")
+    command.upgrade(config, "head")
 
     yield
-    # No teardown — tables are left in place for inspection and speed.
-
-
-def _reconcile_check_constraints(table_names) -> None:
-    """Drop and re-create each named table's CHECK constraints from the models."""
-    from sqlalchemy.schema import CheckConstraint
-
-    with test_engine.connect() as conn:
-        for table_name in table_names:
-            table = Base.metadata.tables.get(table_name)
-            if table is None:
-                continue
-            for constraint in table.constraints:
-                if not isinstance(constraint, CheckConstraint):
-                    continue
-                if not constraint.name:
-                    continue
-                conn.execute(text(
-                    f'ALTER TABLE {table_name} '
-                    f'DROP CONSTRAINT IF EXISTS {constraint.name}'
-                ))
-                conn.execute(text(
-                    f'ALTER TABLE {table_name} ADD CONSTRAINT '
-                    f'{constraint.name} CHECK ({constraint.sqltext})'
-                ))
-        conn.commit()
+    # No teardown — the schema is left in place for inspection and speed.
 
 
 @pytest.fixture()
@@ -245,43 +175,62 @@ ROOT_ORG_ID = 1
 
 @pytest.fixture(autouse=True)
 def test_org(db: Session) -> Organization:
-    """The root organization, as migration e8f9a0b1c2d3 creates it.
+    """The first organization, in the state the suite needs it.
 
     autouse because org_id is NOT NULL on ten tables: a test that seeds a
     Contact without having asked for an org would otherwise fail on a foreign
     key rather than on whatever it meant to assert.
 
-    Stands in for the platform org. Since org-per-signup, every org means the
-    same thing — one tenant, whose members all see its rows — so a suite that
-    needs a second tenant simply makes another org (tests/org_isolation).
+    ASSERTS ITS STATE RATHER THAN ASSUMING IT IS ABSENT. Since the schema is
+    built by the real migrations, org 1 already exists — migration e8f9a0b1c2d3
+    seeds it — with the ceiling and tiers that were current when that migration
+    was written. Both are now years of module additions out of date, so a
+    fixture that only ran `if org is None` silently handed every suite a
+    narrow org and 404'd half the routes under test.
+
+    An ORDINARY org that happens to be the first one. There is no platform org
+    any more: staff bypass the module ceiling wherever they are, and publishing
+    became a Space, so nothing works because of this row's id or its name.
     """
-    org = db.query(Organization).filter(Organization.slug == "root").first()
+    org = db.query(Organization).filter(Organization.id == ROOT_ORG_ID).first()
     if org is None:
-        org = Organization(
-            id=ROOT_ORG_ID,
-            slug="root",
-            name="CMD LABS",
-            # Every module enabled. Module gating is enforced for real now, so
-            # a fixture org with an empty ceiling would 404 every gated route
-            # and every suite would be testing entitlement instead of its own
-            # subject. Tests that care about gating set their own ceiling.
-            granted_modules=list(MODULE_KEYS),
-            status="active",
-        )
+        org = Organization(id=ROOT_ORG_ID, name="CMD LABS")
         db.add(org)
         db.flush()
-        for tier_key, label in (("free", "Free"), ("premium", "Premium"),
-                                ("org_owner", "Org Owner")):
-            db.add(OrganizationTier(org_id=org.id, tier_key=tier_key, label=label,
-                                    modules=list(MODULE_KEYS)))
-        db.flush()
-        # An explicit id does NOT advance the sequence, so the next org created
-        # without one would collide on the primary key. Tests that build a
-        # second org (org_isolation.make_tenant) hit this immediately.
-        db.execute(text(
-            "SELECT setval('organizations_id_seq', "
-            "GREATEST((SELECT COALESCE(MAX(id), 1) FROM organizations), 1))"
-        ))
+
+    # Every module enabled. Module gating is enforced for real, so a fixture
+    # org with a narrow ceiling would 404 gated routes and every suite would be
+    # testing entitlement instead of its own subject. Tests that care about
+    # gating narrow it themselves.
+    org.granted_modules = list(MODULE_KEYS)
+    # 'grant', so the list above is what this org actually gets: a
+    # 'subscription' ceiling is DERIVED from the owner's billing and ignores
+    # the column entirely (services.modules.org_entitlement). It also keeps the
+    # fixture out of the read-only grace window, which is billing's to decide.
+    org.ceiling_managed_by = "grant"
+
+    existing = {
+        t.tier_key: t
+        for t in db.query(OrganizationTier).filter(
+            OrganizationTier.org_id == org.id).all()
+    }
+    for tier_key, label in (("free", "Free"), ("premium", "Premium"),
+                            ("org_owner", "Org Owner")):
+        tier = existing.get(tier_key)
+        if tier is None:
+            db.add(OrganizationTier(org_id=org.id, tier_key=tier_key,
+                                    label=label, modules=list(MODULE_KEYS)))
+        else:
+            tier.modules = list(MODULE_KEYS)
+    db.flush()
+
+    # An explicit id does NOT advance the sequence, so the next org created
+    # without one would collide on the primary key. Tests that build a second
+    # org (org_isolation.make_tenant) hit this immediately.
+    db.execute(text(
+        "SELECT setval('organizations_id_seq', "
+        "GREATEST((SELECT COALESCE(MAX(id), 1) FROM organizations), 1))"
+    ))
     return org
 
 

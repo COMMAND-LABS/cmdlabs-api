@@ -28,8 +28,8 @@ from src.services.organizations import (
     FREE_CEILING,
     PREMIUM_CEILING,
     ensure_membership,
-    personal_org_for,
-    sync_ceiling_to_subscription,
+    own_org_for,
+    freeze_ceiling,
 )
 
 
@@ -48,7 +48,7 @@ def test_a_signup_owns_the_org_it_lands_in(db: Session):
     acct = _account(db, 8101)
     member = ensure_membership(db, acct)
 
-    org = personal_org_for(db, acct.id)
+    org = own_org_for(db, acct.id)
     assert org is not None
     assert member.org_id == org.id
     assert member.is_owner is True
@@ -56,17 +56,22 @@ def test_a_signup_owns_the_org_it_lands_in(db: Session):
     assert acct.default_org_id == org.id
 
 
-def test_a_personal_workspace_has_no_public_slug(db: Session):
-    """No auto-generated slug. A slug is the org's public identity and is
-    immutable, so handing someone `user-273` would be a defect they can never
-    trade for the name they actually want."""
+def test_a_signup_gets_no_public_identity(db: Session):
+    """A workspace is identified by its id and nothing else.
+
+    This used to assert `org.slug is None` — that a signup got no
+    auto-generated public name, because a slug was permanent and inventing one
+    would hand somebody an identity they never chose. Organizations no longer
+    have slugs at all, so the property holds by construction: there is nothing
+    to auto-generate.
+    """
     acct = _account(db, 8102)
     ensure_membership(db, acct)
-    org = personal_org_for(db, acct.id)
+    org = own_org_for(db, acct.id)
 
-    assert org.slug is None
-    assert org.is_personal is True
-
+    assert org is not None
+    assert org.id is not None
+    assert org.name, "it still has a display name, which is editable"
 
 def test_two_signups_never_share_an_org(db: Session):
     a, b = _account(db, 8103), _account(db, 8104)
@@ -86,11 +91,11 @@ def test_signing_in_twice_does_not_make_a_second_workspace(db: Session):
 
 
 def test_tiers_are_seeded_so_the_workspace_can_become_a_team(db: Session):
-    """Converting to a team should be picking a slug and inviting somebody —
+    """Converting to a team should be inviting somebody —
     not first discovering the tiers page is empty."""
     acct = _account(db, 8106)
     ensure_membership(db, acct)
-    org = personal_org_for(db, acct.id)
+    org = own_org_for(db, acct.id)
 
     tiers = {t.tier_key: t for t in db.query(OrganizationTier).filter(
         OrganizationTier.org_id == org.id).all()}
@@ -108,73 +113,71 @@ def test_tiers_are_seeded_so_the_workspace_can_become_a_team(db: Session):
 def test_a_free_signup_sees_exactly_the_free_modules(db: Session):
     acct = _account(db, 8107)
     ensure_membership(db, acct)
-    org = personal_org_for(db, acct.id)
+    org = own_org_for(db, acct.id)
 
     assert list(org.granted_modules) == FREE_CEILING
 
     from src.deps import OrgContext
-    ctx = OrgContext(account_id=acct.id, org_id=org.id, org_slug=None,
-                     tier_key="owner", is_owner=True, is_super_admin=False,
-                     org_status="active")
+    ctx = OrgContext(account_id=acct.id, org_id=org.id, tier_key="owner", is_owner=True, is_super_admin=False)
     # Owner bypass means the ceiling IS what they can open — the tier layer is
     # inert until this org has somebody in it who is not the owner.
     assert modules.effective_modules(db, ctx) == FREE_CEILING
 
 
-def test_subscribing_raises_the_ceiling(db: Session):
-    """The lever billing actually pulls.
+def test_subscribing_widens_the_ceiling_and_a_lapse_takes_it_back(db: Session):
+    """The lever billing actually pulls — now with nothing to pull.
 
-    Before this, the webhook wrote accounts.role and nothing else. Under
-    org-per-signup that would set role='premium' and change nothing the user
-    could see, because entitlement resolves from the org.
+    This used to call sync_ceiling_to_subscription() after every Stripe event,
+    which wrote the plan's module list into organizations.granted_modules. That
+    copy is gone: the ceiling is DERIVED from the owner's subscription, so
+    changing the status is the whole update and the two cannot drift.
     """
     acct = _account(db, 8108)
     ensure_membership(db, acct)
-    org = personal_org_for(db, acct.id)
-    assert list(org.granted_modules) == FREE_CEILING
+    org = own_org_for(db, acct.id)
+    assert modules.ceiling_for(db, org.id) == FREE_CEILING
 
     acct.subscription_status = "active"
-    sync_ceiling_to_subscription(db, acct)
     db.flush()
-    assert list(org.granted_modules) == PREMIUM_CEILING
+    assert modules.ceiling_for(db, org.id) == PREMIUM_CEILING
 
     acct.subscription_status = "canceled"
-    sync_ceiling_to_subscription(db, acct)
     db.flush()
-    assert list(org.granted_modules) == FREE_CEILING, "a lapse takes it back"
+    assert modules.ceiling_for(db, org.id) == FREE_CEILING, "a lapse takes it back"
 
 
 def test_a_comped_ceiling_survives_billing(db: Session):
     """The comp, one level up from OrganizationMember.granted_by.
 
     A client given paid access without a subscription must not lose it the
-    first time an unrelated Stripe event fires for their account.
+    first time an unrelated Stripe event fires. 'grant' is never recomputed —
+    that asymmetry is the whole reason the column still exists.
     """
     acct = _account(db, 8109)
     ensure_membership(db, acct)
-    org = personal_org_for(db, acct.id)
+    org = own_org_for(db, acct.id)
 
-    # Staff raise it by hand; admin.set_ceiling flips the column.
     org.granted_modules = ["home", "agents", "contacts", "settings"]
     org.ceiling_managed_by = "grant"
     db.flush()
 
     acct.subscription_status = "canceled"
-    sync_ceiling_to_subscription(db, acct)
     db.flush()
 
-    assert list(org.granted_modules) == ["home", "agents", "contacts", "settings"], (
-        "a webhook must never undo a staff grant")
+    assert modules.ceiling_for(db, org.id) == [
+        "home", "agents", "contacts", "settings"], (
+        "billing must never undo a staff grant")
 
 
-def test_billing_only_touches_the_account_s_own_workspace(db: Session):
-    """A subscription is between one account and Stripe. It must not move the
-    ceiling of a team org that account merely belongs to."""
+def test_billing_only_follows_the_owner_s_subscription(db: Session):
+    """A subscription is between ONE account and Stripe.
+
+    A member's card must not move the ceiling of a team they merely belong to —
+    the derivation reads the org's OWNER, never whoever happens to be asking.
+    """
     from tests.org_isolation import make_tenant
 
     team = make_tenant(db, slug="billing-team", account_id=8110)
-    before = list(team.org.granted_modules)
-
     acct = _account(db, 8111)
     ensure_membership(db, acct)
     db.add(OrganizationMember(org_id=team.org_id, account_id=acct.id,
@@ -182,9 +185,36 @@ def test_billing_only_touches_the_account_s_own_workspace(db: Session):
                               is_owner=False))
     db.flush()
 
+    before = modules.ceiling_for(db, team.org_id)
     acct.subscription_status = "active"
-    sync_ceiling_to_subscription(db, acct)
     db.flush()
 
-    assert list(team.org.granted_modules) == before
-    assert list(personal_org_for(db, acct.id).granted_modules) == PREMIUM_CEILING
+    assert modules.ceiling_for(db, team.org_id) == before
+    assert modules.ceiling_for(
+        db, own_org_for(db, acct.id).id) == PREMIUM_CEILING
+
+
+def test_becoming_a_team_freezes_the_ceiling(db: Session):
+    """A colleague must not lose Contacts because the founder's card expired.
+
+    Until somebody else is let in, the ceiling follows the owner's plan. The
+    moment it stops being one person's workspace, the derived value is written
+    down and ownership passes to 'grant' — because the people it would now move
+    are no longer the person paying.
+    """
+    acct = _account(db, 8112)
+    acct.subscription_status = "active"
+    ensure_membership(db, acct)
+    org = own_org_for(db, acct.id)
+    assert modules.ceiling_for(db, org.id) == PREMIUM_CEILING
+
+    freeze_ceiling(db, org)
+    db.flush()
+
+    assert org.ceiling_managed_by == "grant"
+    assert list(org.granted_modules) == PREMIUM_CEILING
+
+    acct.subscription_status = "canceled"
+    db.flush()
+    assert modules.ceiling_for(db, org.id) == PREMIUM_CEILING, (
+        "the team keeps what it had when it became a team")

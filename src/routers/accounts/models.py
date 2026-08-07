@@ -2,10 +2,7 @@
 Shared Pydantic models for the accounts router.
 """
 from pydantic import BaseModel, ConfigDict
-from typing import Literal, Optional
-
-
-AccountRole = Literal['admin', 'premium', 'free']
+from typing import Optional
 
 
 class AccountResponse(BaseModel):
@@ -14,7 +11,9 @@ class AccountResponse(BaseModel):
     email: str
     newsletter_subscribed: bool
     stripe_customer_id: Optional[str] = None
-    role: AccountRole
+    # Platform staff. Replaced a `role` field that also carried premium/free —
+    # those were a cache of the subscription, and the two below are the fact.
+    is_staff: bool = False
     # Written only by the Stripe webhook. `subscription_active` is the field to
     # gate paid features on — `subscription_status` is for display.
     subscription_status: Optional[str] = None
@@ -26,8 +25,9 @@ class AccountResponse(BaseModel):
 class UpdateAccountRequest(BaseModel):
     """Request model for updating account fields.
 
-    `role` is deliberately absent: an account holder must not be able to
-    escalate their own privileges through this endpoint.
+    `is_staff` is deliberately absent: an account holder must not be able to
+    escalate their own privileges through this endpoint. It is granted out of
+    band by scripts/grant_staff.py and by no API path at all.
     """
     email: Optional[str] = None
     newsletter_subscribed: Optional[bool] = None

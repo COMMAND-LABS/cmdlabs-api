@@ -11,8 +11,6 @@ import pytest
 from sqlalchemy.orm import Session
 
 from src.db.models import (
-    AccessGroup,
-    AccessGroupMember,
     Account,
     Contact,
     Organization,
@@ -42,49 +40,6 @@ def team(db: Session):
 
 # ---------------------------------------------------------------------------
 # naming a workspace
-# ---------------------------------------------------------------------------
-
-async def test_a_workspace_must_be_named_before_inviting(db: Session, _override_db):
-    """A team is a thing with a name — it shows up in a switcher and an audit
-    log, so it gets one deliberately rather than auto-generated."""
-    solo = make_tenant(db, slug="unnamed-co", account_id=9602, tier_key="owner",
-                       is_owner=True)
-    org = db.query(Organization).filter(Organization.id == solo.org_id).one()
-    org.slug = None
-    db.flush()
-
-    async with client_for(solo) as c:
-        resp = await c.post(MEMBERS, json={"email": "x@y.test",
-                                           "tier_key": "member"})
-    assert resp.status_code == 409
-    assert "name your organization" in resp.json()["detail"].lower()
-
-
-async def test_a_slug_cannot_be_changed_once_set(db: Session, _override_db, team):
-    async with client_for(team) as c:
-        resp = await c.put("/api/organizations/slug", json={"slug": "something-else"})
-    assert resp.status_code == 409
-
-
-async def test_reserved_and_malformed_slugs_are_refused(db: Session, _override_db):
-    solo = make_tenant(db, slug="tbn-co", account_id=9603, tier_key="owner",
-                       is_owner=True)
-    org = db.query(Organization).filter(Organization.id == solo.org_id).one()
-    org.slug = None
-    db.flush()
-
-    async with client_for(solo) as c:
-        assert (await c.put("/api/organizations/slug",
-                            json={"slug": "cmdlabs"})).status_code == 409
-        assert (await c.put("/api/organizations/slug",
-                            json={"slug": "Has Spaces"})).status_code == 422
-        ok = await c.put("/api/organizations/slug", json={"slug": "TidyCo"})
-    assert ok.status_code == 200
-    assert ok.json()["org_slug"] == "tidyco", "normalized to lowercase"
-
-
-# ---------------------------------------------------------------------------
-# inviting
 # ---------------------------------------------------------------------------
 
 async def test_invite_creates_an_account_and_grants_access(
@@ -237,7 +192,7 @@ async def test_the_switcher_reflects_a_new_membership(
 
 @pytest.fixture()
 def staff_client_and_org(db: Session):
-    staff = Account(id=9700, email="staff2@cmdlabs.io", role="admin",
+    staff = Account(id=9700, email="staff2@cmdlabs.io", is_staff=True,
                     default_org_id=ROOT_ORG_ID)
     db.add(staff); db.flush()
     db.add(OrganizationMember(org_id=ROOT_ORG_ID, account_id=staff.id,
@@ -245,49 +200,6 @@ def staff_client_and_org(db: Session):
                               is_owner=True))
     db.flush()
     return staff
-
-
-async def test_admin_sees_members_groups_and_effective_modules(
-    db: Session, _override_db, staff_client_and_org
-):
-    """The support question is 'why can't they see X', and a tier name alone
-    does not answer it — the intersection does."""
-    from httpx import ASGITransport, AsyncClient
-    from src.main import app
-
-    acme = make_tenant(db, slug="admin-browse", account_id=9701,
-                       tier_key="member", is_owner=False)
-    org = db.query(Organization).filter(Organization.id == acme.org_id).one()
-    org.granted_modules = ["home", "contacts"]
-    tier = db.query(OrganizationTier).filter(
-        OrganizationTier.org_id == acme.org_id).first()
-    tier.modules = ["contacts", "deals"]      # deals is outside the ceiling
-    group = AccessGroup(org_id=acme.org_id, name="Sales",
-                        owner_account_id=acme.account_id)
-    db.add(group); db.flush()
-    db.add(AccessGroupMember(access_group_id=group.id,
-                             account_id=acme.account_id, role="admin"))
-    db.flush()
-
-    token = make_token(email=staff_client_and_org.email,
-                       user_id=staff_client_and_org.id)
-    async with AsyncClient(transport=ASGITransport(app=app),
-                           base_url="http://test",
-                           headers={"Authorization": f"Bearer {token}"}) as c:
-        resp = await c.get(f"/api/admin/organizations/{acme.org_id}")
-        groups = await c.get("/api/admin/groups")
-
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert [m["email"] for m in body["members"]] == [acme.account.email]
-    assert body["members"][0]["effective_modules"] == ["contacts"], (
-        "ceiling ∩ tier, shown resolved")
-    assert body["groups"][0]["name"] == "Sales"
-    assert body["groups"][0]["members"][0]["in_org"] is True
-
-    assert groups.status_code == 200
-    listed = {g["name"]: g for g in groups.json()}
-    assert listed["Sales"]["org_slug"] == "admin-browse"
 
 
 async def test_admin_browser_carries_no_tenant_data(
@@ -327,28 +239,6 @@ async def test_a_non_staff_account_cannot_reach_the_browsers(
 # ---------------------------------------------------------------------------
 # viewing and renaming
 # ---------------------------------------------------------------------------
-
-async def test_any_member_can_see_the_org_details(db: Session, _override_db, team):
-    """Knowing which tenant your records live in is not privileged. The
-    switcher shows only a name, so this is where the rest lives."""
-    plain = make_tenant(db, slug="invite-co", account_id=9610,
-                        tier_key="member", is_owner=False)
-    async with client_for(plain) as c:
-        body = (await c.get(MEMBERS)).json()
-    assert body["org_name"] == "Invite-Co"
-    assert body["org_slug"] == "invite-co"
-    assert body["can_manage"] is False
-
-
-async def test_an_owner_can_rename_the_display_name(db: Session, _override_db, team):
-    """The API promised this in the 409 from /slug before anything did it."""
-    async with client_for(team) as c:
-        resp = await c.put("/api/organizations/name", json={"name": "Acme Rebrand"})
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["org_name"] == "Acme Rebrand"
-    assert body["org_slug"] == "invite-co", "the identifier does not move"
-
 
 async def test_renaming_is_audited(db: Session, _override_db, team):
     """The log snapshots names at write time so history survives a rename —

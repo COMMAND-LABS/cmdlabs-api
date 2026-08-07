@@ -14,10 +14,13 @@ from .list_index_ingestion_logs import router as list_index_ingestion_logs_route
 from .ingestion_logs import router as ingestion_logs_router
 from .upload import router as upload_router
 from .grants.router import router as grants_router
+from .registry import router as registry_router
 
 router = APIRouter()
 
 router.include_router(grants_router)
+# Before list_indexes: /registry must not be swallowed by a broader path.
+router.include_router(registry_router)
 
 router.include_router(list_indexes_router)
 router.include_router(create_index_router)

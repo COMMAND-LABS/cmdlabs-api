@@ -10,7 +10,6 @@ from src.db.space_models import JOIN_POLICIES
 class SpaceSummary(BaseModel):
     """A space as it appears in a list. Never includes its content."""
     id: int
-    slug: str
     name: str
     description: Optional[str] = None
     discoverable: bool
@@ -20,6 +19,12 @@ class SpaceSummary(BaseModel):
     # About the CALLER, not the space: what this account may do with it.
     is_member: bool
     is_owner: bool
+    # The caller's own account id. Not a disclosure — it is who they already
+    # are — and it is what lets a member leave: the roster is owner-only, so
+    # without this a non-owner has no way to name themselves to the remove
+    # endpoint, which is the same endpoint precisely because leaving and being
+    # removed are one row and one consequence.
+    viewer_account_id: int
     # 'none' | 'pending' | 'approved' | 'denied' — so a browse card can say
     # "requested" instead of offering a button that would be refused.
     request_status: str
@@ -67,16 +72,10 @@ class SpaceDetail(SpaceSummary):
 
 
 class CreateSpaceRequest(BaseModel):
-    slug: str = Field(description="Public identifier, lowercase. Permanent.")
     name: str = Field(min_length=1, max_length=255)
     description: Optional[str] = None
     discoverable: bool = False
     join_policy: str = "invite"
-
-    @field_validator("slug")
-    @classmethod
-    def _normalize(cls, v: str) -> str:
-        return (v or "").strip().lower()
 
     @field_validator("join_policy")
     @classmethod
@@ -87,7 +86,6 @@ class CreateSpaceRequest(BaseModel):
 
 
 class UpdateSpaceRequest(BaseModel):
-    """The slug is absent on purpose: it is the space's public identity."""
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     description: Optional[str] = None
     discoverable: Optional[bool] = None
@@ -112,6 +110,21 @@ class InviteToSpaceRequest(BaseModel):
         if "@" not in v or " " in v:
             raise ValueError("Enter a valid email address.")
         return v
+
+
+class SharedResource(BaseModel):
+    """A resource shared into a space. Identity only — never its contents."""
+    id: int
+    resource_type: str
+    resource_id: int
+    # None when the underlying row is gone. Rendered as unavailable rather than
+    # dropped, so a dangling share is visible to whoever can fix it.
+    name: Optional[str] = None
+
+
+class ShareResourceRequest(BaseModel):
+    resource_type: str
+    resource_id: int
 
 
 class JoinRequestBody(BaseModel):

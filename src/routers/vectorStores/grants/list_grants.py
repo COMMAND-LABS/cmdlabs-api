@@ -24,7 +24,11 @@ async def list_grants(
     org: org_dependency,
     request: Request,
 ):
-    """List who a knowledge base is shared with (groups + individuals). Index owner only."""
+    """List the people this knowledge base is shared with. Index owner only.
+
+    Space shares are not listed here: they belong to the space and appear in
+    GET /api/spaces/{id}/resources.
+    """
     try:
         account_id = account_id_from_claims(jwt)
         index_name = index_name.strip()
@@ -51,10 +55,8 @@ async def list_grants(
                 id=g.id,
                 owner_account_id=account_id,
                 index_name=index_name,
-                access_group_id=g.principal_id if g.principal_type == access.GROUP else None,
-                grantee_account_id=g.principal_id if g.principal_type == access.ACCOUNT else None,
+                grantee_account_id=g.principal_id,
                 label=grant_label(db, g),
-                target_type="group" if g.principal_type == access.GROUP else "individual",
                 role=g.role,
                 created_at=g.created_at,
             )

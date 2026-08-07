@@ -23,7 +23,11 @@ async def list_grants(
     org: org_dependency,
     request: Request,
 ):
-    """List who an agent is shared with (groups + individuals). Agent owner only."""
+    """List the people this agent is shared with. Agent owner only.
+
+    Space shares are not listed here: they belong to the space, are managed
+    from it, and appear in GET /api/spaces/{id}/resources.
+    """
     try:
         account_id = account_id_from_claims(jwt)
 
@@ -48,10 +52,8 @@ async def list_grants(
             AgentAccessGrantResponse(
                 id=g.id,
                 agent_id=agent_id,
-                access_group_id=g.principal_id if g.principal_type == access.GROUP else None,
-                grantee_account_id=g.principal_id if g.principal_type == access.ACCOUNT else None,
+                grantee_account_id=g.principal_id,
                 label=grant_label(db, g),
-                target_type="group" if g.principal_type == access.GROUP else "individual",
                 created_at=g.created_at,
             )
             for g in grants

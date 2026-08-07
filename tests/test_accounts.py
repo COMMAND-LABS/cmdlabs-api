@@ -12,20 +12,20 @@ async def test_get_me_returns_account(authed_client: AsyncClient):
     assert body["id"] == 1
     assert "newsletter_subscribed" in body
     # New accounts are free until Stripe says otherwise.
-    assert body["role"] == "free"
+    assert body["is_staff"] is False
 
 
-@pytest.mark.parametrize("attempted_role", ["admin", "premium"])
-async def test_role_is_not_self_updatable(
-    authed_client: AsyncClient, attempted_role: str
+@pytest.mark.parametrize("attempted", [True, "yes"])
+async def test_staff_is_not_self_updatable(
+    authed_client: AsyncClient, attempted
 ):
-    """Sending a role must not change it — role is not an updatable field."""
+    """Sending is_staff must not grant it. No API path makes somebody staff."""
     response = await authed_client.put(
         "/api/accounts/me",
-        json={"newsletter_subscribed": True, "role": attempted_role},
+        json={"newsletter_subscribed": True, "is_staff": attempted},
     )
     assert response.status_code == 200
-    assert response.json()["role"] == "free"
+    assert response.json()["is_staff"] is False
 
 
 async def test_get_me_unauthenticated(client: AsyncClient):

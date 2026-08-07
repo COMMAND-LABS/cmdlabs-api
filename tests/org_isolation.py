@@ -76,14 +76,21 @@ def make_tenant(
     sites still read correctly rather than churning in a security suite whose
     diffs should stay easy to review.
     """
-    org = db.query(Organization).filter(Organization.slug == slug).first()
+    # `slug` is kept as the fixture's GROUPING KEY, not a column: orgs no
+    # longer have slugs, and two calls with the same key still mean "the same
+    # org, with a second member in it". Matched on the name it produces.
+    org = db.query(Organization).filter(Organization.name == slug.title()).first()
     if org is None:
         org = Organization(
-            slug=slug,
             name=slug.title(),
             # Fully enabled by default — see the note in conftest.test_org.
             granted_modules=list(MODULE_KEYS),
-            status="active",
+            # 'grant', so the list above is actually what this org gets. A
+            # 'subscription' ceiling is DERIVED from the owner's plan and
+            # ignores the stored column entirely (services.modules.ceiling_for),
+            # which would quietly give every test tenant the free plan and make
+            # isolation tests pass because nothing resolved at all.
+            ceiling_managed_by="grant",
         )
         db.add(org)
         db.flush()

@@ -11,7 +11,8 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.orm import Session
 
-from src.db.models import Account, role_for_subscription
+from src.config import plans_registry as plans
+from src.db.models import Account
 
 
 # ---------------------------------------------------------------------------
@@ -19,28 +20,31 @@ from src.db.models import Account, role_for_subscription
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
-    "status,current_role,expected",
+    "status,expected",
     [
-        # An entitling subscription promotes a free account.
-        ("active", "free", "premium"),
-        ("trialing", "free", "premium"),
-        # Anything else demotes back.
-        ("past_due", "premium", "free"),
-        ("canceled", "premium", "free"),
-        ("unpaid", "premium", "free"),
-        ("incomplete", "free", "free"),
-        (None, "premium", "free"),
-        # Staff are never moved in either direction.
-        ("active", "admin", "admin"),
-        ("canceled", "admin", "admin"),
-        (None, "admin", "admin"),
-        # Idempotent for accounts already in the right place.
-        ("active", "premium", "premium"),
-        (None, "free", "free"),
+        # An entitling subscription is the premium plan.
+        ("active", "premium"),
+        ("trialing", "premium"),
+        # Anything else is not.
+        ("past_due", "free"),
+        ("canceled", "free"),
+        ("unpaid", "free"),
+        ("incomplete", "free"),
+        (None, "free"),
     ],
 )
-def test_role_for_subscription(status, current_role, expected):
-    assert role_for_subscription(status, current_role) == expected
+def test_plan_for_status_with_nothing_on_record(status, expected):
+    """The entitlement rule with no lapse timestamp — i.e. no grace.
+
+    A NULL subscription_lapsed_at means the platform has no instant to date a
+    grace window from, so a non-entitling status drops straight to free. That
+    is the honest answer for an account that never subscribed, and for one that
+    lapsed before the column existed.
+
+    Grace is exercised in test_grace_window.py, which is where the interesting
+    half lives.
+    """
+    assert plans.plan_for(status, None) == expected
 
 @pytest.mark.parametrize(
     "status,expected",
@@ -224,10 +228,10 @@ async def test_downgrade_cancels_immediately(
     Cancelling demotes in this request, not on a later webhook — a dropped
     event must never leave someone on Premium for free.
     """
-    test_account.role = "premium"
     test_account.stripe_subscription_id = "sub_test1"
     test_account.subscription_status = "active"
     db.flush()
+    assert plans.plan_for_account(test_account) == "premium"
 
     with patch(
         "src.routers.billing.checkout.cancel_subscription_now",
@@ -241,15 +245,15 @@ async def test_downgrade_cancels_immediately(
     assert body["status"] == "canceled"
     mock_cancel.assert_called_once_with("sub_test1")
     db.refresh(test_account)
-    assert test_account.role == "free"
+    assert plans.plan_for_account(test_account) == "free"
     assert test_account.has_active_subscription is False
 
 
-async def test_downgrade_never_demotes_an_admin(
+async def test_downgrade_never_demotes_staff(
     authed_client: AsyncClient, test_account: Account, db: Session
 ):
-    """Staff keep the CRM dashboard even after cancelling a subscription."""
-    test_account.role = "admin"
+    """Staff keep the platform surface after cancelling a subscription."""
+    test_account.is_staff = True
     test_account.stripe_subscription_id = "sub_test1"
     test_account.subscription_status = "active"
     db.flush()
@@ -262,14 +266,13 @@ async def test_downgrade_never_demotes_an_admin(
 
     assert response.status_code == 200
     db.refresh(test_account)
-    assert test_account.role == "admin"
+    assert test_account.is_staff is True
 
 
 async def test_downgrade_then_resubscribe(
     authed_client: AsyncClient, test_account: Account, db: Session
 ):
     """After cancelling, checkout must be available again straight away."""
-    test_account.role = "premium"
     test_account.stripe_customer_id = "cus_test123"
     test_account.stripe_subscription_id = "sub_test1"
     test_account.subscription_status = "active"
@@ -393,15 +396,15 @@ async def test_webhook_checkout_completed_grants_membership(
     assert test_account.subscription_current_period_end == datetime(
         2030, 1, 1, tzinfo=timezone.utc
     )
-    # Paying is what promotes free -> member.
-    assert test_account.role == "premium"
+    # Paying is what puts them on the premium plan — derived, not stored.
+    assert plans.plan_for_account(test_account) == "premium"
 
 
-async def test_webhook_never_demotes_an_admin(
+async def test_webhook_never_demotes_staff(
     client: AsyncClient, test_account: Account, db: Session
 ):
     """Staff are not billed — a cancellation must not strip their access."""
-    test_account.role = "admin"
+    test_account.is_staff = True
     test_account.stripe_subscription_id = "sub_test1"
     db.flush()
 
@@ -416,14 +419,14 @@ async def test_webhook_never_demotes_an_admin(
         )
 
     db.refresh(test_account)
-    assert test_account.role == "admin"
+    assert test_account.is_staff is True
     assert test_account.subscription_status == "canceled"
 
 
-async def test_webhook_never_promotes_an_admin(
+async def test_webhook_leaves_staff_alone(
     client: AsyncClient, test_account: Account, db: Session
 ):
-    test_account.role = "admin"
+    test_account.is_staff = True
     db.flush()
     subscription = _FakeSubscription(id="sub_test1", status="active", current_period_end=None)
 
@@ -436,7 +439,7 @@ async def test_webhook_never_promotes_an_admin(
         )
 
     db.refresh(test_account)
-    assert test_account.role == "admin"
+    assert test_account.is_staff is True
 
 
 async def test_webhook_subscription_deleted_revokes(
@@ -460,8 +463,16 @@ async def test_webhook_subscription_deleted_revokes(
     db.refresh(test_account)
     assert test_account.subscription_status == "canceled"
     assert test_account.has_active_subscription is False
-    # Losing the subscription demotes on the same commit that records it.
-    assert test_account.role == "free"
+    # The lapse is DATED, and that is the whole record of it. Everything
+    # downstream — read-only now, free plan in a fortnight — is a comparison
+    # against this instant.
+    assert test_account.subscription_lapsed_at is not None
+    # Still premium, because they are inside the grace window: the modules stay
+    # so their data stays visible, and deps refuses the writes.
+    assert plans.plan_for_account(test_account) == "premium"
+    assert plans.billing_state(
+        test_account.subscription_status,
+        test_account.subscription_lapsed_at) == plans.BILLING_GRACE
 
 
 async def test_webhook_past_due_does_not_entitle(
@@ -480,7 +491,10 @@ async def test_webhook_past_due_does_not_entitle(
     db.refresh(test_account)
     assert test_account.subscription_status == "past_due"
     assert test_account.has_active_subscription is False
-    assert test_account.role == "free"
+    # past_due is a lapse like any other: it opens the grace window rather than
+    # demoting on the spot. A card that failed once is the case this exists for.
+    assert test_account.subscription_lapsed_at is not None
+    assert plans.plan_for_account(test_account) == "premium"
 
 
 async def test_webhook_resolves_account_by_subscription_id(

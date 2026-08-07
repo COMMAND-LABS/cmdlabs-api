@@ -13,8 +13,8 @@ from sqlalchemy.orm import Session
 import stripe
 
 from src.deps import db_dependency
-from src.db.models import Account, role_for_subscription
-from src.services.organizations import sync_ceiling_to_subscription
+from src.db.models import ACTIVE_SUBSCRIPTION_STATUSES, Account, Organization
+from src.services import audit
 from src.clients.stripe_client import construct_webhook_event, get_subscription
 
 logger = logging.getLogger(__name__)
@@ -77,28 +77,59 @@ def _find_account(
     return None
 
 
+def _record_billing_transition(db, account: Account, event_type: str) -> None:
+    """Log the lapse (or the recovery) against the orgs it actually affects.
+
+    Against the ORGS rather than the account, because the org is where the
+    consequence lands and where somebody investigating starts. Comped orgs are
+    skipped for the same reason billing cannot make them read-only: staff set
+    their ceiling by hand, so a payment says nothing about them.
+    """
+    orgs = (db.query(Organization.id)
+              .filter(Organization.owner_account_id == account.id,
+                      Organization.ceiling_managed_by == "subscription")
+              .all())
+    for (org_id,) in orgs:
+        audit.record_org_change(
+            db, event_type=event_type, org_id=org_id,
+            detail=f"subscription {account.subscription_status}",
+            actor_account_id=account.id)
+
+
 def _apply_subscription(db, account: Account, subscription) -> None:
     """
-    Copy the subscription's current state onto the account, and move the role
-    to match in the same transaction.
+    Copy the subscription's current state onto the account.
 
-    Role and subscription status are written together and only here, so the two
-    can never disagree — a lapsed subscription demotes to 'free' on the same
-    commit that records the lapse. Admins pass through untouched.
+    THE ONLY PLACE A LAPSE IS RECORDED. Paid-ness and the module ceiling are
+    both READ from the status set here (config/plans_registry,
+    services/modules), so there is no cached plan and no ceiling to backfill.
+    The one thing that cannot be read from the status is WHEN it stopped being
+    an entitling one, and that is the timestamp below.
 
-    The account's personal workspace ceiling moves with it. Since every account
-    owns its own org and an owner bypasses the tier layer, the CEILING is what
-    a personal org's entitlement actually is — without this line subscribing
-    would set role='premium' and change nothing a user could see. Orgs whose
-    ceiling was granted by staff are left alone; that is the comp.
+    Written on the TRANSITION only. Re-stamping subscription_lapsed_at on every
+    subsequent webhook for an already-lapsed subscription would restart the
+    grace window each time Stripe retried a failed charge — which is both a way
+    to keep premium indefinitely and a clock the customer cannot predict.
     """
+    was_entitled = account.subscription_status in ACTIVE_SUBSCRIPTION_STATUSES
+
     account.stripe_subscription_id = subscription.get("id")
     account.subscription_status = subscription.get("status")
     account.subscription_current_period_end = _to_datetime(
         subscription.get("current_period_end")
     )
-    account.role = role_for_subscription(account.subscription_status, account.role)
-    sync_ceiling_to_subscription(db, account)
+
+    now_entitled = account.subscription_status in ACTIVE_SUBSCRIPTION_STATUSES
+
+    if now_entitled:
+        # Paid again: the window closes and the org is writable on the next
+        # request. Cleared unconditionally, so a customer who lapsed and came
+        # back does not carry a stale timestamp into their next lapse.
+        account.subscription_lapsed_at = None
+    elif was_entitled or account.subscription_lapsed_at is None:
+        # Just lapsed, or lapsed at some point before this column existed.
+        # Either way this is the first instant we can honestly point at.
+        account.subscription_lapsed_at = datetime.now(timezone.utc)
 
 
 @router.post("/webhook", status_code=status.HTTP_200_OK)
@@ -187,18 +218,33 @@ async def stripe_webhook(
                 )
                 return {"received": True, "handled": False}
 
-            _apply_subscription(db, account, data)
             if event_type == "customer.subscription.deleted":
                 # Stripe sends this as status 'canceled', but pin it so a future
-                # payload shape cannot leave a deleted subscription looking live
-                # — and re-derive the role from the pinned status.
-                account.subscription_status = "canceled"
-                account.role = role_for_subscription("canceled", account.role)
-                sync_ceiling_to_subscription(db, account)
+                # payload shape cannot leave a deleted subscription looking
+                # live. Pinned BEFORE _apply_subscription so the lapse timestamp
+                # is decided from the status we actually mean.
+                data = {**data, "status": "canceled"}
+
+            was_entitled = (account.subscription_status
+                            in ACTIVE_SUBSCRIPTION_STATUSES)
+            _apply_subscription(db, account, data)
+            now_entitled = (account.subscription_status
+                            in ACTIVE_SUBSCRIPTION_STATUSES)
+
+            # The audit trail for the transition. Only the edges are logged:
+            # the grace window ENDING is a comparison against the timestamp
+            # above, not an event anything performs, so there is nothing to
+            # record when it does.
+            if was_entitled and not now_entitled:
+                _record_billing_transition(db, account, audit.ORG_SUSPEND)
+            elif now_entitled and not was_entitled:
+                _record_billing_transition(db, account, audit.ORG_RESTORE)
+
             db.commit()
             logger.info(
-                "[STRIPE WEBHOOK] Account %s subscription %s -> %s",
-                account.id, account.stripe_subscription_id, account.subscription_status,
+                "[STRIPE WEBHOOK] Account %s subscription %s -> %s (lapsed_at=%s)",
+                account.id, account.stripe_subscription_id,
+                account.subscription_status, account.subscription_lapsed_at,
             )
             return {"received": True, "handled": True}
 

@@ -1,5 +1,5 @@
 """
-Grant a group or individual access to a knowledge base (index owner only).
+Share a knowledge base with one named person (index owner only).
 
 Writes a unified AccessGrant (resource_type='vector_store', role 'read'|'write')
 keyed by the VectorStore row id.
@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, status, Request
 from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
 from src.db.models import AccessGrant
 from src.services import access
-from src.services.access_admin import resolve_principal, upsert_grant, record_access_event
+from src.services.access_admin import resolve_grantee, upsert_grant, record_access_event
 from ..helpers import get_or_create_vector_store
 from .models import CreateVectorStoreGrantRequest, VectorStoreAccessGrantResponse
 from src.utils.errors import handle_db_error
@@ -27,11 +27,14 @@ async def create_grant(
     request: Request,
 ):
     """
-    Share one of your knowledge bases with a group or individual.
+    Share one of your knowledge bases with one other person in your org.
 
     You can only share an index reachable by your own Pinecone key (you are the
-    owner). role 'read' = view; 'write' = ingest/edit. For a group target you must
-    own or co-administer the group.
+    owner). role 'read' = view; 'write' = ingest/edit.
+
+    To share with a group of people, put the knowledge base in a SPACE
+    (POST /api/spaces/{id}/resources). That arm is read-only and may cross org
+    boundaries, which is exactly why it is a different endpoint.
     """
     try:
         account_id = account_id_from_claims(jwt)
@@ -39,10 +42,9 @@ async def create_grant(
         if not index_name:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="index_name is required")
 
-        principal_type, principal_id, label = resolve_principal(
+        principal_type, principal_id, label = resolve_grantee(
             db,
             caller_account_id=account_id,
-            access_group_id=body.accessGroupId,
             grantee_email=body.granteeEmail,
         )
 
@@ -55,7 +57,7 @@ async def create_grant(
             AccessGrant.resource_id == store.id,
         ).first()
         if existing and existing.role == body.role:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Grant already exists for this principal")
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This knowledge base is already shared with that person at that role")
 
         grant = upsert_grant(
             db,
@@ -83,10 +85,8 @@ async def create_grant(
             id=grant.id,
             owner_account_id=account_id,
             index_name=index_name,
-            access_group_id=principal_id if principal_type == access.GROUP else None,
-            grantee_account_id=principal_id if principal_type == access.ACCOUNT else None,
+            grantee_account_id=principal_id,
             label=label,
-            target_type="group" if principal_type == access.GROUP else "individual",
             role=grant.role,
             created_at=grant.created_at,
         )

@@ -5,6 +5,7 @@ The UI hydrates its side menu from this instead of the hardcoded lists in
 cmdlabs-ui/src/config/roles.ts, so a ceiling or tier change takes effect on the
 next page load with no deploy.
 """
+from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -12,7 +13,7 @@ from pydantic import BaseModel
 
 from src.deps import db_dependency, org_dependency
 from src.rate_limit import limiter
-from src.services import modules
+from src.services import modules, organizations
 from src.utils.errors import handle_db_error
 
 router = APIRouter()
@@ -20,14 +21,18 @@ router = APIRouter()
 
 class EntitlementsResponse(BaseModel):
     org_id: int
-    # None for a personal workspace, which has no public page.
-    org_slug: Optional[str] = None
     tier_key: str
     is_owner: bool
     is_super_admin: bool
-    # True when this org has one member, who owns it.
+    # True when this org has exactly one member — a workspace, not a team.
     is_personal: bool
-    org_status: str
+    # True during the grace window after the owner's subscription lapsed:
+    # everything still opens, nothing may be changed. The banner that explains
+    # it is global, so every member of a lapsed org sees WHY a save fails
+    # rather than only the owner.
+    read_only: bool
+    # When read-only becomes a downgrade to the free plan. ISO, or null.
+    grace_ends_at: Optional[datetime] = None
     # The self-serve plan this account is on: 'free' | 'premium'. Distinct from
     # `modules` on purpose — modules say what opens, the plan says what was
     # bought, and the course catalog needs the second to show somebody what
@@ -45,12 +50,12 @@ async def my_entitlements(db: db_dependency, org: org_dependency, request: Reque
     try:
         return EntitlementsResponse(
             org_id=org.org_id,
-            org_slug=org.org_slug,
             tier_key=org.tier_key,
             is_owner=org.is_owner,
             is_super_admin=org.is_super_admin,
-            is_personal=org.is_personal,
-            org_status=org.org_status,
+            is_personal=organizations.is_solo(db, org.org_id),
+            read_only=org.read_only,
+            grace_ends_at=org.grace_ends_at,
             plan=org.plan,
             modules=modules.effective_modules(db, org),
             ceiling=(modules.ceiling_for(db, org.org_id)

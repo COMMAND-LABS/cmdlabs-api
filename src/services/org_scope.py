@@ -127,38 +127,58 @@ def resource_predicate(model, ctx):
     )
 
 
-def catalog_resource_ids(db: Session, ctx, resource_type: str):
-    """IDs of platform-published resources this caller can reach.
+def shared_resource_ids(db: Session, ctx, resource_type: str):
+    """IDs of resources shared with this caller through a SPACE.
 
-    Publishing is one-directional: a catalog item may only reference a
-    resource owned by the PLATFORM org, so this can never surface another
-    tenant's rows. It is additive only.
+    Additive only, and one-directional by construction: a space_resources row
+    can only be created by somebody who OWNS the resource, so this arm can
+    surface "an org shared its own agent" and can never express "an org shared
+    somebody else's".
 
-    A grant with group_id NULL reaches the whole org; with group_id set it
-    reaches only members of that access group — which is how one lesson goes
-    to Sales and not Engineering.
+    Replaced catalog_resource_ids, which asked the same question through two
+    tables and a platform-only restriction. The audience is now the space's
+    members — the one membership question the platform asks everywhere else.
     """
-    from src.db.catalog_models import CatalogGrant, CatalogItem
-    from src.db.models import AccessGroupMember
+    from src.db.space_models import SpaceMember, SpaceResource
 
-    my_groups = (
-        db.query(AccessGroupMember.access_group_id)
-        .filter(AccessGroupMember.account_id == ctx.account_id)
+    my_spaces = (
+        db.query(SpaceMember.space_id)
+        .filter(SpaceMember.account_id == ctx.account_id)
         .subquery()
     )
 
     return (
-        db.query(CatalogItem.resource_id)
-        .join(CatalogGrant, CatalogGrant.catalog_item_id == CatalogItem.id)
+        db.query(SpaceResource.resource_id)
         .filter(
-            CatalogItem.resource_type == resource_type,
-            CatalogGrant.org_id == ctx.org_id,
-            or_(
-                CatalogGrant.group_id.is_(None),
-                CatalogGrant.group_id.in_(db.query(my_groups)),
-            ),
+            SpaceResource.resource_type == resource_type,
+            SpaceResource.space_id.in_(db.query(my_spaces)),
         )
     )
+
+
+def shares_resource(db: Session, account_id: int, resource_type: str,
+                    resource_id: int) -> bool:
+    """The SINGLE-ROW twin of shared_resource_ids.
+
+    A list predicate alone is half a feature. Without this, a resource shared
+    into a space appears in its members' lists and then 404s when opened —
+    which is precisely what the catalog did, and precisely the sort of bug that
+    reads as flakiness rather than as a missing arm.
+
+    READ ONLY, like its sibling. A space share says "my members may use this",
+    never "may reconfigure it": write still resolves through services/access.py,
+    which is org-confined with no exceptions.
+    """
+    from src.db.space_models import SpaceMember, SpaceResource
+
+    return db.query(
+        db.query(SpaceResource)
+          .join(SpaceMember, SpaceMember.space_id == SpaceResource.space_id)
+          .filter(SpaceResource.resource_type == resource_type,
+                  SpaceResource.resource_id == resource_id,
+                  SpaceMember.account_id == account_id)
+          .exists()
+    ).scalar()
 
 
 def visible_resource_predicate(db: Session, model, ctx, resource_type: str,
@@ -171,19 +191,21 @@ def visible_resource_predicate(db: Session, model, ctx, resource_type: str,
       1. resource_predicate — own org, honouring visibility;
       2. explicit AccessGrant ids — an individual or a department inside the
          same org (the caller resolves these; C6 enforces same-org);
-      3. the catalog — lessons published by the PLATFORM org to this org or
-         to one of the caller's groups.
+      3. SPACES — resources shared into a space this caller belongs to,
+         by whoever owns them.
 
-    Arm 3 is safe precisely because a catalog item may only reference a
-    platform-owned resource, so it cannot surface another tenant's row.
+    Arm 3 is safe precisely because a space_resources row can only be written
+    by somebody who owns the resource, so it can never surface a row its owner
+    did not offer. It is the one arm that crosses an org boundary, and it does
+    so in one direction only.
 
     Deliberately not a flag on tenant_predicate: the CRM tables must never be
-    able to acquire a catalog arm by someone passing the wrong argument.
+    able to acquire a sharing arm by someone passing the wrong argument.
     """
     arms = [resource_predicate(model, ctx)]
     if granted_ids:
         arms.append(model.id.in_(granted_ids))
-    arms.append(model.id.in_(catalog_resource_ids(db, ctx, resource_type)))
+    arms.append(model.id.in_(shared_resource_ids(db, ctx, resource_type)))
     return or_(*arms)
 
 

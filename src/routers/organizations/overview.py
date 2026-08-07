@@ -31,12 +31,12 @@ from sqlalchemy import func
 
 from src.config.modules_registry import BY_KEY, MODULE_KEYS
 from src.db.models import (
-    AccessGroup,
     Account,
     Organization,
     OrganizationMember,
     OrganizationTier,
 )
+from src.db.space_models import SPACE_ACTIVE, Space, SpaceMember
 from src.deps import db_dependency, org_dependency
 from src.rate_limit import limiter
 from src.services import modules
@@ -69,18 +69,24 @@ class TierSummary(BaseModel):
     member_count: int
 
 
+class OwnedSpace(BaseModel):
+    id: int
+    name: str
+    member_count: int
+    discoverable: bool
+
+
 class OrganizationOverviewResponse(BaseModel):
     # --- Identity -------------------------------------------------------
     org_id: int
     name: str
-    # None for a personal workspace: it has no public page until its owner
-    # claims a name. The UI turns this into the naming prompt.
-    slug: Optional[str] = None
     is_personal: bool
     created_at: Optional[datetime] = None
 
     # --- Plan -----------------------------------------------------------
-    status: str                     # 'active' | 'read_only'
+    # True during the grace window after a lapse. Derived, never stored.
+    read_only: bool
+    grace_ends_at: Optional[datetime] = None
     ceiling_managed_by: str         # 'subscription' | 'grant' (comped)
     ceiling: List[ModuleSummary]
     # Denominator for "12 of 19 modules". Sent rather than hardcoded in the UI
@@ -94,7 +100,18 @@ class OrganizationOverviewResponse(BaseModel):
 
     # --- Access ---------------------------------------------------------
     tiers: List[TierSummary]
-    group_count: int
+
+    # --- Spaces billed to this org --------------------------------------
+    #
+    # THE ONE PLACE owner_org_id is read, and it is read for exactly what the
+    # column is for: accountability. "Which spaces is this organization
+    # answerable for and paying for?" is the owner's question and it has had no
+    # home until now.
+    #
+    # It is NOT an access list. Nobody reaches a space's content because of
+    # anything on this page — that is SpaceMember's job, and the org owner
+    # appears here whether or not they are a member of the spaces listed.
+    owned_spaces: List[OwnedSpace]
 
 
 def _require_owner(org):
@@ -119,7 +136,8 @@ async def my_organization(db: db_dependency, org: org_dependency, request: Reque
         organization = (db.query(Organization)
                           .filter(Organization.id == org.org_id).one())
 
-        ceiling = modules.ceiling_for(db, org.org_id)
+        entitlement = modules.org_entitlement(db, org.org_id)
+        ceiling = entitlement.ceiling
 
         # Counted in the database rather than by loading rows: an org with a
         # thousand members should still render this page in one small query.
@@ -130,10 +148,6 @@ async def my_organization(db: db_dependency, org: org_dependency, request: Reque
                          .filter(OrganizationMember.org_id == org.org_id,
                                  OrganizationMember.is_owner.is_(True))
                          .scalar()) or 0
-        group_count = (db.query(func.count(AccessGroup.id))
-                         .filter(AccessGroup.org_id == org.org_id)
-                         .scalar()) or 0
-
         recent = (
             db.query(OrganizationMember, Account)
             .join(Account, Account.id == OrganizationMember.account_id)
@@ -155,13 +169,23 @@ async def my_organization(db: db_dependency, org: org_dependency, request: Reque
                        .filter(OrganizationTier.org_id == org.org_id)
                        .order_by(OrganizationTier.id.asc()).all())
 
+        space_rows = (db.query(Space)
+                        .filter(Space.owner_org_id == org.org_id,
+                                Space.status == SPACE_ACTIVE)
+                        .order_by(Space.name.asc()).all())
+        space_members = dict(
+            db.query(SpaceMember.space_id, func.count(SpaceMember.id))
+              .filter(SpaceMember.space_id.in_([s.id for s in space_rows] or [0]))
+              .group_by(SpaceMember.space_id).all()
+        )
+
         return OrganizationOverviewResponse(
             org_id=organization.id,
             name=organization.name,
-            slug=organization.slug,
-            is_personal=organization.is_personal,
+            is_personal=(member_count == 1),
             created_at=organization.created_at,
-            status=organization.status,
+            read_only=entitlement.read_only,
+            grace_ends_at=entitlement.grace_ends_at,
             ceiling_managed_by=organization.ceiling_managed_by,
             # Labelled here because the keys are stable identifiers, not
             # display names — the UI must never render a raw module key.
@@ -188,7 +212,12 @@ async def my_organization(db: db_dependency, org: org_dependency, request: Reque
                 )
                 for t in tier_rows
             ],
-            group_count=group_count,
+            owned_spaces=[
+                OwnedSpace(id=s.id, name=s.name,
+                           member_count=space_members.get(s.id, 0),
+                           discoverable=s.discoverable)
+                for s in space_rows
+            ],
         )
     except HTTPException:
         raise

@@ -32,7 +32,7 @@ class CeilingResponse(BaseModel):
 
 class JoinResponse(BaseModel):
     org_id: int
-    org_slug: str
+    org_name: str
     account_id: int
     tier_key: str
 
@@ -121,7 +121,7 @@ async def join_organization(
                       .filter(OrganizationMember.org_id == org_id,
                               OrganizationMember.account_id == staff.id).first())
         if existing:
-            return JoinResponse(org_id=org.id, org_slug=org.slug,
+            return JoinResponse(org_id=org.id, org_name=org.name,
                                 account_id=staff.id, tier_key=existing.tier_key)
 
         member = OrganizationMember(
@@ -142,7 +142,7 @@ async def join_organization(
         db.commit()
         db.refresh(member)
 
-        return JoinResponse(org_id=org.id, org_slug=org.slug,
+        return JoinResponse(org_id=org.id, org_name=org.name,
                             account_id=staff.id, tier_key=member.tier_key)
     except HTTPException:
         raise

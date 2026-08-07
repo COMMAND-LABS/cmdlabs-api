@@ -11,6 +11,8 @@ Also asserts every registered router prefix is DELIBERATELY classified, so
 adding a router without deciding whether it is gated fails here rather than
 shipping ungated.
 """
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from sqlalchemy.orm import Session
 
@@ -19,7 +21,7 @@ from src.config.modules_registry import (
     MODULE_KEYS,
     module_for_path,
 )
-from src.db.models import Contact, Organization, OrganizationTier
+from src.db.models import Account, Agent, Contact, Organization, OrganizationTier
 from src.main import _ROUTERS
 from tests.org_isolation import client_for, make_tenant
 
@@ -145,23 +147,41 @@ async def test_owner_reaches_everything_in_the_ceiling(db: Session, _override_db
 # read-only orgs
 # ---------------------------------------------------------------------------
 
-async def test_read_only_org_can_read_but_not_write(db: Session, _override_db, acme):
-    """A lapsed subscription must not destroy or freeze access to data — the
-    org keeps reading and exporting, and only writes are refused."""
+async def test_a_lapsed_org_can_read_but_not_write(db: Session, _override_db, acme):
+    """The grace window: keep every screen, refuse every change.
+
+    Set up by dating the OWNER's lapse, because that is the only thing stored.
+    There is no org.status to flip — a column that nothing ever wrote is what
+    this replaced — so a test that could still flip one would be testing a
+    fiction.
+
+    Uses AGENTS rather than contacts on purpose: the org's ceiling is now
+    derived from the owner's plan, and `contacts` is not in either self-serve
+    plan (it only ever arrives on a staff-granted ceiling). Asserting on a
+    module the plan does not include would 404 on the read and prove nothing.
+    """
     org = db.query(Organization).filter(Organization.id == acme.org_id).one()
-    org.status = "read_only"
+    owner = db.query(Account).filter(Account.id == acme.account_id).one()
+    owner.subscription_status = "canceled"
+    owner.subscription_lapsed_at = datetime.now(timezone.utc) - timedelta(days=1)
+    org.owner_account_id = owner.id
+    org.ceiling_managed_by = "subscription"
+    _narrow_tier_to(db, acme, ["agents"])
     db.flush()
 
-    row = Contact(org_id=acme.org_id, account_id=acme.account_id,
-                  first_name="Kept", last_name="X", email="kept@enf.test")
-    db.add(row); db.flush()
+    kept = Agent(org_id=acme.org_id, account_id=acme.account_id,
+                 name="Kept", visibility="org", config={"data": {}})
+    db.add(kept); db.flush()
 
     async with client_for(acme) as c:
-        read = await c.get("/api/contacts/")
-        write = await c.post("/api/contacts/", json={
-            "first_name": "New", "last_name": "Y", "email": "new@enf.test"})
+        read = await c.get("/api/agents/")
+        write = await c.post("/api/agents/", json={
+            "name": "New", "config": {"data": {}}})
 
-    assert read.status_code == 200
-    assert row.id in {x["id"] for x in read.json()["contacts"]}
-    assert write.status_code == 403
+    # Everything still opens. Their data has not gone anywhere, and that is the
+    # entire message of this state.
+    assert read.status_code == 200, read.text
+    assert kept.id in {int(a["id"]) for a in read.json()}
+    # Nothing may be changed.
+    assert write.status_code == 403, write.text
     assert "read-only" in write.json()["detail"].lower()
