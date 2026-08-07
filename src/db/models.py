@@ -9,8 +9,8 @@ import uuid
 
 # An account is one of two things, and they are stored differently on purpose:
 #
-#   SUPER ADMIN  accounts.is_super_admin — granted out of band by
-#                scripts/grant_super_admin.py, never by an API path
+#   SUPER ADMIN  accounts.is_super_admin — granted and revoked out of band by
+#                scripts/super_admin.py, never by an API path
 #   PAYING       derived per request from subscription_status, stored nowhere
 #                (config/plans_registry.plan_for_account → 'free' | 'premium')
 #
@@ -44,9 +44,10 @@ class Account(Base):
     reset_token = Column(String)
     stripe_customer_id = Column(String, nullable=True)
     newsletter_subscribed = Column(Boolean, default=False, nullable=False)
-    # Platform super admin. Granted out of band by scripts/grant_super_admin.py
-    # — no API path sets it, so a compromised account cannot escalate itself and
-    # there is no "make super admin" button to click by accident.
+    # Platform super admin. Granted and revoked out of band by
+    # scripts/super_admin.py — no API path sets it in either direction, so a
+    # compromised account cannot escalate itself and there is no "make super
+    # admin" button to click by accident.
     #
     # This replaced a `role` column that also carried 'premium'/'free'. Those
     # were a CACHE of subscription_status, which is the fact; keeping both meant

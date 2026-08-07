@@ -385,8 +385,7 @@ async def require_super_admin(
     db: Session = Depends(get_db),
     auth: dict = Depends(get_current_user_or_api_key),
 ) -> Account:
-    """Platform super admins only. Granted out of band via
-    scripts/grant_super_admin.py.
+    """Platform super admins only. Set out of band via scripts/super_admin.py.
 
     Deliberately NOT built on OrgContext: administering the platform is not an
     action inside any one org, so requiring an active-org membership would be

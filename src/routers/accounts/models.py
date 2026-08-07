@@ -26,9 +26,9 @@ class AccountResponse(BaseModel):
 class UpdateAccountRequest(BaseModel):
     """Request model for updating account fields.
 
-    `is_super_admin` is deliberately absent: an account holder must not be able to
-    escalate their own privileges through this endpoint. It is granted out of
-    band by scripts/grant_super_admin.py and by no API path at all.
+    `is_super_admin` is deliberately absent: an account holder must not be able
+    to escalate their own privileges through this endpoint. It is granted and
+    revoked out of band by scripts/super_admin.py and by no API path at all.
     """
     email: Optional[str] = None
     newsletter_subscribed: Optional[bool] = None

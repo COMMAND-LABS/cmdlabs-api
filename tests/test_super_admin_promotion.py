@@ -1,8 +1,8 @@
 """
-How a platform admin is established, and why it is now one thing instead of two.
+How super admin is given and taken away, and why each is now one thing.
 
-It used to take a pair of changes that had to happen together: grant the flag,
-AND place the account in the platform org. The second was needed because
+Granting used to take a pair of changes that had to happen together: set the
+flag, AND place the account in the platform org. The second was needed because
 entitlement resolved from whichever org the caller was acting in, so a promoted
 account sitting in its own workspace could browse every org on the platform and
 could not open Contacts — which read as a permissions bug and was really a
@@ -12,13 +12,20 @@ Super admins now bypass the module ceiling outright, so they work from
 wherever they already are. The placement is gone, and with it the last reason
 the platform org had to be a special row.
 
-Deliberately a script rather than an endpoint: no API path grants super admin,
-so a compromised account cannot escalate itself and there is no "make admin"
-button to click by accident.
+THAT IS ALSO WHAT MAKES REVOCATION COMPLETE. One boolean going up is the whole
+of the grant, so one boolean coming down is the whole of the revoke: no
+membership to remove, no ceiling to recompute, nothing left behind that would
+still open a door. The tests below pin both directions against the same
+account, because a revoke that leaves anything standing is the failure that
+would never show up in the grant path.
+
+Deliberately a script rather than an endpoint: no API path writes this in
+either direction, so a compromised account cannot escalate itself and there is
+no "make super admin" button to click by accident.
 """
 from sqlalchemy.orm import Session
 
-from scripts.grant_super_admin import grant
+from scripts.super_admin import grant, revoke
 from src.config import plans_registry as plans
 from src.config.modules_registry import MODULE_KEYS
 from src.db.models import Account, Organization
@@ -153,3 +160,102 @@ def test_billing_cannot_touch_super_admin(db: Session):
     assert acct.is_super_admin is True
     assert plans.plan_for_account(acct) == plans.PLAN_FREE, (
         "super admins are not billed; their plan is whatever Stripe says")
+
+
+# ---------------------------------------------------------------------------
+# revoking — the direction that has to be right in a hurry
+# ---------------------------------------------------------------------------
+
+def test_revoking_closes_the_bypass_on_the_next_request(db: Session):
+    """The whole revoke: one boolean, and the extra modules are gone.
+
+    Read through effective_modules rather than the column, because that is
+    what a request actually asks. Nothing is cached and nothing is cascaded,
+    so there is no window in which the flag says one thing and the menu
+    another.
+    """
+    acct = Account(id=8810, email="departing@cmdlabs.io")
+    db.add(acct)
+    db.flush()
+    ensure_membership(db, acct)
+    workspace = _workspace(db, acct.id)
+
+    grant(dry_run=False, emails=["departing@cmdlabs.io"], db=db)
+    assert modules.effective_modules(
+        db, _ctx(acct.id, workspace)) == list(MODULE_KEYS)
+
+    assert revoke(dry_run=False, emails=["departing@cmdlabs.io"], db=db) == 1
+
+    assert acct.is_super_admin is False
+    assert modules.effective_modules(
+        db, _ctx(acct.id, workspace, is_super_admin=False)) != list(MODULE_KEYS)
+
+
+def test_revoking_leaves_their_own_workspace_untouched(db: Session):
+    """They stop being staff; they do not stop being a customer.
+
+    This is what "the flag is the whole of it" has to mean in practice — the
+    org they own, their membership in it and the plan they pay for are none of
+    super admin's business, and revoking must not disturb any of them.
+    """
+    acct = Account(id=8811, email="stillacustomer@cmdlabs.io",
+                   subscription_status="active")
+    db.add(acct)
+    db.flush()
+    ensure_membership(db, acct)
+    workspace_id = _workspace(db, acct.id).id
+
+    grant(dry_run=False, emails=["stillacustomer@cmdlabs.io"], db=db)
+    revoke(dry_run=False, emails=["stillacustomer@cmdlabs.io"], db=db)
+
+    assert _workspace(db, acct.id).id == workspace_id
+    assert acct.default_org_id == workspace_id
+    assert plans.plan_for_account(acct) == plans.PLAN_PREMIUM, (
+        "their subscription is untouched by losing the flag")
+
+
+def test_revoking_is_idempotent(db: Session):
+    """Twice is not an error, and neither is somebody who never had it.
+
+    Both return 0 because the count is of accounts CHANGED. An operator
+    running this under pressure needs "nothing happened" to be distinguishable
+    from "it worked", in both directions.
+    """
+    acct = Account(id=8812, email="neverhadit@cmdlabs.io")
+    db.add(acct)
+    db.flush()
+
+    assert revoke(dry_run=False, emails=["neverhadit@cmdlabs.io"], db=db) == 0
+    assert acct.is_super_admin is False
+
+    grant(dry_run=False, emails=["neverhadit@cmdlabs.io"], db=db)
+    assert revoke(dry_run=False, emails=["neverhadit@cmdlabs.io"], db=db) == 1
+    assert revoke(dry_run=False, emails=["neverhadit@cmdlabs.io"], db=db) == 0
+
+
+def test_a_dry_run_revoke_writes_nothing(db: Session):
+    """The dangerous direction gets the same default as the safe one."""
+    acct = Account(id=8813, email="notyet@cmdlabs.io", is_super_admin=True)
+    db.add(acct)
+    db.flush()
+
+    revoke(dry_run=True, emails=["notyet@cmdlabs.io"], db=db)
+    assert acct.is_super_admin is True
+
+
+def test_revoking_only_touches_the_named_account(db: Session):
+    """A revoke must never widen past its --email list.
+
+    Cheap to assert and worth pinning: the failure mode is removing everyone's
+    access at once, which is exactly the kind of thing you do not discover
+    until somebody tries to open the admin surface.
+    """
+    keep = Account(id=8814, email="keepit@cmdlabs.io", is_super_admin=True)
+    lose = Account(id=8815, email="loseit@cmdlabs.io", is_super_admin=True)
+    db.add_all([keep, lose])
+    db.flush()
+
+    revoke(dry_run=False, emails=["loseit@cmdlabs.io"], db=db)
+
+    assert lose.is_super_admin is False
+    assert keep.is_super_admin is True
