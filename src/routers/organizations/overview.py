@@ -3,11 +3,11 @@ The owner's view of their own organization, on one page.
 
 WHY THIS EXISTS
 ---------------
-Platform staff have had /api/admin/organizations/{id} — every org, in full —
-since orgs shipped. An org's OWNER had no equivalent for their own org: the
-answer to "what is the state of my organization?" was spread across the members
-list, the tiers matrix, the membership page and the audit log, and nowhere did
-those four add up to one view. This is that view.
+Platform super admins have had /api/admin/organizations/{id} — every org, in
+full — since orgs shipped. An org's OWNER had no equivalent for their own org:
+the answer to "what is the state of my organization?" was spread across the
+members list, the tiers matrix, the membership page and the audit log, and
+nowhere did those four add up to one view. This is that view.
 
 A READ MODEL, AND NOTHING ELSE
 ------------------------------
@@ -19,7 +19,7 @@ before, which is why the UI deep-links out rather than growing forms.
 
 Owner only, 404 to everyone else, matching tiers.py: a member who cannot
 administer the org should not have its admin surface confirm it exists.
-Platform staff are not owners here and are not admitted either — they
+Platform super admins are not owners here and are not admitted either — they
 administer an org by setting its ceiling, not by reading the owner's console.
 """
 from datetime import datetime
@@ -87,8 +87,8 @@ class OrganizationOverviewResponse(BaseModel):
     # True during the grace window after a lapse. Derived, never stored.
     read_only: bool
     grace_ends_at: Optional[datetime] = None
-    # Null means "follows your subscription"; set means staff pinned this
-    # plan and billing cannot change it.
+    # Null means "follows your subscription"; set means super admins pinned
+    # this plan and billing cannot change it.
     pinned_plan: Optional[str] = None
     # The plan in force right now: 'free' | 'premium'.
     plan: str

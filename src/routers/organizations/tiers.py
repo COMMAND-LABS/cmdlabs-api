@@ -52,8 +52,8 @@ class UpdateTierModulesRequest(BaseModel):
 def _require_owner(org):
     """Only an owner shapes their org's tiers.
 
-    Platform staff are deliberately NOT allowed here: administering an org
-    means setting its ceiling, not reaching inside to redistribute what the
+    Platform super admins are deliberately NOT allowed here: administering an
+    org means setting its ceiling, not reaching inside to redistribute what the
     owner chose to do with it.
     """
     if not org.is_owner:

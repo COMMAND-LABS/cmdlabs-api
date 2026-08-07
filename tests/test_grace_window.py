@@ -153,7 +153,7 @@ def test_past_the_window_the_org_is_writable_again_on_free(db: Session):
 def test_a_pinned_org_is_never_made_read_only_by_billing(db: Session):
     """The comp promise, restated one level up.
 
-    Staff pinning a plan is a promise the billing path must not quietly
+    Super admins pinning a plan is a promise the billing path must not quietly
     withdraw — the same asymmetry OrganizationMember.granted_by encodes one
     level down. A pinned org has no subscription to lapse, so a cancelled card
     on the owner's account says nothing about it in either direction.

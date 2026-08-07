@@ -1,5 +1,5 @@
 """
-Make somebody platform staff.
+Make somebody a platform super admin.
 
 WHAT HAPPENED TO sync_account_roles.py
 --------------------------------------
@@ -7,29 +7,29 @@ That script existed to drag `accounts.role` back into agreement with Stripe,
 because free/premium was a CACHE of subscription_status and caches drift. Plans
 are now derived per request (config/plans_registry.plan_for_account), so there
 is nothing to reconcile and that half of the script deleted itself. What is
-left is the half that was never about billing at all: granting staff.
+left is the half that was never about billing at all: granting super admin.
 
 ONE THING NOW
 -------------
-This used to do two things: grant `is_staff` AND place the account in the
+This used to do two things: grant `is_super_admin` AND place the account in the
 platform org — because entitlement resolved from whichever org the caller was
-acting in, so staff sitting in their own workspace could browse every org and
-not open Contacts. The placement was the fix for that.
+acting in, so a super admin sitting in their own workspace could browse every
+org and not open Contacts. The placement was the fix for that.
 
-It is no longer needed. Staff bypass the module ceiling outright
+It is no longer needed. Super admins bypass the module ceiling outright
 (services/modules.effective_modules), so they work from wherever they already
-are. Granting staff is now one boolean, and the platform org is one fewer thing
+are. Granting it is now one boolean, and the platform org is one fewer thing
 that has to exist.
 
 DELIBERATELY A SCRIPT, NOT AN ENDPOINT
 --------------------------------------
-No API path grants staff. A compromised account therefore cannot escalate
-itself, and there is no "make admin" button to click by accident.
+No API path grants super admin. A compromised account therefore cannot escalate
+itself, and there is no "make super admin" button to click by accident.
 
 Usage (from the repo root):
-    python -m scripts.grant_staff --dry-run --email tad@cmdlabs.io
-    python -m scripts.grant_staff --apply --email tad@cmdlabs.io
-    python -m scripts.grant_staff --apply --email a@x.io --email b@x.io
+    python -m scripts.grant_super_admin --dry-run --email tad@cmdlabs.io
+    python -m scripts.grant_super_admin --apply --email tad@cmdlabs.io
+    python -m scripts.grant_super_admin --apply --email a@x.io --email b@x.io
 """
 import argparse
 import os
@@ -45,9 +45,9 @@ from src.db.models import Account
 
 
 def grant(dry_run: bool, emails: list[str], db=None) -> int:
-    """Grant staff to the named accounts.
+    """Grant super admin to the named accounts.
 
-    Returns the number of accounts newly granted staff.
+    Returns the number of accounts newly granted super admin.
 
     `db` lets a caller inject a session. The default opens one against
     POSTGRES_URL, which is what the CLI wants; tests pass their own so this can
@@ -70,7 +70,7 @@ def grant(dry_run: bool, emails: list[str], db=None) -> int:
             email = (account.email or "").strip().lower()
             if email in wanted:
                 unmatched.discard(email)
-                if not account.is_staff:
+                if not account.is_super_admin:
                     granted.append((account.id, email, account))
 
         for email in sorted(unmatched):
@@ -79,28 +79,28 @@ def grant(dry_run: bool, emails: list[str], db=None) -> int:
             print()
 
         if granted:
-            print(f"Staff {'would be ' if dry_run else ''}granted "
+            print(f"Super admin {'would be ' if dry_run else ''}granted "
                   f"({len(granted)}):")
             for account_id, email, _ in granted:
                 print(f"  #{account_id:<6} {email}")
             print()
         else:
-            print("No new staff grants.\n")
+            print("No new super admin grants.\n")
 
         if dry_run:
-            print(f"\n[DRY RUN] Would grant staff to {len(granted)} account(s). "
-                  f"Nothing written.")
+            print(f"\n[DRY RUN] Would grant super admin to {len(granted)} "
+                  f"account(s). Nothing written.")
             return len(granted)
 
         for _, _, account in granted:
-            account.is_staff = True
+            account.is_super_admin = True
 
-        staff_total = sum(1 for a in accounts if a.is_staff)
-        print(f"Staff accounts: {staff_total}")
+        super_admin_total = sum(1 for a in accounts if a.is_super_admin)
+        print(f"Super admin accounts: {super_admin_total}")
 
         if owns_session:
             db.commit()
-            print(f"\nDone — {len(granted)} account(s) granted staff.")
+            print(f"\nDone — {len(granted)} account(s) granted super admin.")
         else:
             db.flush()
             print(f"\nDone — {len(granted)} granted (caller commits).")
@@ -123,7 +123,7 @@ def main() -> None:
     mode.add_argument("--apply", action="store_true",
                       help="Write the changes.")
     parser.add_argument("--email", action="append", default=[],
-                        help="Grant staff to this address. Repeatable.")
+                        help="Grant super admin to this address. Repeatable.")
     args = parser.parse_args()
 
     grant(dry_run=not args.apply, emails=args.email)

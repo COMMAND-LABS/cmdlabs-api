@@ -82,8 +82,8 @@ def _record_billing_transition(db, account: Account, event_type: str) -> None:
 
     Against the ORGS rather than the account, because the org is where the
     consequence lands and where somebody investigating starts. Pinned orgs are
-    skipped for the same reason billing cannot make them read-only: staff gave
-    them a plan, so a payment says nothing about them.
+    skipped for the same reason billing cannot make them read-only: super
+    admins gave them a plan, so a payment says nothing about them.
     """
     orgs = (db.query(Organization.id)
               .filter(Organization.owner_account_id == account.id,

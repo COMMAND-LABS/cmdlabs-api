@@ -153,8 +153,8 @@ def can_access(
     It confines both arms deliberately. The grant filter stops a grant recorded
     in another org from counting; the ownership check stops the owner
     short-circuit from reaching across, which matters as soon as one account
-    belongs to two orgs (platform staff who joined a tenant, today; anyone,
-    after org switching ships). Ownership is not tenancy.
+    belongs to two orgs (platform super admins who joined a tenant, today;
+    anyone, after org switching ships). Ownership is not tenancy.
 
     Credentials are exempt by construction: they are portable identity rather
     than tenant data, so _resource_org returns None for them and the check

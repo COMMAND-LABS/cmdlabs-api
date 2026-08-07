@@ -1,9 +1,9 @@
 """
 Platform-admin router — super admin only.
 
-Administration of orgs, not access to their data. Every endpoint here is
-gated by require_super_admin, which is deliberately independent of OrgContext:
-staff would otherwise need to belong to an org to discover which orgs exist.
+Administration of orgs, not access to their data. Every endpoint here is gated
+by require_super_admin, which is deliberately independent of OrgContext: super
+admins would otherwise need to belong to an org to discover which orgs exist.
 """
 from fastapi import APIRouter
 

@@ -7,7 +7,7 @@ entirely disjoint. The single relationship in the system is the intersection
 with the org's ceiling, which is a cap rather than a hierarchy.
 
 Also pins the three events that had constants but no callers until now:
-tier.modules_change, org.ceiling_change, and staff.join.
+tier.modules_change, org.ceiling_change, and super_admin.join.
 """
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -33,8 +33,8 @@ TIERS = "/api/organizations/tiers"
 
 
 @pytest.fixture()
-def staff(db: Session, test_org: Organization):
-    a = Account(id=8800, email="ceil@cmdlabs.io", is_staff=True,
+def super_admin(db: Session, test_org: Organization):
+    a = Account(id=8800, email="ceil@cmdlabs.io", is_super_admin=True,
                 default_org_id=ROOT_ORG_ID)
     db.add(a); db.flush()
     db.add(OrganizationMember(org_id=ROOT_ORG_ID, account_id=a.id,
@@ -44,8 +44,8 @@ def staff(db: Session, test_org: Organization):
 
 
 @pytest.fixture()
-async def staff_client(_override_db, staff) -> AsyncClient:
-    token = make_token(email=staff.email, user_id=staff.id)
+async def super_admin_client(_override_db, super_admin) -> AsyncClient:
+    token = make_token(email=super_admin.email, user_id=super_admin.id)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test",
                            headers={"Authorization": f"Bearer {token}"}) as ac:
         yield ac
@@ -194,13 +194,13 @@ async def test_unchanged_tier_writes_no_audit_noise(db: Session, _override_db, a
 
 
 # ---------------------------------------------------------------------------
-# ceiling + staff join
+# ceiling + super admin join
 # ---------------------------------------------------------------------------
 
-async def test_staff_can_pin_a_plan_and_it_is_audited(
-    db: Session, _override_db, staff_client, acme
+async def test_super_admin_can_pin_a_plan_and_it_is_audited(
+    db: Session, _override_db, super_admin_client, acme
 ):
-    resp = await staff_client.put(
+    resp = await super_admin_client.put(
         f"/api/admin/organizations/{acme.org_id}/plan",
         json={"plan": "free"})
     assert resp.status_code == 200, resp.text
@@ -216,14 +216,14 @@ async def test_staff_can_pin_a_plan_and_it_is_audited(
 
 
 async def test_lowering_a_ceiling_takes_effect_immediately(
-    db: Session, _override_db, staff_client, acme
+    db: Session, _override_db, super_admin_client, acme
 ):
     """No cascade, no tier rewrite — the intersection happens at read time."""
     member = _member_of(db, acme, 8806, "member")
     async with client_for(member) as c:
         assert "contacts" in (await c.get(ENTITLEMENTS)).json()["modules"]
 
-    await staff_client.put(f"/api/admin/organizations/{acme.org_id}/plan",
+    await super_admin_client.put(f"/api/admin/organizations/{acme.org_id}/plan",
                            json={"plan": "free"})
 
     async with client_for(member) as c:
@@ -231,47 +231,49 @@ async def test_lowering_a_ceiling_takes_effect_immediately(
         assert "contacts" not in (await c.get(ENTITLEMENTS)).json()["modules"]
 
 
-async def test_non_staff_cannot_set_a_plan(db: Session, _override_db, acme):
+async def test_non_super_admin_cannot_set_a_plan(db: Session, _override_db, acme):
     async with client_for(acme) as c:
         resp = await c.put(f"/api/admin/organizations/{acme.org_id}/plan",
                            json={"plan": "premium"})
     assert resp.status_code == 404, "the admin surface does not confirm it exists"
 
 
-async def test_staff_join_is_recorded_and_visible_to_the_org(
-    db: Session, _override_db, staff_client, staff, acme
+async def test_super_admin_join_is_recorded_and_visible_to_the_org(
+    db: Session, _override_db, super_admin_client, super_admin, acme
 ):
-    """The claim customers care about: staff cannot read your data without
+    """The claim customers care about: super admins cannot read your data
+    without
     appearing in your member list."""
     before = db.query(OrganizationMember).filter(
         OrganizationMember.org_id == acme.org_id).count()
 
-    resp = await staff_client.post(f"/api/admin/organizations/{acme.org_id}/join")
+    resp = await super_admin_client.post(f"/api/admin/organizations/{acme.org_id}/join")
     assert resp.status_code == 201, resp.text
 
     after = db.query(OrganizationMember).filter(
         OrganizationMember.org_id == acme.org_id).all()
     assert len(after) == before + 1
-    joined = next(m for m in after if m.account_id == staff.id)
-    assert joined.is_owner is False, "staff join to read, not to take over"
+    joined = next(m for m in after if m.account_id == super_admin.id)
+    assert joined.is_owner is False, (
+        "super admins join to read, not to take over")
 
     ev = db.query(AccessGrantEvent).filter(
-        AccessGrantEvent.event_type == audit.STAFF_JOIN).one()
+        AccessGrantEvent.event_type == audit.SUPER_ADMIN_JOIN).one()
     assert ev.org_id == acme.org_id
     assert ev.principal_label == "ceil@cmdlabs.io"
 
 
-async def test_staff_join_is_idempotent(db: Session, _override_db, staff_client, acme):
-    await staff_client.post(f"/api/admin/organizations/{acme.org_id}/join")
-    await staff_client.post(f"/api/admin/organizations/{acme.org_id}/join")
+async def test_super_admin_join_is_idempotent(db: Session, _override_db, super_admin_client, acme):
+    await super_admin_client.post(f"/api/admin/organizations/{acme.org_id}/join")
+    await super_admin_client.post(f"/api/admin/organizations/{acme.org_id}/join")
     assert db.query(AccessGrantEvent).filter(
-        AccessGrantEvent.event_type == audit.STAFF_JOIN).count() == 1
+        AccessGrantEvent.event_type == audit.SUPER_ADMIN_JOIN).count() == 1
 
 
-async def test_staff_still_cannot_read_data_without_joining(
-    db: Session, _override_db, staff_client, staff, acme
+async def test_super_admin_still_cannot_read_data_without_joining(
+    db: Session, _override_db, super_admin_client, super_admin, acme
 ):
-    """Staff bypass MODULES, never org_id.
+    """Super admins bypass MODULES, never org_id.
 
     Before joining, the org's rows are simply not reachable — there is no
     filter bypass anywhere in the system.
@@ -281,29 +283,30 @@ async def test_staff_still_cannot_read_data_without_joining(
                   first_name="Private", last_name="X", email="p@ent.test")
     db.add(row); db.flush()
 
-    resp = await staff_client.get("/api/contacts/")
+    resp = await super_admin_client.get("/api/contacts/")
     assert resp.status_code == 200
     assert row.id not in {c["id"] for c in resp.json()["contacts"]}
 
 
-def test_staff_are_never_the_last_to_open_a_new_module(db: Session, test_org):
-    """A plan can be narrower than the registry; staff must not be.
+def test_super_admin_are_never_the_last_to_open_a_new_module(db: Session, test_org):
+    """A plan can be narrower than the registry; super admins must not be.
 
     Two module keys are in no plan at all (membership, organization), and any
     new one starts that way until it is added — which is how `courses` and
-    `spaces` both once shipped invisible to staff. Fixed by removing the cap
-    for staff rather than by keeping something in step with the registry.
+    `spaces` both once shipped invisible to super admins. Fixed by removing the
+    cap for super admins rather than by keeping something in step with the
+    registry.
     """
     narrow = Organization(name="Stale", pinned_plan=plans.PLAN_FREE)
     db.add(narrow)
     db.flush()
 
-    staff = OrgContext(account_id=1, org_id=narrow.id, tier_key="owner", is_owner=True, is_super_admin=True)
-    assert modules.effective_modules(db, staff) == list(MODULE_KEYS)
+    super_admin = OrgContext(account_id=1, org_id=narrow.id, tier_key="owner", is_owner=True, is_super_admin=True)
+    assert modules.effective_modules(db, super_admin) == list(MODULE_KEYS)
 
 
 def test_a_tenant_ceiling_is_still_exactly_its_plan(db: Session):
-    """The staff rule must not leak into anybody else's org.
+    """The super admin rule must not leak into anybody else's org.
 
     If this ever equals the full registry, the bypass above has stopped being
     special and every tenant has silently been given everything.
@@ -319,7 +322,7 @@ def test_a_tenant_ceiling_is_still_exactly_its_plan(db: Session):
     assert len(modules.ceiling_for(db, tenant.org_id)) < len(MODULE_KEYS)
 
 
-def test_a_non_staff_member_of_the_platform_org_is_still_capped_by_their_tier(
+def test_a_non_super_admin_member_of_the_platform_org_is_still_capped_by_their_tier(
     db: Session, test_org,
 ):
     """The safety argument for the rule above, asserted rather than assumed.

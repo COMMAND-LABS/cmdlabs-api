@@ -6,11 +6,11 @@ from pydantic import BaseModel
 
 
 class OrganizationSummary(BaseModel):
-    """One org, as platform staff sees it in the org list.
+    """One org, as a platform super admin sees it in the org list.
 
     Deliberately contains NO tenant data — counts and configuration only.
-    Staff administer orgs from here; reading an org's contacts still requires
-    joining it.
+    Super admins administer orgs from here; reading an org's contacts still
+    requires joining it.
     """
     id: int
     # None for a personal workspace, which has no public page.
@@ -19,8 +19,8 @@ class OrganizationSummary(BaseModel):
     is_personal: bool
     # 'active' | 'grace' | 'lapsed' — the owner's billing, derived per request.
     billing_state: str
-    # Null means "follows the owner's subscription". Set means staff pinned a
-    # plan and no webhook may change it — the comp.
+    # Null means "follows the owner's subscription". Set means super admins
+    # pinned a plan and no webhook may change it — the comp.
     pinned_plan: str | None
     owner_account_id: Optional[int] = None
     owner_email: Optional[str] = None

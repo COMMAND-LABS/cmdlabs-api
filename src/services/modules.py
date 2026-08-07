@@ -1,13 +1,12 @@
 """
 Module entitlement: which screens a caller may open.
 
-    effective = org.granted_modules  ∩  tier.modules
+    effective = org.ceiling  ∩  tier.modules
 
 Two levels, and only two:
 
-  - the CEILING (organizations.granted_modules) — what platform staff allow
-    this org to use at all. Bespoke per org; there is no plan table and no
-    shared template.
+  - the CEILING — the plan this org may use at all, either pinned by a super
+    admin (organizations.pinned_plan) or derived from the owner's subscription.
   - the TIER (organization_tiers.modules) — how the org owner distributes a
     subset of that ceiling among their own tiers.
 
@@ -61,8 +60,8 @@ def org_entitlement(db: Session, org_id: int,
                     now: datetime | None = None) -> OrgEntitlement:
     """What this org may use, and whether it may write.
 
-    A CEILING IS ALWAYS A PLAN — either one pinned by staff, or the one the
-    owner is paying for. Nothing is stored except which of those two it is.
+    A CEILING IS ALWAYS A PLAN — either one pinned by super admins, or the one
+    the owner is paying for. Nothing is stored except which of those two it is.
 
     This used to store the answer instead of the question: a `granted_modules`
     list, plus a `ceiling_managed_by` flag saying whether billing was allowed
@@ -72,10 +71,10 @@ def org_entitlement(db: Session, org_id: int,
     reached it, and all three comped orgs on the platform quietly lost
     `courses` and `spaces` without anyone touching them.
 
-    A PIN IS NEVER RECOMPUTED DOWNWARD, AND NEVER GOES READ-ONLY. Staff giving
-    a client a plan is a promise, and this function must not withdraw it — the
-    same asymmetry OrganizationMember.granted_by encodes one level down. A
-    pinned org has no subscription to lapse, so billing has nothing to say
+    A PIN IS NEVER RECOMPUTED DOWNWARD, AND NEVER GOES READ-ONLY. A super
+    admin giving a client a plan is a promise this function must not withdraw
+    — the same asymmetry OrganizationMember.granted_by encodes one level down.
+    A pinned org has no subscription to lapse, so billing has nothing to say
     about it in either direction.
     """
     row = (db.query(Organization.pinned_plan, Organization.owner_account_id)
@@ -141,20 +140,20 @@ def effective_modules(db: Session, ctx) -> list:
     down, one bad save in the matrix would lock them out of the very screen
     that undoes it.
 
-    PLATFORM STAFF bypass both layers and get every module that exists.
+    PLATFORM SUPER ADMINS bypass both layers and get every module that exists.
 
-    That is wider than it was — staff used to be capped by the ceiling of the
-    org they were acting in — and the reason is that the cap never did any
-    work. It only meant staff had to be sitting in an org whose ceiling
-    happened to be full, which is the entire job the platform org existed to
-    do. Removing the cap removes the need for a special org.
+    That is wider than it was — super admins used to be capped by the ceiling
+    of the org they were acting in — and the reason is that the cap never did
+    any work. It only meant super admins had to be sitting in an org whose
+    ceiling happened to be full, which is the entire job the platform org
+    existed to do. Removing the cap removes the need for a special org.
 
     Safe because of the axis this file is about: modules decide which SCREENS
-    open, org_id decides which ROWS are visible. Staff reading a tenant's data
-    still requires JOINING that tenant, which leaves a membership row its
-    members can see and a staff.join entry naming who and when. The widest this
-    goes is staff opening a screen for an org that never bought that module,
-    where they find that org's own (empty) rows.
+    open, org_id decides which ROWS are visible. Super admins reading a
+    tenant's data still requires JOINING that tenant, which leaves a membership
+    row its members can see and a super_admin.join entry naming who and when.
+    The widest this goes is super admins opening a screen for an org that never
+    bought that module, where they find that org's own (empty) rows.
     """
     if getattr(ctx, "is_super_admin", False):
         return list(MODULE_KEYS)

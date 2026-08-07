@@ -29,7 +29,7 @@ async def get_account(
             email=account.email,
             newsletter_subscribed=account.newsletter_subscribed,
             stripe_customer_id=account.stripe_customer_id,
-            is_staff=account.is_staff,
+            is_super_admin=account.is_super_admin,
             subscription_status=account.subscription_status,
             subscription_active=account.has_active_subscription
         )

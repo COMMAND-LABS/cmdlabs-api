@@ -71,8 +71,9 @@ def tenant_predicate(model, ctx):
     """Rows of `model` that `ctx` may see. One clause, no exceptions.
 
     org_id must match. That is the entire tenancy rule — not for owners, not
-    for platform staff, not for any resource type. Staff read another org's
-    data by joining it, which leaves a membership row that org can see.
+    for platform super admins, not for any resource type. Super admins read
+    another org's data by joining it, which leaves a membership row that org
+    can see.
 
     This used to carry a second clause: inside a 'personal' org a member saw
     only rows they created. That existed because the root org held every signup

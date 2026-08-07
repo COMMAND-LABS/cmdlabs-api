@@ -9,9 +9,10 @@ import uuid
 
 # An account is one of two things, and they are stored differently on purpose:
 #
-#   STAFF     accounts.is_staff — granted out of band, never by an API path
-#   PAYING    derived per request from subscription_status, stored nowhere
-#             (config/plans_registry.plan_for_account → 'free' | 'premium')
+#   SUPER ADMIN  accounts.is_super_admin — granted out of band by
+#                scripts/grant_super_admin.py, never by an API path
+#   PAYING       derived per request from subscription_status, stored nowhere
+#                (config/plans_registry.plan_for_account → 'free' | 'premium')
 #
 # There used to be a single `role` column holding admin/premium/free. Two of
 # those three values were a cache of Stripe, and a cache with no invalidation
@@ -43,17 +44,17 @@ class Account(Base):
     reset_token = Column(String)
     stripe_customer_id = Column(String, nullable=True)
     newsletter_subscribed = Column(Boolean, default=False, nullable=False)
-    # Platform staff. Granted out of band by scripts/grant_staff.py —
-    # no API path sets it, so a compromised account cannot escalate itself and
-    # there is no "make admin" button to click by accident.
+    # Platform super admin. Granted out of band by scripts/grant_super_admin.py
+    # — no API path sets it, so a compromised account cannot escalate itself and
+    # there is no "make super admin" button to click by accident.
     #
     # This replaced a `role` column that also carried 'premium'/'free'. Those
     # were a CACHE of subscription_status, which is the fact; keeping both meant
     # keeping them in agreement, which is what role_for_subscription() and a
     # reconciliation script existed to do. Paid-ness is now derived per request
     # (config/plans_registry.plan_for_account) and stored nowhere.
-    is_staff = Column(Boolean, nullable=False, default=False,
-                      server_default=text('false'), index=True)
+    is_super_admin = Column(Boolean, nullable=False, default=False,
+                            server_default=text('false'), index=True)
     # Subscription state, owned entirely by the Stripe webhook — nothing else
     # writes these. Entitlement is read from subscription_status, never from
     # "the customer has a payment method attached".
@@ -135,12 +136,12 @@ class Organization(Base):
 
     NO SLUG, AND NO SPECIAL ORG. Organizations used to carry an immutable
     public `slug`, and the one whose slug was 'root' was the platform's own —
-    the home of catalog content and the org staff had to be placed in to work.
-    Both jobs are gone: staff bypass the module ceiling wherever they are, and
-    publishing became a Space. An id identifies an org in every route, so the
-    slug was a permanent public name carrying squatting and link-stability
-    consequences that nothing needed. Cheap to reintroduce; impossible to
-    withdraw once links point at it.
+    the home of catalog content and the org super admins had to be placed in to
+    work. Both jobs are gone: super admins bypass the module ceiling wherever
+    they are, and publishing became a Space. An id identifies an org in every
+    route, so the slug was a permanent public name carrying squatting and
+    link-stability consequences that nothing needed. Cheap to reintroduce;
+    impossible to withdraw once links point at it.
 
     THE CEILING IS ALWAYS A PLAN, and `pinned_plan` is the only thing stored
     about it. Which modules this org may use at all is
@@ -161,7 +162,7 @@ class Organization(Base):
     # case — means "follow the owner's subscription".
     #
     # This is the comp, and it is the whole of it. The same asymmetry
-    # OrganizationMember.granted_by encodes one level down: staff giving
+    # OrganizationMember.granted_by encodes one level down: super admins giving
     # somebody access is a promise, and no webhook may quietly withdraw it.
     #
     # A PLAN, NOT A LIST OF MODULES. It used to be a frozen `granted_modules`
@@ -642,9 +643,9 @@ class Course(Base):
 
         'org'      this container's course. Its members open it.
         'catalog'  platform courseware, visible to EVERY org and gated by
-                   required_plan rather than by membership. Only staff may set
-                   it (routers/courses._assert_may_publish), which is what
-                   makes the arm one-directional.
+                   required_plan rather than by membership. Only super admins
+                   may set it (routers/courses._assert_may_publish), which is
+                   what makes the arm one-directional.
     """
     __tablename__ = 'courses'
 
@@ -831,7 +832,7 @@ class AccessGrantEvent(Base):
     org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
                     nullable=True, index=True)
     # See services/audit.py for the vocabulary. Widened well past resource
-    # grants: membership, tier, ceiling, publishing and staff-join events all
+    # grants: membership, tier, ceiling, publishing and super-admin-join events all
     # land here, so there is ONE chronological answer to "what happened in this
     # org, and who did it".
     event_type = Column(String(40), nullable=False, index=True)
@@ -872,7 +873,7 @@ class AccessGrantEvent(Base):
             "'org.rename',"
             "'tier.modules_change',"
             "'catalog.publish','catalog.unpublish','catalog.grant','catalog.revoke',"
-            "'staff.join',"
+            "'super_admin.join',"
             "'space.create','space.archive',"
             "'space.member_add','space.member_remove',"
             "'space.request','space.request_approve','space.request_deny',"

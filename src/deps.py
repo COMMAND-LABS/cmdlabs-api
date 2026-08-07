@@ -198,9 +198,9 @@ class OrgContext:
     misconfigured tier is a wrong menu rather than a data leak.
 
     `is_super_admin` bypasses MODULE gating only. It never bypasses org_id —
-    platform staff read an org's data by joining it, which leaves a membership
-    row anyone in that org can see. An invisible read bypass would make the
-    audit log meaningless and would give every query two behaviors.
+    platform super admins read an org's data by joining it, which leaves a
+    membership row anyone in that org can see. An invisible read bypass would
+    make the audit log meaningless and would give every query two behaviors.
 
     """
     account_id: int
@@ -300,7 +300,7 @@ async def get_org_context(
         org_id=org.id,
         tier_key=member.tier_key,
         is_owner=member.is_owner,
-        is_super_admin=account.is_staff,
+        is_super_admin=account.is_super_admin,
         read_only=entitlement.read_only,
         grace_ends_at=entitlement.grace_ends_at,
         plan=plans.plan_for_account(account),
@@ -385,12 +385,13 @@ async def require_super_admin(
     db: Session = Depends(get_db),
     auth: dict = Depends(get_current_user_or_api_key),
 ) -> Account:
-    """Platform staff only. Granted out of band via scripts/grant_staff.py.
+    """Platform super admins only. Granted out of band via
+    scripts/grant_super_admin.py.
 
     Deliberately NOT built on OrgContext: administering the platform is not an
     action inside any one org, so requiring an active-org membership would be
-    both wrong and circular (staff would need to belong to an org to discover
-    which orgs exist).
+    both wrong and circular (super admins would need to belong to an org to
+    discover which orgs exist).
 
     What this permits is administration — listing orgs, setting a module
     ceiling, suspending. It does NOT grant access to any org's DATA. Reading
@@ -399,9 +400,9 @@ async def require_super_admin(
     `org_id == ctx.org_id` hold with zero exceptions.
     """
     account = ensure_account(db, account_id_from_claims(auth))
-    if not account.is_staff:
+    if not account.is_super_admin:
         # 404 rather than 403: the admin surface should not confirm its own
-        # existence to a non-staff caller.
+        # existence to a non-super-admin caller.
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Not found",

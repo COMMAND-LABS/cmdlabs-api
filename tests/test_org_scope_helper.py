@@ -109,10 +109,10 @@ def test_owner_does_not_see_other_orgs(db: Session):
 
 
 def test_super_admin_does_not_see_other_orgs(db: Session):
-    """Staff bypass MODULES, never org_id.
+    """Super admins bypass MODULES, never org_id.
 
-    If this ever fails, the audit trail is a lie: staff would be able to read
-    any tenant's data without leaving a membership row behind.
+    If this ever fails, the audit trail is a lie: super admins would be able to
+    read any tenant's data without leaving a membership row behind.
     """
     a = make_tenant(db, slug="sa-a", account_id=6009, data_scope="shared")
     b = make_tenant(db, slug="sa-b", account_id=6010, data_scope="shared")

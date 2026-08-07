@@ -53,10 +53,11 @@ CATALOG_UNPUBLISH = "catalog.unpublish"
 CATALOG_GRANT = "catalog.grant"
 CATALOG_REVOKE = "catalog.revoke"
 
-# Platform staff joining a tenant in order to read its data. This is what makes
-# "our staff cannot read your data without appearing in your member list" a
-# claim a customer can check rather than one they have to take on trust.
-STAFF_JOIN = "staff.join"
+# Platform super admins joining a tenant in order to read its data. This is
+# what makes "our super admins cannot read your data without appearing in your
+# member list" a claim a customer can check rather than one they have to take
+# on trust.
+SUPER_ADMIN_JOIN = "super_admin.join"
 
 # Spaces — the second container. Every door into a space writes one of these,
 # so "who can see this space's content, and how did they get in?" is one query

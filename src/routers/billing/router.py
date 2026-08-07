@@ -3,8 +3,9 @@ Billing router — Stripe Checkout, the billing portal, and the Stripe webhook.
 
 Subscription state lives on Account (stripe_subscription_id,
 subscription_status, subscription_current_period_end) and is written only by
-the webhook. accounts.is_staff is untouched by billing: staff decides which dashboard
-you get, the subscription decides whether the paid modules are unlocked.
+the webhook. accounts.is_super_admin is untouched by billing: being a super
+admin decides which dashboard you get, the subscription decides whether the
+paid modules are unlocked.
 """
 from fastapi import APIRouter
 

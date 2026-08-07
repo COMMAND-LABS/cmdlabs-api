@@ -128,7 +128,7 @@ async def test_removal_bites_on_the_very_next_request(
 
 async def test_the_last_owner_cannot_be_removed(db: Session, _override_db, team):
     """An org with no owner has nobody who can invite, set tiers, or hand it
-    over — it would need staff to become usable again."""
+    over — it would need a super admin to become usable again."""
     async with client_for(team) as c:
         resp = await c.delete(f"{MEMBERS}/{team.account_id}")
     assert resp.status_code == 409
@@ -191,22 +191,22 @@ async def test_the_switcher_reflects_a_new_membership(
 # ---------------------------------------------------------------------------
 
 @pytest.fixture()
-def staff_client_and_org(db: Session):
-    staff = Account(id=9700, email="staff2@cmdlabs.io", is_staff=True,
+def super_admin_client_and_org(db: Session):
+    super_admin = Account(id=9700, email="superadmin2@cmdlabs.io", is_super_admin=True,
                     default_org_id=ROOT_ORG_ID)
-    db.add(staff); db.flush()
-    db.add(OrganizationMember(org_id=ROOT_ORG_ID, account_id=staff.id,
+    db.add(super_admin); db.flush()
+    db.add(OrganizationMember(org_id=ROOT_ORG_ID, account_id=super_admin.id,
                               tier_key="org_owner", granted_by="grant",
                               is_owner=True))
     db.flush()
-    return staff
+    return super_admin
 
 
 async def test_admin_browser_carries_no_tenant_data(
-    db: Session, _override_db, staff_client_and_org
+    db: Session, _override_db, super_admin_client_and_org
 ):
-    """Administration, not read access. Staff reach an org's rows by JOINING
-    it, which leaves a membership row its members can see."""
+    """Administration, not read access. Super admins reach an org's rows by
+    JOINING it, which leaves a membership row its members can see."""
     from httpx import ASGITransport, AsyncClient
     from src.main import app
 
@@ -216,8 +216,8 @@ async def test_admin_browser_carries_no_tenant_data(
                    email="secret@nodata.test"))
     db.flush()
 
-    token = make_token(email=staff_client_and_org.email,
-                       user_id=staff_client_and_org.id)
+    token = make_token(email=super_admin_client_and_org.email,
+                       user_id=super_admin_client_and_org.id)
     async with AsyncClient(transport=ASGITransport(app=app),
                            base_url="http://test",
                            headers={"Authorization": f"Bearer {token}"}) as c:
@@ -227,7 +227,7 @@ async def test_admin_browser_carries_no_tenant_data(
     assert "Secret" not in body
 
 
-async def test_a_non_staff_account_cannot_reach_the_browsers(
+async def test_a_non_super_admin_account_cannot_reach_the_browsers(
     db: Session, _override_db, team
 ):
     async with client_for(team) as c:

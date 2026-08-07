@@ -23,7 +23,7 @@ COURSES = "/api/courses"
 
 
 def _catalog_course(db, key, plan, title=None):
-    """A platform-published course, as staff would create it."""
+    """A platform-published course, as super admins would create it."""
     course = Course(org_id=ROOT_ORG_ID, course_key=key,
                     title=title or key.replace("-", " ").title(),
                     visibility="catalog", required_plan=plan, sort_order=0)
@@ -71,8 +71,8 @@ def test_a_plan_is_read_from_the_subscription_every_time(db: Session):
     account.subscription_status = "canceled"
     assert plans.plan_for_account(account) == plans.PLAN_FREE
 
-    # Staff is a separate column and billing never touches it.
-    account.is_staff = True
+    # Super admin is a separate column and billing never touches it.
+    account.is_super_admin = True
     assert plans.plan_for_account(account) == plans.PLAN_FREE
 
 
@@ -167,17 +167,17 @@ async def test_being_in_the_platform_org_is_not_enough(db: Session,
     An org check alone would let any of those accounts publish courseware into
     every tenant — the same two-condition rule catalog.assert_publishable uses.
     """
-    # A member of the platform org who is an OWNER there but is not staff —
-    # the case an org-only check would wave through.
+    # A member of the platform org who is an OWNER there but is not a super
+    # admin — the case an org-only check would wave through.
     signup = make_tenant(db, slug="root", account_id=9804, tier_key="owner",
                          is_owner=True)
     async with client_for(signup) as c:
         resp = await c.post(f"{COURSES}/", json={
-            "course_key": "not-staff", "title": "X", "visibility": "catalog"})
+            "course_key": "not-super-admin", "title": "X", "visibility": "catalog"})
     assert resp.status_code == 404
 
 
-async def test_a_non_staff_owner_cannot_edit_a_published_course(
+async def test_a_non_super_admin_owner_cannot_edit_a_published_course(
     db: Session, _override_db, free_user,
 ):
     """The guard covers the update path too, not only create."""

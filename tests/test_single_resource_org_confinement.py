@@ -12,10 +12,11 @@ Two arms had to be closed, and only one of them is about grants:
      before looking at any org at all.
 
 Arm 2 is the subtle one. Ownership is not tenancy. It bites as soon as one
-account belongs to two orgs — platform staff who joined a tenant to support it,
-today; anyone at all once org switching ships — because such an account would
-reach its resources in either org whatever org it was currently acting in, and
-the whole point of the active org is that it decides what you see.
+account belongs to two orgs — platform super admins who joined a tenant to
+support it, today; anyone at all once org switching ships — because such an
+account would reach its resources in either org whatever org it was currently
+acting in, and the whole point of the active org is that it decides what you
+see.
 
 Credentials are deliberately exempt: they are portable identity rather than
 tenant data, so services.access._resource_org returns None for them and the
@@ -30,7 +31,7 @@ from tests.org_isolation import client_for, make_tenant
 
 
 def _join(db: Session, account_id: int, org: Organization, tier_key: str):
-    """Put an existing account into a second org, as staff support would."""
+    """Put an existing account into a second org, as super admins would."""
     if not (db.query(OrganizationTier)
               .filter(OrganizationTier.org_id == org.id,
                       OrganizationTier.tier_key == tier_key).first()):

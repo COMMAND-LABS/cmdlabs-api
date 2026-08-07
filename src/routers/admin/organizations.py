@@ -1,8 +1,8 @@
 """
 Platform administration of an organization: its plan, and joining it.
 
-Both are super-admin only, and both are audited — these are the two staff
-powers a customer would most want a record of.
+Both are super-admin only, and both are audited — these are the two super
+admin powers a customer would most want a record of.
 """
 from typing import List
 
@@ -48,7 +48,7 @@ async def set_plan(
     org_id: int,
     body: SetPlanRequest,
     db: db_dependency,
-    staff: super_admin_dependency,
+    super_admin: super_admin_dependency,
     request: Request,
 ):
     """Pin an org to a plan, or release it back to following its subscription.
@@ -94,7 +94,7 @@ async def set_plan(
                 detail=(f"pinned to the {org.pinned_plan} plan"
                         if org.pinned_plan
                         else "released — follows the owner's subscription"),
-                actor_account_id=staff.id,
+                actor_account_id=super_admin.id,
             )
         db.commit()
 
@@ -115,20 +115,20 @@ async def set_plan(
 async def join_organization(
     org_id: int,
     db: db_dependency,
-    staff: super_admin_dependency,
+    super_admin: super_admin_dependency,
     request: Request,
 ):
     """Join an organization in order to read its data.
 
-    This is the ONLY way platform staff reach a tenant's rows. There is no
-    filter bypass anywhere: org_id holds with zero exceptions, so staff who
-    need to see a customer's contacts become a visible member of that customer's
-    organization.
+    This is the ONLY way platform super admins reach a tenant's rows. There is
+    no filter bypass anywhere: org_id holds with zero exceptions, so super
+    admins who need to see a customer's contacts become a visible member of
+    that customer's organization.
 
     That is a deliberate trade. Invisible access would be more convenient and
     would make the audit log a lie — a customer could not tell whether anyone
     had looked. Joining leaves two marks: a row in their member list, and a
-    staff.join entry naming who and when.
+    super_admin.join entry naming who and when.
     """
     try:
         org = db.query(Organization).filter(Organization.id == org_id).first()
@@ -138,32 +138,32 @@ async def join_organization(
 
         existing = (db.query(OrganizationMember)
                       .filter(OrganizationMember.org_id == org_id,
-                              OrganizationMember.account_id == staff.id).first())
+                              OrganizationMember.account_id == super_admin.id).first())
         if existing:
             return JoinResponse(org_id=org.id, org_name=org.name,
-                                account_id=staff.id, tier_key=existing.tier_key)
+                                account_id=super_admin.id, tier_key=existing.tier_key)
 
         member = OrganizationMember(
             org_id=org.id,
-            account_id=staff.id,
+            account_id=super_admin.id,
             tier_key=TIER_ORG_OWNER,
             granted_by=GRANTED_BY_GRANT,
-            # NOT an owner of the customer's org — staff join to read, not to
-            # take over. Ownership stays with the customer.
+            # NOT an owner of the customer's org — super admin join to read,
+            # not to take over. Ownership stays with the customer.
             is_owner=False,
         )
         db.add(member)
         audit.record_membership(
-            db, event_type=audit.STAFF_JOIN, org_id=org.id,
-            account_id=staff.id, tier_key=TIER_ORG_OWNER,
-            actor_account_id=staff.id,
+            db, event_type=audit.SUPER_ADMIN_JOIN, org_id=org.id,
+            account_id=super_admin.id, tier_key=TIER_ORG_OWNER,
+            actor_account_id=super_admin.id,
         )
         db.commit()
         db.refresh(member)
 
         return JoinResponse(org_id=org.id, org_name=org.name,
-                            account_id=staff.id, tier_key=member.tier_key)
+                            account_id=super_admin.id, tier_key=member.tier_key)
     except HTTPException:
         raise
     except Exception as e:
-        raise handle_db_error(e, "[STAFF JOIN ORG]")
+        raise handle_db_error(e, "[SUPER ADMIN JOIN ORG]")

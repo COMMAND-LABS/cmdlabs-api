@@ -387,7 +387,7 @@ async def remove_member(
 
         # The last owner cannot be removed, including by themselves. An org
         # with no owner has nobody who can invite, set tiers, or hand it over —
-        # it would need staff intervention to become usable again.
+        # it would need super admin intervention to become usable again.
         if member.is_owner and _owner_count(db, org.org_id) <= 1:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,

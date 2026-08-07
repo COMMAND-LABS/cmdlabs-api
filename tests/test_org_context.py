@@ -146,24 +146,24 @@ async def test_account_with_no_membership_is_refused(db, test_org):
 
 
 async def test_super_admin_does_not_bypass_org_membership(db, test_org, other_org):
-    """Staff bypass MODULES, never org_id.
+    """Super admins bypass MODULES, never org_id.
 
     Reading another org's data requires joining it, which leaves a membership
     row that org can see. An invisible bypass would make the audit log a lie.
     """
-    staff = Account(id=500, email="staff@cmdlabs.io", is_staff=True,
+    super_admin = Account(id=500, email="superadmin@cmdlabs.io", is_super_admin=True,
                     default_org_id=test_org.id)
-    db.add(staff)
+    db.add(super_admin)
     db.flush()
     db.add(OrganizationMember(
-        org_id=test_org.id, account_id=staff.id,
+        org_id=test_org.id, account_id=super_admin.id,
         tier_key="org_owner", granted_by="grant", is_owner=True,
     ))
     db.flush()
 
-    ctx = await _resolve(db, staff.id)
+    ctx = await _resolve(db, super_admin.id)
     assert ctx.is_super_admin is True
 
     with pytest.raises(HTTPException) as exc:
-        await _resolve(db, staff.id, {ORG_COOKIE_NAME: str(other_org.id)})
+        await _resolve(db, super_admin.id, {ORG_COOKIE_NAME: str(other_org.id)})
     assert exc.value.status_code == 403

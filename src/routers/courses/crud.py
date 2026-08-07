@@ -29,9 +29,9 @@ people is what the second container is for: put the course in a space and
 invite exactly those people. That is one mechanism doing the job of two, and it
 is the one that already works across orgs.
 
-The catalog arm is one-directional by construction — only STAFF may mark a
-course 'catalog' (_assert_may_publish), so it can only ever add OUR content to
-a tenant's view, never another tenant's rows.
+The catalog arm is one-directional by construction — only SUPER ADMINS may
+mark a course 'catalog' (_assert_may_publish), so it can only ever add OUR
+content to a tenant's view, never another tenant's rows.
 
 PLANS
 -----
@@ -157,13 +157,14 @@ def _require_owner(org):
 
 
 def _assert_may_publish(db, org, visibility: Optional[str]) -> None:
-    """Only platform STAFF may publish a course to every org.
+    """Only platform SUPER ADMINS may publish a course to every org.
 
     One condition now, where there used to be two. The second was "and it must
     live in the platform org", which existed because root held the public
     signups as well as the platform's content — so org membership alone could
-    not tell staff content from a stranger's. Every account has owned its own
-    org since e3f4a5b6c7d8, so `is_staff` carries the whole check.
+    not tell super admins' content from a stranger's. Every account has owned
+    its own org since e3f4a5b6c7d8, so `is_super_admin` carries the whole
+    check.
 
     404 rather than 403: an org owner poking at `visibility: 'catalog'` learns
     nothing about whether such a thing exists.
@@ -241,10 +242,9 @@ def _catalog_arm(db):
     """Platform courseware, published once and visible to every org.
 
     Identified by the visibility alone. It used to also require the row to sit
-    in the platform org; the write path is what makes that safe (only staff may
-    set 'catalog'), and asking the read path to re-derive it through an org
-    lookup added a query and a special row without adding a check.
-    """
+    in the platform org; the write path is what makes that safe (only super
+    admins may set 'catalog'), and asking the read path to re-derive it through
+    an org lookup added a query and a special row without adding a check. """
     return Course.visibility == "catalog"
 
 

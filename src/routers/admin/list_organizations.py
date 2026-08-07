@@ -3,7 +3,7 @@ List every organization on the platform. Super admin only.
 
 This is the administrative view: which orgs exist, how big they are, what
 module ceiling each has, and where each one's billing stands. It returns no
-tenant data — staff read an org's contacts by joining that org, which is
+tenant data — super admins read an org's contacts by joining that org, which is
 visible to its members.
 """
 from fastapi import APIRouter, HTTPException, Request
@@ -24,7 +24,7 @@ router = APIRouter()
 @limiter.limit("30/minute")
 async def list_organizations(
     db: db_dependency,
-    staff: super_admin_dependency,
+    super_admin: super_admin_dependency,
     request: Request,
 ):
     try:
@@ -52,7 +52,8 @@ async def list_organizations(
         owner_ids = [o.owner_account_id for o in orgs if o.owner_account_id]
         # One query for every owner, not one per org. Billing state is derived
         # per org below from these two columns; asking the database again for
-        # each row would turn a staff page into a few hundred round trips.
+        # each row would turn a super admin page into a few hundred round
+        # trips.
         owners = (
             db.query(Account.id, Account.email, Account.subscription_status,
                      Account.subscription_lapsed_at)
@@ -62,7 +63,8 @@ async def list_organizations(
         owner_billing = {oid: (st, lapsed) for oid, _, st, lapsed in owners}
 
         def _state(org) -> str:
-            """Pinned orgs are always 'active': staff gave them a plan, so a
+            """Pinned orgs are always 'active': super admins gave them a plan,
+            so a
             payment says nothing about them in either direction."""
             if org.pinned_plan is not None:
                 return plans.BILLING_ACTIVE

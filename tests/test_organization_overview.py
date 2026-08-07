@@ -2,9 +2,9 @@
 The owner's console for their own organization.
 
 The overview composes information from four existing surfaces, so the rule that
-matters is that composing it did not widen who may read it — a member of the org
-sees the same 404 the tiers matrix gives them, and so does platform staff acting
-inside somebody else's org.
+matters is that composing it did not widen who may read it — a member of the
+org sees the same 404 the tiers matrix gives them, and so does platform super
+admins acting inside somebody else's org.
 
 Organizations no longer have slugs, so the naming flow and its availability
 check are gone with them: an id identifies an org everywhere, and the display
@@ -54,21 +54,21 @@ async def test_a_member_gets_the_same_404_as_the_tiers_matrix(
     assert resp.status_code == 404
 
 
-async def test_platform_staff_do_not_get_the_owners_console(
+async def test_platform_super_admin_do_not_get_the_owners_console(
     db: Session, _override_db, team,
 ):
-    """Staff administer an org by setting its ceiling, not from inside it.
+    """Super admins administer an org by setting its ceiling, not from inside.
 
-    The admin surface (/api/admin/organizations/{id}) is where staff look, and
-    it is deliberately configuration rather than the owner's view.
+    The admin surface (/api/admin/organizations/{id}) is where super admins
+    look, and it is deliberately configuration rather than the owner's view.
     """
-    staff = make_tenant(db, slug="overview-co", account_id=9704,
+    super_admin = make_tenant(db, slug="overview-co", account_id=9704,
                         tier_key="member", is_owner=False)
-    account = db.query(Account).filter(Account.id == staff.account_id).one()
-    account.is_staff = True
+    account = db.query(Account).filter(Account.id == super_admin.account_id).one()
+    account.is_super_admin = True
     db.flush()
 
-    async with client_for(staff) as c:
+    async with client_for(super_admin) as c:
         resp = await c.get(OVERVIEW)
     assert resp.status_code == 404
 

@@ -3,16 +3,17 @@ Platform-admin browsers: an org's members, and the spaces it is answerable for.
 
 ADMINISTER IS NOT READ, AND THIS FILE IS WHERE THAT LINE SITS
 ------------------------------------------------------------
-Staff can see WHO is in an org and WHICH spaces it owns, without joining. That
-is access metadata — the answer to "who can reach our data?" — and staff need
-it to support a customer, audit a complaint, or work out why somebody cannot
-open a screen.
+Super admins can see WHO is in an org and WHICH spaces it owns, without
+joining. That is access metadata — the answer to "who can reach our data?" —
+and super admins need it to support a customer, audit a complaint, or work out
+why somebody cannot open a screen.
 
-Staff cannot see the org's DATA from here: not a contact, not a deal, not the
-contents of a knowledge base. Reading those still means joining the org, which
-writes a staff.join audit event and puts staff in the customer's own member
-list. That is what makes the sentence checkable rather than promised: "our
-staff cannot read your data without appearing in your member list."
+Super admins cannot see the org's DATA from here: not a contact, not a deal,
+not the contents of a knowledge base. Reading those still means joining the
+org, which writes a super_admin.join audit event and puts super admins in the
+customer's own member list. That is what makes the sentence checkable rather
+than promised: "our super admins cannot read your data without appearing in
+your member list."
 
 So the rule for anything added to this file: names, counts, roles and
 timestamps are fine; a row from a tenant table is not. The response models
@@ -62,8 +63,8 @@ class AdminSpaceMember(BaseModel):
     is_owner: bool
     # False when this member is not in the org that owns the space. NOT an
     # anomaly — it is the normal case and the reason spaces exist. Surfaced so
-    # staff reading "who can reach this content" can see at a glance that the
-    # answer deliberately runs past the org's own member list.
+    # super admins reading "who can reach this content" can see at a glance
+    # that the answer deliberately runs past the org's own member list.
     in_org: bool
 
 
@@ -144,13 +145,13 @@ def _org_or_404(db, org_id: int) -> Organization:
 @router.get("/organizations/{org_id}", response_model=OrganizationDetailResponse)
 @limiter.limit("60/minute")
 async def organization_detail(
-    org_id: int, db: db_dependency, staff: super_admin_dependency, request: Request,
+    org_id: int, db: db_dependency, super_admin: super_admin_dependency, request: Request,
 ):
     """One org: its members, its tiers, and the spaces it is answerable for.
 
     Assembled in one response rather than three endpoints because the question
-    staff actually have is "what does this org look like", and answering it
-    across three round trips invites a UI that shows two of them and forgets
+    super admins actually have is "what does this org look like", and answering
+    it across three round trips invites a UI that shows two of them and forgets
     the third.
     """
     try:
@@ -262,7 +263,7 @@ class SpaceSearchItem(BaseModel):
 @router.get("/spaces", response_model=List[SpaceSearchItem])
 @limiter.limit("60/minute")
 async def all_spaces(
-    db: db_dependency, staff: super_admin_dependency, request: Request,
+    db: db_dependency, super_admin: super_admin_dependency, request: Request,
     q: Optional[str] = None, limit: int = 200,
 ):
     """Every space on the platform, across all orgs.
@@ -272,8 +273,8 @@ async def all_spaces(
     and only knows what it was called.
 
     Names and counts only. A space's CONTENT is not listed here for the same
-    reason a tenant's contacts are not: staff administer access, and reading
-    what is in a space means joining it.
+    reason a tenant's contacts are not: super admins administer access, and
+    reading what is in a space means joining it.
     """
     try:
         limit = max(1, min(limit, 500))

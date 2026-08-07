@@ -249,11 +249,11 @@ async def test_downgrade_cancels_immediately(
     assert test_account.has_active_subscription is False
 
 
-async def test_downgrade_never_demotes_staff(
+async def test_downgrade_never_demotes_super_admin(
     authed_client: AsyncClient, test_account: Account, db: Session
 ):
-    """Staff keep the platform surface after cancelling a subscription."""
-    test_account.is_staff = True
+    """Super admins keep the platform surface after a cancellation."""
+    test_account.is_super_admin = True
     test_account.stripe_subscription_id = "sub_test1"
     test_account.subscription_status = "active"
     db.flush()
@@ -266,7 +266,7 @@ async def test_downgrade_never_demotes_staff(
 
     assert response.status_code == 200
     db.refresh(test_account)
-    assert test_account.is_staff is True
+    assert test_account.is_super_admin is True
 
 
 async def test_downgrade_then_resubscribe(
@@ -400,11 +400,11 @@ async def test_webhook_checkout_completed_grants_membership(
     assert plans.plan_for_account(test_account) == "premium"
 
 
-async def test_webhook_never_demotes_staff(
+async def test_webhook_never_demotes_super_admin(
     client: AsyncClient, test_account: Account, db: Session
 ):
-    """Staff are not billed — a cancellation must not strip their access."""
-    test_account.is_staff = True
+    """Super admins are not billed; a cancellation cannot strip access."""
+    test_account.is_super_admin = True
     test_account.stripe_subscription_id = "sub_test1"
     db.flush()
 
@@ -419,14 +419,14 @@ async def test_webhook_never_demotes_staff(
         )
 
     db.refresh(test_account)
-    assert test_account.is_staff is True
+    assert test_account.is_super_admin is True
     assert test_account.subscription_status == "canceled"
 
 
-async def test_webhook_leaves_staff_alone(
+async def test_webhook_leaves_super_admin_alone(
     client: AsyncClient, test_account: Account, db: Session
 ):
-    test_account.is_staff = True
+    test_account.is_super_admin = True
     db.flush()
     subscription = _FakeSubscription(id="sub_test1", status="active", current_period_end=None)
 
@@ -439,7 +439,7 @@ async def test_webhook_leaves_staff_alone(
         )
 
     db.refresh(test_account)
-    assert test_account.is_staff is True
+    assert test_account.is_super_admin is True
 
 
 async def test_webhook_subscription_deleted_revokes(

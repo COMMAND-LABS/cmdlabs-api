@@ -16,9 +16,10 @@ visibility depended on anything besides org_id. Migrations e3f4a5b6c7d8 and
 f4a5b6c7d8e9 split the orgs apart and removed it.
 
 There is no longer a special org. Root used to be the platform's own — where
-catalog content lived and where staff had to be placed to work at all. Staff
-now bypass the module ceiling wherever they are, and publishing became a Space,
-so the platform's org is an ordinary tenant like any customer's.
+catalog content lived and where super admins had to be placed to work at all.
+Super admins now bypass the module ceiling wherever they are, and publishing
+became a Space, so the platform's org is an ordinary tenant like any
+customer's.
 
 WHY THE CEILING, NOT THE TIER
 -----------------------------
@@ -46,8 +47,8 @@ logger = logging.getLogger(__name__)
 TIER_OWNER = "owner"
 TIER_MEMBER = "member"
 
-# The tier staff hold in the platform org. TIER_FREE / TIER_PREMIUM lived here
-# too and are gone: nothing read them, and a plan is not a tier.
+# The tier super admins hold in the platform org. TIER_FREE / TIER_PREMIUM
+# lived here too and are gone: nothing read them, and a plan is not a tier.
 TIER_ORG_OWNER = "org_owner"
 
 # Membership provenance. Unrelated to the org's PLAN, which is now a single
@@ -107,8 +108,8 @@ def is_solo(db: Session, org_id: int) -> bool:
 
     `Organization.is_personal` used to answer this by testing `slug IS NULL`,
     which actually meant "has not been named yet" — a different question that
-    happened to give the same answer while naming was required before
-    inviting. It stopped being true the moment staff could join an unnamed org.
+    happened to give the same answer while naming was required before inviting.
+    It stopped being true the moment super admins could join an unnamed org.
 
     Counted rather than stored. It is one indexed count, it cannot drift, and
     the alternative is a column that has to be maintained on every membership
@@ -226,9 +227,9 @@ def _create_personal_org(db: Session, account: Account) -> Organization:
         name=name,
         owner_account_id=account.id,
         # pinned_plan stays NULL: this workspace follows its owner's
-        # subscription, which is what every self-serve signup should do. Staff
-        # pin a plan (admin.set_plan), and the moment somebody else is let in
-        # pin_plan() does it automatically — see there for why.
+        # subscription, which is what every self-serve signup should do. A
+        # super admin pins a plan (admin.set_plan), and the moment somebody
+        # else is let in pin_plan() does it automatically — see there for why.
     )
     db.add(org)
     db.flush()

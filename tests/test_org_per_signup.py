@@ -12,7 +12,7 @@ the boundary itself.
 
 The migration that performed the split (e3f4a5b6c7d8) carries its own
 postflight assertions and refuses to finish if it would strand an account, leave
-a non-staff member in the platform org, or sever a grant. Those run against real
+a non-super-admin member in the platform org, or sever a grant. Those run against real
 data; these run against the code that has to keep the property true afterwards.
 """
 from sqlalchemy.orm import Session
@@ -171,7 +171,7 @@ def test_a_pinned_plan_survives_billing(db: Session):
     db.flush()
 
     assert modules.ceiling_for(db, org.id) == PREMIUM_CEILING, (
-        "billing must never undo a staff pin")
+        "billing must never undo a super admin pin")
 
 
 def test_a_pinned_plan_follows_the_plan_as_it_grows(db: Session):

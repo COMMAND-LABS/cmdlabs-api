@@ -17,8 +17,8 @@ PLAN vs TIER vs CEILING — three words, three different axes
     TIER     how an org OWNER divides their ceiling     organization_tiers
 
 A CEILING IS ALWAYS A PLAN. It is either the plan the owner pays for, or one
-pinned by staff (organizations.pinned_plan) so billing cannot take it away.
-There is no third form and, in particular, no stored list of modules: see
+pinned by super admins (organizations.pinned_plan) so billing cannot take it
+away. There is no third form and, in particular, no stored list of modules: see
 PLAN_MODULES below for why that mattered.
 
 A plan is not a tier, and the difference is not cosmetic. Tier rows are

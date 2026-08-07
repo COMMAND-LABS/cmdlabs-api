@@ -4,7 +4,7 @@ The audit log records what actually matters.
 Before this, the log covered resource grants only — create / revoke /
 role_change — which is the least consequential half of what happens on the
 platform. Joining an org, changing a tier, lowering a ceiling, publishing a
-lesson, and staff joining a tenant to read its data were all invisible.
+lesson, and super admins joining a tenant to read its data were all invisible.
 
 Two properties are pinned here, and the second is the one that usually rots:
 
@@ -34,8 +34,8 @@ from tests.org_isolation import make_tenant
 
 
 @pytest.fixture()
-def staff(db: Session, test_org: Organization):
-    acct = Account(id=7300, email="auditor@cmdlabs.io", is_staff=True,
+def super_admin(db: Session, test_org: Organization):
+    acct = Account(id=7300, email="auditor@cmdlabs.io", is_super_admin=True,
                    default_org_id=ROOT_ORG_ID)
     db.add(acct); db.flush()
     db.add(OrganizationMember(org_id=ROOT_ORG_ID, account_id=acct.id,
@@ -45,8 +45,8 @@ def staff(db: Session, test_org: Organization):
 
 
 @pytest.fixture()
-async def staff_client(_override_db, staff) -> AsyncClient:
-    token = make_token(email=staff.email, user_id=staff.id)
+async def super_admin_client(_override_db, super_admin) -> AsyncClient:
+    token = make_token(email=super_admin.email, user_id=super_admin.id)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test",
                            headers={"Authorization": f"Bearer {token}"}) as ac:
         yield ac

@@ -4,10 +4,11 @@ Platform-admin org list.
 The listing itself is unremarkable; the access control is the point. Two
 properties are pinned here:
 
-  - a non-staff caller gets 404, not 403, so the admin surface does not
+  - a non-super-admin caller gets 404, not 403, so the admin surface does not
     confirm its own existence to someone who should not see it;
-  - the response carries counts and configuration only. Staff administer orgs
-    from this page; reading an org's rows still requires joining it.
+  - the response carries counts and configuration only. Super admins
+    administer orgs from this page; reading an org's rows still requires
+    joining it.
 """
 from datetime import datetime, timedelta, timezone
 
@@ -24,8 +25,8 @@ ADMIN_ORGS_URL = "/api/admin/organizations"
 
 
 @pytest.fixture()
-def staff_account(db, test_org):
-    account = Account(id=900, email="staff@cmdlabs.io", is_staff=True,
+def super_admin_account(db, test_org):
+    account = Account(id=900, email="superadmin@cmdlabs.io", is_super_admin=True,
                       default_org_id=test_org.id)
     db.add(account)
     db.flush()
@@ -38,8 +39,8 @@ def staff_account(db, test_org):
 
 
 @pytest.fixture()
-async def staff_client(_override_db, staff_account) -> AsyncClient:
-    token = make_token(email=staff_account.email, user_id=staff_account.id)
+async def super_admin_client(_override_db, super_admin_account) -> AsyncClient:
+    token = make_token(email=super_admin_account.email, user_id=super_admin_account.id)
     transport = ASGITransport(app=app)
     async with AsyncClient(
         transport=transport,
@@ -79,7 +80,7 @@ def seeded_orgs(db, test_org, test_account):
 # access control
 # ---------------------------------------------------------------------------
 
-async def test_non_staff_gets_404_not_403(authed_client: AsyncClient, test_account):
+async def test_non_super_admin_gets_404_not_403(authed_client: AsyncClient, test_account):
     """404 so the endpoint does not reveal that an admin surface exists."""
     resp = await authed_client.get(ADMIN_ORGS_URL)
     assert resp.status_code == 404
@@ -90,8 +91,8 @@ async def test_unauthenticated_is_rejected(client: AsyncClient):
     assert resp.status_code in (401, 403)
 
 
-async def test_staff_can_list(staff_client: AsyncClient, seeded_orgs):
-    resp = await staff_client.get(ADMIN_ORGS_URL)
+async def test_super_admin_can_list(super_admin_client: AsyncClient, seeded_orgs):
+    resp = await super_admin_client.get(ADMIN_ORGS_URL)
     assert resp.status_code == 200, resp.text
     body = resp.json()
     names = [o["name"] for o in body["organizations"]]
@@ -103,8 +104,8 @@ async def test_staff_can_list(staff_client: AsyncClient, seeded_orgs):
 # content
 # ---------------------------------------------------------------------------
 
-async def test_summary_reports_counts_and_plan(staff_client: AsyncClient, seeded_orgs):
-    resp = await staff_client.get(ADMIN_ORGS_URL)
+async def test_summary_reports_counts_and_plan(super_admin_client: AsyncClient, seeded_orgs):
+    resp = await super_admin_client.get(ADMIN_ORGS_URL)
     row = next(o for o in resp.json()["organizations"] if o["name"] == "Acme")
 
     assert row["member_count"] == 1
@@ -118,25 +119,28 @@ async def test_summary_reports_counts_and_plan(staff_client: AsyncClient, seeded
     assert row["is_personal"] is True
 
 
-async def test_a_lapsed_org_is_visible_and_says_so(staff_client: AsyncClient, seeded_orgs):
+async def test_a_lapsed_org_is_visible_and_says_so(super_admin_client: AsyncClient, seeded_orgs):
     """A lapsed org must still appear — it is read-only, not deleted.
 
     And the state is DERIVED here, from the owner's subscription, rather than
-    read from a column on the org. Staff seeing 'grace' is staff seeing the
-    real answer to "why can't they save anything", which was the whole reason
-    the stored column was worse than useless: it always said 'active'.
+    read from a column on the org. Super admins seeing 'grace' is a super admin
+    seeing the real answer to "why can't they save anything", which was the
+    whole reason the stored column was worse than useless: it always said
+    'active'.
     """
-    resp = await staff_client.get(ADMIN_ORGS_URL)
-    row = next(o for o in resp.json()["organizations"] if o["name"] == "Lapsed Co")
+    resp = await super_admin_client.get(ADMIN_ORGS_URL)
+    row = next(o for o in resp.json()["organizations"]
+               if o["name"] == "Lapsed Co")
     assert row["billing_state"] == "grace"
 
 
-async def test_response_carries_no_tenant_data(staff_client: AsyncClient, seeded_orgs):
+async def test_response_carries_no_tenant_data(super_admin_client: AsyncClient, seeded_orgs):
     """Guard against this page quietly growing into a data-read bypass."""
-    body = (await staff_client.get(ADMIN_ORGS_URL)).json()
+    body = (await super_admin_client.get(ADMIN_ORGS_URL)).json()
     # Configuration and counts only. A new field has to be added here
     # deliberately, which is the point: this test is the thing standing between
-    # "staff can administer an org" and "staff can quietly read it".
+    # "super admins can administer an org" and "super admins can quietly read
+    # it".
     allowed = {
         "id", "name", "is_personal", "billing_state", "owner_account_id",
         "owner_email", "member_count", "tier_count", "modules",
