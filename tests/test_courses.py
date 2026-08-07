@@ -16,6 +16,8 @@ import pytest
 from sqlalchemy.orm import Session
 
 from src.db.models import Course, OrganizationTier
+from src.db.space_models import JOIN_INVITE
+from src.services import spaces
 from tests.org_isolation import client_for, make_tenant
 
 COURSES = "/api/courses"
@@ -34,12 +36,28 @@ def student(db: Session, acme):
                        tier_key="member", is_owner=False)
 
 
-def _course(db, tenant, key, visibility="org", title=None):
-    c = Course(org_id=tenant.org_id, course_key=key, title=title or key.title(),
+def _course(db, tenant, key, visibility="org", title=None, space=None):
+    """A course in the tenant's ORG, or in `space` — never both.
+
+    ck_courses_one_home enforces the exclusivity in the database; this helper
+    just makes the call sites read as the choice it is.
+    """
+    c = Course(org_id=None if space is not None else tenant.org_id,
+               space_id=space.id if space is not None else None,
+               course_key=key, title=title or key.title(),
                visibility=visibility, account_id=tenant.account_id)
     db.add(c)
     db.flush()
     return c
+
+
+def _space(db, owner, name):
+    space = spaces.create_space(
+        db, name=name, description=None, owner_account_id=owner.account_id,
+        owner_org_id=owner.org_id, discoverable=False,
+        join_policy=JOIN_INVITE)
+    db.flush()
+    return space
 
 
 # ---------------------------------------------------------------------------
@@ -92,67 +110,79 @@ async def test_the_same_key_in_two_orgs_is_two_enablements(
 
 
 # ---------------------------------------------------------------------------
-# the grant arm
+# narrowing a course to SOME people
 # ---------------------------------------------------------------------------
+#
+# There used to be a third visibility, 'granted', plus AccessGrant rows naming
+# individual accounts — a per-course permission on top of the org membership
+# that had already decided who was in. It is gone. Narrowing is putting the
+# course in a SPACE and inviting exactly those people, which is one mechanism
+# instead of two and reaches across organizations as well as inside one.
 
-async def test_a_granted_course_is_hidden_until_granted(
+async def test_a_space_course_is_hidden_from_the_orgs_other_members(
     db: Session, _override_db, acme, student
 ):
-    _course(db, acme, "advanced", visibility="granted")
+    """The replacement for 'granted', and it has to be at least as narrow.
+
+    `student` is in the same org as the space's owner and is NOT in the space.
+    If an org course and a space course were reachable by the same people, the
+    second container would not be narrowing anything.
+    """
+    space = _space(db, acme, "Cohort 3")
+    _course(db, acme, "advanced", space=space)
+
     async with client_for(student) as c:
         assert (await c.get(f"{COURSES}/advanced")).status_code == 404
         assert (await c.get(f"{COURSES}/")).json() == []
 
 
-async def test_a_grant_opens_it_for_the_person_named(
+async def test_inviting_them_to_the_space_opens_it(
     db: Session, _override_db, acme, student
 ):
-    """One grant, one person.
+    space = _space(db, acme, "Cohort 3")
+    _course(db, acme, "advanced", space=space)
 
-    This used to be "a group grant opens it for that department". Groups are
-    spaces now, and reaching a SET of people means putting the course in a
-    space (courses.space_id) rather than naming a set from a grant row.
-    """
-    course = _course(db, acme, "advanced", visibility="granted")
-
-    async with client_for(acme) as c:
-        granted = await c.post(f"{COURSES}/{course.id}/access-grants",
-                               json={"granteeEmail": student.account.email})
-    assert granted.status_code == 201, granted.text
+    spaces.add_member(db, space=space, account_id=student.account_id,
+                      tier_key="member", actor_account_id=acme.account_id)
+    db.flush()
 
     async with client_for(student) as c:
         assert (await c.get(f"{COURSES}/advanced")).status_code == 200
 
 
-async def test_revoking_closes_it_on_the_next_request(
+async def test_removing_them_closes_it_on_the_next_request(
     db: Session, _override_db, acme, student
 ):
-    course = _course(db, acme, "advanced", visibility="granted")
-    async with client_for(acme) as c:
-        grant = await c.post(f"{COURSES}/{course.id}/access-grants",
-                             json={"granteeEmail": student.account.email})
-        grant_id = grant.json()["id"]
+    space = _space(db, acme, "Cohort 3")
+    _course(db, acme, "advanced", space=space)
+    spaces.add_member(db, space=space, account_id=student.account_id,
+                      tier_key="member", actor_account_id=acme.account_id)
+    db.flush()
 
     async with client_for(student) as c:
         assert (await c.get(f"{COURSES}/advanced")).status_code == 200
 
-    async with client_for(acme) as c:
-        assert (await c.delete(
-            f"{COURSES}/{course.id}/access-grants/{grant_id}")).status_code == 204
+    spaces.remove_member(db, space=space, account_id=student.account_id)
+    db.flush()
 
     async with client_for(student) as c:
         assert (await c.get(f"{COURSES}/advanced")).status_code == 404
 
 
-async def test_granting_an_org_wide_course_is_refused(
-    db: Session, _override_db, acme, student
+async def test_a_course_can_no_longer_be_marked_granted(
+    db: Session, _override_db, acme
 ):
-    """A row that changes nothing reads like access without being it."""
-    course = _course(db, acme, "open-to-all", visibility="org")
+    """The vocabulary is closed, and the API is where that is asserted.
+
+    A client still sending the old value gets a validation error rather than a
+    row the read path would never match — which is what it would have become
+    if only the CHECK constraint had been narrowed.
+    """
     async with client_for(acme) as c:
-        resp = await c.post(f"{COURSES}/{course.id}/access-grants",
-                            json={"granteeEmail": student.account.email})
-    assert resp.status_code == 409
+        resp = await c.post(f"{COURSES}/", json={
+            "course_key": "narrow", "title": "Narrow",
+            "visibility": "granted"})
+    assert resp.status_code == 422, resp.text
 
 
 # ---------------------------------------------------------------------------
@@ -199,26 +229,30 @@ async def test_the_key_cannot_be_edited(db: Session, _override_db, acme):
     assert resp.json()["course_key"] == "stable-key"
 
 
-async def test_an_owner_sees_their_own_granted_course(db: Session, _override_db, acme):
-    """Otherwise they could publish a narrow course and not be able to open it
-    to check what they just published."""
-    _course(db, acme, "narrow", visibility="granted")
+async def test_a_space_owner_can_open_their_own_space_course(
+    db: Session, _override_db, acme
+):
+    """They are a member of their own space, so nothing special is needed.
+
+    This used to need an explicit owner bypass in _own_arm: an owner who marked
+    a course 'granted' was not themselves a grant holder and could not open
+    what they had just published. Container membership has no such gap — you
+    cannot own a space without being in it.
+    """
+    space = _space(db, acme, "Mine")
+    _course(db, acme, "narrow", space=space)
     async with client_for(acme) as c:
         assert (await c.get(f"{COURSES}/narrow")).status_code == 200
 
 
-async def test_deleting_a_course_revokes_its_grants(db: Session, _override_db,
-                                                    acme, student):
-    from src.db.models import AccessGrant
-
-    course = _course(db, acme, "temp", visibility="granted")
+async def test_deleting_a_course_needs_no_cascade(db: Session, _override_db,
+                                                  acme):
+    """A course carries no grants of its own, so the row IS the revocation."""
+    course = _course(db, acme, "temp")
     async with client_for(acme) as c:
-        await c.post(f"{COURSES}/{course.id}/access-grants",
-                     json={"granteeEmail": student.account.email})
         assert (await c.delete(f"{COURSES}/{course.id}")).status_code == 204
 
-    assert db.query(AccessGrant).filter(
-        AccessGrant.resource_type == "course").count() == 0
+    assert db.query(Course).filter(Course.id == course.id).first() is None
 
 
 # ---------------------------------------------------------------------------

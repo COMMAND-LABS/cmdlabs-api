@@ -14,24 +14,24 @@ first — fine for hiding a menu item, useless for gating paid courseware, since
 the lesson paints before it vanishes. So `GET /api/courses/{course_key}` is the
 gate a course's server component calls before rendering anything.
 
-VISIBILITY
-----------
-    'org'     every member of the org (the common case: a client's whole team)
-    'granted' only accounts or groups holding an AccessGrant (a department)
-    'catalog' platform courseware, published once and visible to EVERY org,
-              gated by required_plan instead of by membership
+WHO CAN OPEN IT — TWO ANSWERS, NOT THREE
+----------------------------------------
+    a CONTAINER's course   its members open it
+                           org_id set -> the org's members
+                           space_id set -> the space's members
+    a CATALOG course       platform courseware, visible to EVERY org and
+                           gated by required_plan instead of by membership
 
-The first two ride on machinery that already exists and is already org-confined.
-The third is one-directional by construction — only STAFF may mark a course
-'catalog' (_assert_may_publish), so it can only ever add OUR content to a
-tenant's view, never another tenant's rows.
+There used to be a third: `visibility='granted'` plus an AccessGrant naming
+individual accounts inside the org — a per-course permission layered on top of
+the container that already decides who is in. It is gone. Reaching a SUBSET of
+people is what the second container is for: put the course in a space and
+invite exactly those people. That is one mechanism doing the job of two, and it
+is the one that already works across orgs.
 
-It used to also require the row to live in the platform org. That second
-condition existed because root was both the platform's content org and the
-public signup lobby, so "belongs to the platform org" could not tell staff
-content from a stranger's. Signups have had their own orgs since e3f4a5b6c7d8,
-so the staff check alone now carries it — and dropping the org half is what let
-the platform org stop being a special row.
+The catalog arm is one-directional by construction — only STAFF may mark a
+course 'catalog' (_assert_may_publish), so it can only ever add OUR content to
+a tenant's view, never another tenant's rows.
 
 PLANS
 -----
@@ -52,7 +52,7 @@ from src.config import plans_registry as plans
 from src.db.models import Course
 from src.deps import db_dependency, org_dependency
 from src.rate_limit import limiter
-from src.services import access, spaces
+from src.services import spaces
 from src.services.org_scope import tenant_predicate
 from src.utils.errors import handle_db_error
 
@@ -74,10 +74,6 @@ class CourseResponse(BaseModel):
     description: Optional[str] = None
     sort_order: int
     visibility: str
-    # True when the caller reaches it through the whole-org arm rather than a
-    # grant. Lets the owner's UI show "everyone" vs "specific people" without a
-    # second call.
-    org_wide: bool
     # Which plan opens it: 'free' | 'premium'. What the browser groups by.
     required_plan: str
     # True for platform courseware published to every org, false for a course
@@ -93,7 +89,7 @@ class CourseResponse(BaseModel):
     locked: bool
 
 
-VISIBILITIES = ("org", "granted", "catalog")
+VISIBILITIES = ("org", "catalog")
 
 
 class CreateCourseRequest(BaseModel):
@@ -208,24 +204,19 @@ def _writable_course(db, org, course_id: int) -> Course:
 
 
 def _own_arm(db, org):
-    """This org's own courses that the caller may open.
+    """This org's own courses. Every member opens all of them.
 
-    Two additive sub-arms, both already confined to the caller's org by
-    tenant_predicate — a grant can widen WHO inside the org, never WHICH org.
+    ONE CLAUSE, and that is the whole change. It used to be three additive
+    sub-arms — org-wide, plus per-account grants, plus an owner bypass so an
+    owner could open a course they had just restricted. All three existed to
+    support `visibility='granted'`, a per-course permission sitting on top of
+    the org membership that had already decided who was in.
+
+    Narrowing a course to some of an org's people is now done by putting it in
+    a SPACE and inviting them, which is one mechanism instead of two and works
+    across orgs as well as inside one.
     """
-    granted_ids = access.accessible_resource_ids(
-        db, org.account_id, access.COURSE, required="read", org_id=org.org_id)
-
-    arms = [Course.visibility == "org"]
-    if granted_ids:
-        arms.append(Course.id.in_(granted_ids))
-    # An owner sees every course in their org regardless of grants — otherwise
-    # they could enable a 'granted' course and then not be able to open it to
-    # check what they just published.
-    if org.is_owner:
-        arms.append(Course.id.isnot(None))
-
-    return and_(tenant_predicate(Course, org), or_(*arms))
+    return and_(tenant_predicate(Course, org), Course.visibility == "org")
 
 
 def _space_arm(db, org):
@@ -300,7 +291,7 @@ def _to_response(course: Course, plan: str) -> CourseResponse:
         space_id=course.space_id,
         id=course.id, course_key=course.course_key, title=course.title,
         description=course.description, sort_order=course.sort_order,
-        visibility=course.visibility, org_wide=(course.visibility == "org"),
+        visibility=course.visibility,
         required_plan=course.required_plan,
         catalog=is_catalog,
         # Only a catalog row can be locked: everything else in this list is
@@ -469,18 +460,14 @@ async def update_course(course_id: int, body: UpdateCourseRequest,
 @limiter.limit("30/minute")
 async def delete_course(course_id: int, db: db_dependency, org: org_dependency,
                         request: Request):
-    """Disable a course for this org.
+    """Disable a course for this container.
 
-    Its grants go with it, logged individually — a revoke that leaves no trace
-    is the one an audit cannot explain later.
+    Nothing to cascade. A course carries no grants of its own any more — who
+    can open it is its container's membership — so deleting the row is the
+    whole revocation.
     """
     try:
         course = _writable_course(db, org, course_id)
-
-        from src.services.access_admin import revoke_resource_grants_logged
-        revoke_resource_grants_logged(
-            db, resource_type=access.COURSE, resource_id=course.id,
-            actor_account_id=org.account_id)
         db.delete(course)
         db.commit()
     except HTTPException:

@@ -630,10 +630,21 @@ class Course(Base):
     tables and stops having a single answer — which is the property that makes
     access here auditable at all.
 
-    CONTAINER MEMBERSHIP IS THE GRANT. A space course needs no visibility rule
-    of its own: being in the space is what opens it. That is the whole point of
-    a space, and it is why this table does not need a second access mechanism
-    layered on top of the one it already has.
+    CONTAINER MEMBERSHIP IS THE GRANT. Being in the container is what opens
+    its courses — there is no per-course permission on top, in either kind of
+    container. `visibility` used to admit a third value, 'granted', which meant
+    "only the accounts named by an AccessGrant"; it was a second access
+    mechanism layered over the membership that had already decided who was in.
+    Narrowing a course to some people is now putting it in a SPACE and inviting
+    them, which is one mechanism instead of two and reaches across orgs.
+
+    What is left is not really a visibility scale:
+
+        'org'      this container's course. Its members open it.
+        'catalog'  platform courseware, visible to EVERY org and gated by
+                   required_plan rather than by membership. Only staff may set
+                   it (routers/courses._assert_may_publish), which is what
+                   makes the arm one-directional.
     """
     __tablename__ = 'courses'
 
@@ -649,9 +660,9 @@ class Course(Base):
     sort_order = Column(Integer, nullable=False, server_default='0')
     visibility = Column(String(20), nullable=False, server_default='org')
     # Which self-serve plan opens this course: 'free' | 'premium'. Meaningful
-    # on a CATALOG course, where it is the whole gate; on an org's own course
-    # it is inert, because an owner enabling a course for their team has
-    # already decided who may open it.
+    # on a CATALOG course, where it is the whole gate; on a container's own
+    # course it is inert, because whoever enabled it has already decided who
+    # may open it by deciding who is in the container.
     required_plan = Column(String(20), nullable=False, server_default='free')
     # Attribution, never tenancy.
     account_id = Column(Integer, ForeignKey('accounts.id', ondelete='SET NULL'),
@@ -666,7 +677,7 @@ class Course(Base):
         UniqueConstraint('space_id', 'course_key', name='uq_course_space_key'),
         CheckConstraint('(org_id IS NULL) <> (space_id IS NULL)',
                         name='ck_courses_one_home'),
-        CheckConstraint("visibility IN ('org','granted','catalog')",
+        CheckConstraint("visibility IN ('org','catalog')",
                         name='ck_courses_visibility'),
         CheckConstraint("required_plan IN ('free','premium')",
                         name='ck_courses_required_plan'),
@@ -784,11 +795,12 @@ class AccessGrant(Base):
         UniqueConstraint('principal_type', 'principal_id', 'resource_type', 'resource_id',
                          name='uq_access_grant_principal_resource'),
         CheckConstraint("principal_type IN ('account')", name='ck_access_grant_principal_type'),
-        # 'course' was added to the DATABASE by c7d8e9f0a1b2 and never here, so
-        # the model has been claiming a narrower rule than the one in force.
-        # Harmless while nothing rebuilt the constraint from the model, which
-        # is exactly why it went unnoticed — tests/conftest now does.
-        CheckConstraint("resource_type IN ('agent','vector_store','credential','course')", name='ck_access_grant_resource_type'),
+        # NO 'course'. A grant names a RESOURCE — something that carries
+        # credentials, quotas or content of its own. A course is an
+        # ENABLEMENT, opened by being in the container that holds it, and the
+        # per-course grant that briefly existed alongside that was a second
+        # answer to a question the container had already answered.
+        CheckConstraint("resource_type IN ('agent','vector_store','credential')", name='ck_access_grant_resource_type'),
         CheckConstraint("role IN ('read','write','use')", name='ck_access_grant_role'),
         Index('ix_access_grants_resource', 'resource_type', 'resource_id'),
         Index('ix_access_grants_principal', 'principal_type', 'principal_id'),
