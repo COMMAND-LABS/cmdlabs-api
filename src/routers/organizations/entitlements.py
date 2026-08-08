@@ -33,10 +33,16 @@ class EntitlementsResponse(BaseModel):
     read_only: bool
     # When read-only becomes a downgrade to the free plan. ISO, or null.
     grace_ends_at: Optional[datetime] = None
-    # The self-serve plan this account is on: 'free' | 'premium'. Distinct from
-    # `modules` on purpose — modules say what opens, the plan says what was
-    # bought, and the course catalog needs the second to show somebody what
-    # they do not have yet.
+    # The plan THIS ORG has: 'free' | 'premium'. Distinct from `modules` on
+    # purpose — modules say what opens, the plan says what was bought, and the
+    # course catalog needs the second to show somebody what they do not have
+    # yet.
+    #
+    # The ORG's, not the viewer's: an account invited into a paid org is
+    # covered by it, the same way the ceiling above already covers them. What
+    # the viewer bought THEMSELVES is a different question, answered by
+    # /api/billing/subscription — and only the Membership screen should be
+    # asking it, because only that screen offers to change it.
     plan: str
     modules: List[str]
     # The org's whole ceiling, so an owner's admin UI can show what exists but

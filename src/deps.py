@@ -216,11 +216,25 @@ class OrgContext:
     # When read-only becomes a downgrade to free. Passed to the UI so the
     # banner can say WHEN rather than just "soon". None unless read_only.
     grace_ends_at: datetime | None = None
-    # The self-serve plan this ACCOUNT is on, per Stripe — 'free' | 'premium'.
-    # A third axis, and the narrowest: it gates the platform course catalog and
-    # nothing else. Module access still comes from ceiling ∩ tier, and row
-    # access still comes from org_id alone. Defaulted so the handful of test
-    # helpers that build a context by hand keep working.
+    # The plan THIS ORG has — 'free' | 'premium'. Pinned by staff, or derived
+    # from the owner's subscription. It gates the platform course catalog and
+    # nothing else; module access still comes from ceiling ∩ tier, and row
+    # access still comes from org_id alone.
+    #
+    # THE ORG'S PLAN, NOT THE CALLER'S. It used to be plan_for_account(account),
+    # which meant a free account invited into a paid org kept its own free plan
+    # and was refused the premium catalog courses the org had already paid for.
+    # That contradicted the layer directly above it: the module CEILING has
+    # always come from the org (services/modules.org_entitlement), so the same
+    # member could already open Contacts and Deals while being told a premium
+    # course was not for them. One container, one answer.
+    #
+    # Widening, not a hole. Reaching an org still requires an OrganizationMember
+    # row, which only its owner can create — so nobody can put themselves inside
+    # a paid org, and org_id still decides every row either way.
+    #
+    # Defaulted so the handful of test helpers that build a context by hand
+    # keep working.
     plan: str = plans.PLAN_FREE
 
     @property
@@ -303,7 +317,10 @@ async def get_org_context(
         is_super_admin=account.is_super_admin,
         read_only=entitlement.read_only,
         grace_ends_at=entitlement.grace_ends_at,
-        plan=plans.plan_for_account(account),
+        # From the same one-query entitlement as the ceiling and read_only, so
+        # a request cannot see a plan resolved at one instant and a ceiling at
+        # another — and so there is one place that decides what an org has.
+        plan=entitlement.plan,
     )
 
 

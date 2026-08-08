@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from src.config import plans_registry as plans
-from src.db.models import Account, Course
+from src.db.models import Account, Course, Organization, OrganizationMember
 from tests.conftest import ROOT_ORG_ID
 from tests.org_isolation import client_for, make_tenant
 
@@ -32,11 +32,27 @@ def _catalog_course(db, key, plan, title=None):
     return course
 
 
+def _org_plan(db, tenant, plan):
+    """Put this tenant's ORG on `plan`.
+
+    The gate reads the ORG's plan, not the caller's account, so these fixtures
+    have to say what the org has. make_tenant() pins every test org to premium
+    (see the note there — an unpinned org derives from its owner and would put
+    every test tenant on free), so a "free" tenant has to be pinned back down
+    explicitly rather than left alone.
+    """
+    org = db.query(Organization).filter(Organization.id == tenant.org_id).one()
+    org.pinned_plan = plan
+    db.flush()
+    return tenant
+
+
 @pytest.fixture()
 def free_user(db: Session):
-    t = make_tenant(db, slug="plan-free-co", account_id=9801, tier_key="owner",
-                    is_owner=True)
-    return t
+    """An org on the free plan. The account's own status is beside the point."""
+    return _org_plan(db, make_tenant(db, slug="plan-free-co", account_id=9801,
+                                     tier_key="owner", is_owner=True),
+                     plans.PLAN_FREE)
 
 
 @pytest.fixture()
@@ -46,7 +62,7 @@ def premium_user(db: Session):
     account = db.query(Account).filter(Account.id == t.account_id).one()
     account.subscription_status = "active"
     db.flush()
-    return t
+    return _org_plan(db, t, plans.PLAN_PREMIUM)
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +127,64 @@ async def test_a_free_caller_sees_premium_courses_but_cannot_open_them(
 
         # And refused. Same rows, same request, opposite answer.
         assert (await c.get(f"{COURSES}/intro")).status_code == 200
+        assert (await c.get(f"{COURSES}/advanced")).status_code == 404
+
+
+async def test_the_orgs_plan_covers_a_member_who_never_paid(
+    db: Session, _override_db, premium_user,
+):
+    """THE PLAN BELONGS TO THE ORG, NOT TO THE ACCOUNT IN IT.
+
+    Somebody signs up free, gets invited into a paid org, and opens what that
+    org bought. Their own Stripe status is never consulted — it is the owner
+    who is paying, and paying for a team that includes this person.
+
+    This used to fail. The gate read plan_for_account(caller), so an invited
+    member was refused a premium course while the module CEILING — which has
+    always been the org's — let them into Contacts and Deals on the same
+    request. Two containers' worth of answers for one question.
+    """
+    _catalog_course(db, "advanced", plans.PLAN_PREMIUM)
+
+    invited = Account(id=9899, email="invited-free@x.com",
+                      default_org_id=premium_user.org_id)
+    db.add(invited)
+    db.flush()
+    db.add(OrganizationMember(org_id=premium_user.org_id, account_id=invited.id,
+                              tier_key="owner", is_owner=False))
+    db.flush()
+    assert plans.plan_for_account(invited) == plans.PLAN_FREE, (
+        "the point of the test: this account has bought nothing itself")
+
+    from tests.org_isolation import Tenant
+    async with client_for(Tenant(org=premium_user.org, account=invited)) as c:
+        listed = {c_["course_key"]: c_ for c_ in (await c.get(f"{COURSES}/")).json()}
+        assert listed["advanced"]["locked"] is False
+        assert (await c.get(f"{COURSES}/advanced")).status_code == 200
+
+
+async def test_leaving_the_paid_org_is_not_something_a_member_can_stage(
+    db: Session, _override_db, free_user,
+):
+    """The widening has exactly one door, and the member does not hold it.
+
+    A plan now travels with the org, so the question worth asking is whether
+    anyone can put THEMSELVES in a paid one. They cannot: reaching an org at
+    all requires an OrganizationMember row, and every path that writes one is
+    owner-gated. Asserted here rather than argued in a comment, because "who
+    can create membership" is the whole of what stops this being a hole.
+    """
+    other = make_tenant(db, slug="plan-paid-co-2", account_id=9898,
+                        tier_key="owner", is_owner=True)
+    org = db.query(Organization).filter(Organization.id == other.org_id).one()
+    org.pinned_plan = plans.PLAN_PREMIUM
+    db.flush()
+    _catalog_course(db, "advanced", plans.PLAN_PREMIUM)
+
+    # The free caller asks for the paid org by cookie. No membership row, so
+    # the context never resolves there and the premium course stays shut.
+    async with client_for(free_user) as c:
+        c.cookies.set("org_id", str(other.org_id))
         assert (await c.get(f"{COURSES}/advanced")).status_code == 404
 
 
