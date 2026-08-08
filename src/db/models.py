@@ -1251,8 +1251,35 @@ class CareerTimeline(Base):
 
 
 # Allowed pipeline stages for a Deal. Kept in code (not a DB enum) so the set
-# can evolve without a migration; validated at the API boundary.
-DEAL_STAGES = ('lead', 'qualified', 'proposal', 'negotiation', 'won', 'lost')
+# can evolve without a migration; validated at the API boundary. `stage` is a
+# plain String(50) with no CHECK constraint behind it, which is what makes
+# adding one of these a three-line change in two files rather than a migration.
+#
+# ORDER IS THE PIPELINE, and the UI renders filters and summaries in it. Won is
+# no longer the end of the happy path: a signed deal still has to be delivered,
+# billed and collected, and those were previously invisible — a deal sat on
+# 'won' from signature until somebody remembered it had been paid.
+#
+#   lead → qualified → proposal → negotiation → won
+#                                                 ↓
+#                            in_delivery → invoiced → paid
+#
+# 'lost' stays last rather than beside 'won', because it is the failure exit
+# from anywhere in the pipeline and not a step in it.
+#
+# WON AND PAID ARE BOTH REAL ENDINGS, of different questions. Won answers "did
+# we get the business" — the sales number. Paid answers "did the money arrive"
+# — the cash number. Collapsing them would make a signed-but-unpaid deal
+# indistinguishable from a banked one, which is the whole reason for the three
+# additions.
+#
+# MIRRORED into cmdlabs-agent-api via ./sync-schemas.sh — this file is one of
+# the synced ones, so editing it here means running that before pushing.
+DEAL_STAGES = (
+    'lead', 'qualified', 'proposal', 'negotiation', 'won',
+    'in_delivery', 'invoiced', 'paid',
+    'lost',
+)
 
 
 class Deal(Base):
@@ -1285,7 +1312,10 @@ class Deal(Base):
     stage = Column(String(50), nullable=False, default='lead', index=True)
 
     expected_close_date = Column(Date, nullable=True)
-    # Set when the deal is marked won/lost; left NULL while open.
+    # When the deal STOPPED BEING SELLABLE — won or lost. Not when the money
+    # arrived: a won deal goes on to in_delivery → invoiced → paid, and those
+    # are tracked by `stage`, not by moving this timestamp forward. Caller-
+    # supplied; nothing here sets it automatically.
     closed_at = Column(DateTime(timezone=True), nullable=True)
 
     created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False, index=True)
