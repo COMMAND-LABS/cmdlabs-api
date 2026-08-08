@@ -37,7 +37,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
 
 from src.db.models import Account, Organization, OrganizationMember, OrganizationTier
-from src.deps import db_dependency, org_dependency
+from src.deps import db_dependency, named_org_dependency, org_dependency
 from src.rate_limit import limiter
 from src.routers.auth.background_tasks.send_login_code_email_ses import (
     send_login_code_email_ses,
@@ -139,47 +139,86 @@ def _owner_account_id(db, org_id: int) -> int | None:
               .filter(Organization.id == org_id).scalar())
 
 
+def _members_payload(db, org) -> MembersPageResponse:
+    """Everyone in ONE org, given an already-validated context.
+
+    Takes an OrgContext, never a bare org id — the only way to hold one is to
+    have passed the membership gate in deps._org_context_for.
+
+    `can_manage` is org.is_owner, which describes THE ORG IN THE CONTEXT. That
+    matters more here than it looks: this payload is served for orgs the caller
+    is merely a member of, so the flag has to say "may I manage THIS one" and
+    not "am I an owner somewhere". It is what the UI hides the invite and
+    remove controls behind.
+    """
+    organization = _load_org(db, org.org_id)
+    owner_id = organization.owner_account_id
+    rows = (
+        db.query(OrganizationMember, Account)
+        .join(Account, Account.id == OrganizationMember.account_id)
+        .filter(OrganizationMember.org_id == org.org_id)
+        # Owner first, then alphabetical. Ordered against the org's owner
+        # column rather than a per-row flag, which is now the only place
+        # that knows.
+        .order_by((OrganizationMember.account_id == owner_id).desc(),
+                  Account.email.asc())
+        .all()
+    )
+    tiers = (db.query(OrganizationTier.tier_key)
+               .filter(OrganizationTier.org_id == org.org_id)
+               .order_by(OrganizationTier.id.asc()).all())
+
+    return MembersPageResponse(
+        org_id=org.org_id,
+        org_name=organization.name,
+        can_manage=org.is_owner,
+        members=[
+            MemberResponse(
+                account_id=m.account_id, email=a.email, tier_key=m.tier_key,
+                is_owner=(m.account_id == owner_id), granted_by=m.granted_by,
+                created_at=m.created_at,
+            )
+            for m, a in rows
+        ],
+        tier_keys=[t[0] for t in tiers],
+    )
+
+
 @router.get("/members", response_model=MembersPageResponse)
 @limiter.limit("60/minute")
 async def list_members(db: db_dependency, org: org_dependency, request: Request):
-    """Everyone in the caller's active org.
+    """Everyone in the caller's ACTIVE org.
 
     Readable by any member, unlike the tiers matrix: knowing who your
     colleagues are is not privileged inside a team, and hiding it would make
     "who can see my contacts?" unanswerable from inside the product.
     """
     try:
-        organization = _load_org(db, org.org_id)
-        owner_id = organization.owner_account_id
-        rows = (
-            db.query(OrganizationMember, Account)
-            .join(Account, Account.id == OrganizationMember.account_id)
-            .filter(OrganizationMember.org_id == org.org_id)
-            # Owner first, then alphabetical. Ordered against the org's owner
-            # column rather than a per-row flag, which is now the only place
-            # that knows.
-            .order_by((OrganizationMember.account_id == owner_id).desc(),
-                      Account.email.asc())
-            .all()
-        )
-        tiers = (db.query(OrganizationTier.tier_key)
-                   .filter(OrganizationTier.org_id == org.org_id)
-                   .order_by(OrganizationTier.id.asc()).all())
+        return _members_payload(db, org)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise handle_db_error(e, "[LIST MEMBERS]")
 
-        return MembersPageResponse(
-            org_id=org.org_id,
-            org_name=organization.name,
-            can_manage=org.is_owner,
-            members=[
-                MemberResponse(
-                    account_id=m.account_id, email=a.email, tier_key=m.tier_key,
-                    is_owner=(m.account_id == owner_id), granted_by=m.granted_by,
-                    created_at=m.created_at,
-                )
-                for m, a in rows
-            ],
-            tier_keys=[t[0] for t in tiers],
-        )
+
+@router.get("/{org_id}/members", response_model=MembersPageResponse)
+@limiter.limit("60/minute")
+async def list_members_for_org(db: db_dependency, org: named_org_dependency,
+                               request: Request):
+    """The same roster for an org named in the PATH, active or not.
+
+    NO OWNER GATE, deliberately — the same call the active-org route makes.
+    A member may see who else is in an org they belong to, and belonging is
+    exactly what named_org_dependency has already proven. Adding a gate here
+    that the sibling route does not have would mean the same person sees their
+    colleagues on one screen and not on another.
+
+    What a non-owner still cannot reach through it is the tiers MATRIX — which
+    modules each tier opens — served by tiers.py behind _require_owner.
+    `tier_keys` below is names only, which the member list already needed.
+    """
+    try:
+        return _members_payload(db, org)
     except HTTPException:
         raise
     except Exception as e:

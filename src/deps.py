@@ -247,39 +247,22 @@ class OrgContext:
         return self.read_only
 
 
-async def get_org_context(
-    request: Request,
-    db: Session = Depends(get_db),
-    auth: dict = Depends(get_current_user_or_api_key),
-) -> OrgContext:
-    """Resolve and VALIDATE the caller's active organization.
+def _org_context_for(db: Session, account, account_id: int,
+                     target_org_id: int) -> OrgContext:
+    """Build a validated OrgContext for ONE named org. The membership gate.
 
-    The cookie is never trusted. It names an org, and membership in that org is
-    re-checked against the database on every single request — so revoking a
-    membership takes effect immediately, with no token to re-issue and no cache
-    to invalidate.
+    THE SINGLE PLACE that answers "may this account act in this org, and with
+    what?". Both entry points below funnel through it: get_org_context, which
+    takes the org from the cookie, and get_named_org_context, which takes it
+    from a path parameter.
+
+    They are deliberately not two implementations. The difference between them
+    is one line — WHERE the target org id comes from — and everything after it
+    (membership re-check, ownership derivation, entitlement) is the part that
+    must never diverge. Two copies of a membership gate is two chances to fix a
+    bug in one of them.
     """
     from src.db.models import Organization, OrganizationMember
-
-    account_id = account_id_from_claims(auth)
-    account = ensure_account(db, account_id)
-
-    requested_org_id: int | None = None
-    # On the API-key path the cookie is ignored outright. A key is a
-    # long-lived credential that carries no org of its own yet, so honouring a
-    # cookie alongside it would let a key issued for one org be pointed at
-    # another just by setting a header. Falls back to the account default.
-    if auth.get("auth_type") != "api_key":
-        raw = request.cookies.get(ORG_COOKIE_NAME)
-        if raw and raw.isdigit():
-            requested_org_id = int(raw)
-
-    target_org_id = requested_org_id or account.default_org_id
-    if target_org_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No organization for this account.",
-        )
 
     row = (
         db.query(OrganizationMember, Organization)
@@ -292,10 +275,9 @@ async def get_org_context(
     )
 
     if row is None:
-        # Fail closed. Notably we do NOT silently fall back to the default org
-        # when a cookie names an org the caller is not in: that would turn a
-        # revoked membership into "you are quietly somewhere else" instead of a
-        # visible error, and would mask a tampered cookie entirely.
+        # Fail closed, and give the same answer whether the org does not exist
+        # or the caller is simply not in it — otherwise this is an oracle for
+        # enumerating which org ids are real.
         logger.warning(
             "[ORG] account %s is not a member of org %s — refusing",
             account_id, target_org_id,
@@ -335,7 +317,77 @@ async def get_org_context(
     )
 
 
+async def get_named_org_context(
+    org_id: int,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(get_current_user_or_api_key),
+) -> OrgContext:
+    """Resolve and VALIDATE an org named in the PATH, ignoring the cookie.
+
+    For the handful of reads that are legitimately about an org the caller is
+    not currently acting in — the account-settings Organizations page, which
+    shows a tab per membership and must not re-scope the whole dashboard to
+    render one.
+
+    THE PATH IS NO MORE TRUSTED THAN THE COOKIE. Both are just an org id from
+    the client, and both are checked against organization_members on every
+    request by the same function. An id the caller is not a member of gets 403,
+    exactly as a tampered cookie does.
+
+    NOT A WAY TO WRITE SOMEWHERE ELSE. Every route using this dependency should
+    be a READ. The read-only grace check (_refuse_writes_while_read_only) hangs
+    off the cookie context, so a mutating route mounted here would skip it —
+    and more importantly, "which org am I acting in" should stay a single
+    answer per request that the user chose deliberately with the switcher.
+    """
+    account_id = account_id_from_claims(auth)
+    account = ensure_account(db, account_id)
+    return _org_context_for(db, account, account_id, org_id)
+
+
+async def get_org_context(
+    request: Request,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(get_current_user_or_api_key),
+) -> OrgContext:
+    """Resolve and VALIDATE the caller's active organization.
+
+    The cookie is never trusted. It names an org, and membership in that org is
+    re-checked against the database on every single request — so revoking a
+    membership takes effect immediately, with no token to re-issue and no cache
+    to invalidate.
+    """
+    account_id = account_id_from_claims(auth)
+    account = ensure_account(db, account_id)
+
+    requested_org_id: int | None = None
+    # On the API-key path the cookie is ignored outright. A key is a
+    # long-lived credential that carries no org of its own yet, so honouring a
+    # cookie alongside it would let a key issued for one org be pointed at
+    # another just by setting a header. Falls back to the account default.
+    if auth.get("auth_type") != "api_key":
+        raw = request.cookies.get(ORG_COOKIE_NAME)
+        if raw and raw.isdigit():
+            requested_org_id = int(raw)
+
+    target_org_id = requested_org_id or account.default_org_id
+    if target_org_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No organization for this account.",
+        )
+
+    # Fail closed, in _org_context_for. Notably we do NOT silently fall back to
+    # the default org when a cookie names an org the caller is not in: that
+    # would turn a revoked membership into "you are quietly somewhere else"
+    # instead of a visible error, and would mask a tampered cookie entirely.
+    return _org_context_for(db, account, account_id, target_org_id)
+
+
 org_dependency = Annotated[OrgContext, Depends(get_org_context)]
+# For READS about an org named in the path rather than the cookie. Same
+# membership gate; see get_named_org_context for why it is not a write path.
+named_org_dependency = Annotated[OrgContext, Depends(get_named_org_context)]
 
 
 def require_module(module_key: str):

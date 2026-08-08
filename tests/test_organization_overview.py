@@ -1,10 +1,21 @@
 """
-The owner's console for their own organization.
+The owner's console for one organization.
 
 The overview composes information from four existing surfaces, so the rule that
 matters is that composing it did not widen who may read it — a member of the
-org sees the same 404 the tiers matrix gives them, and so does platform super
+org sees the same 404 the tiers matrix gives them, and so do platform super
 admins acting inside somebody else's org.
+
+NOW AIMED AT THE PATH ROUTE. These cases were written against
+GET /me/overview, which answered for whichever org the caller was ACTING in.
+That route went with the page it fed; /{org_id}/overview replaced it. The tests
+did not go with it, because what they assert is not about how the org was
+named — it is that composing four owner-only surfaces did not produce a fifth
+that leaks. That property has to hold wherever the console lives.
+
+Membership of the named org is proven separately, in
+tests/test_named_org_reads.py. Here the caller is always a member; the question
+is only whether being a member is enough. It is not.
 
 Organizations no longer have slugs, so the naming flow and its availability
 check are gone with them: an id identifies an org everywhere, and the display
@@ -16,7 +27,8 @@ from sqlalchemy.orm import Session
 from src.db.models import Account, Organization, OrganizationTier
 from tests.org_isolation import client_for, make_tenant
 
-OVERVIEW = "/api/organizations/me/overview"
+def _overview(org_id: int) -> str:
+    return f"/api/organizations/{org_id}/overview"
 
 
 @pytest.fixture()
@@ -50,7 +62,7 @@ async def test_a_member_gets_the_same_404_as_the_tiers_matrix(
                          tier_key="member", is_owner=False)
 
     async with client_for(member) as c:
-        resp = await c.get(OVERVIEW)
+        resp = await c.get(_overview(team.org_id))
     assert resp.status_code == 404
 
 
@@ -69,6 +81,6 @@ async def test_platform_super_admin_do_not_get_the_owners_console(
     db.flush()
 
     async with client_for(super_admin) as c:
-        resp = await c.get(OVERVIEW)
+        resp = await c.get(_overview(team.org_id))
     assert resp.status_code == 404
 
