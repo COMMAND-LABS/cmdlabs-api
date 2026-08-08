@@ -4,6 +4,15 @@ on:
   push:
     branches: ["main"]
 
+# One deploy at a time. Two overlapping runs would race in `migrate`, where
+# both would try to move alembic_version and the loser fails partway through a
+# schema change — the worst possible moment to be in an unknown state.
+# cancel-in-progress is deliberately FALSE: cancelling a run mid-migration is
+# exactly what this is meant to prevent, so a queued run waits instead.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   PROJECT_ID: command-labs # Google Cloud project id
   GAR_LOCATION: us-central1 # Artifact Registry location
@@ -45,13 +54,93 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
+      # `python -m pytest`, not `pytest`. The module form puts the working
+      # directory on sys.path; the console script does not, so `pytest` alone
+      # dies in conftest.py at `from src.db.database import Base` before
+      # collecting a single test. It passes locally only because the dev
+      # container sets PYTHONPATH=/code (docker-compose.dev.yml), which CI has
+      # no equivalent of. That is why this job was failing, and why the deploy
+      # below shipped for months with `needs: [test]` commented out.
       - name: Run tests
         env:
           POSTGRES_TEST_URL: postgresql://test:test@localhost:5432/kalygo_test
-        run: uv run pytest -x -q
+        run: uv run python -m pytest -x -q
+
+  # Schema before code, as a step rather than as something to remember.
+  #
+  # Migrations used to be applied by hand from a laptop, out of band from the
+  # deploy. That works right up until it doesn't: push code that reads a column,
+  # deploy it, then remember the migration — and every request in between is a
+  # 500. Putting it here makes the ordering structural.
+  #
+  # THIS RUNS AGAINST PRODUCTION. There is one database, so a migration that
+  # cannot be rolled forward is an outage; `alembic upgrade head` is idempotent
+  # (verified: a second run is a no-op) so a re-run of a green deploy is safe.
+  #
+  # ORDER: migrate, THEN deploy. Between the two, the OLD code is serving
+  # against the NEW schema, and Cloud Run keeps old revisions alive during a
+  # rollout regardless — so there is always an overlap window.
+  #
+  # WHAT THAT DEMANDS OF A MIGRATION. Additive changes (new nullable column,
+  # new table, widened CHECK) are invisible to the old code and safe here.
+  # DESTRUCTIVE ones are not: renaming accounts.is_staff -> is_super_admin in
+  # one step would have 500'd every request touching Account for the length of
+  # the window. Those need two releases — add the new thing and write both,
+  # deploy, then drop the old thing — which is a rule about how migrations are
+  # written, and no pipeline can enforce it for you.
+  migrate:
+    needs: [test]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync
+
+      # Checked explicitly: an unset secret arrives as the empty string, and
+      # alembic's env.py would hand that to set_main_option and fail with
+      # something unrecognisable. Better to say which secret is missing.
+      - name: Verify the database secret is present
+        env:
+          POSTGRES_URL: ${{ secrets.POSTGRES_URL }}
+        # Passed through env rather than interpolated into the script text, so
+        # the connection string never becomes part of a command line.
+        run: |
+          if [ -z "$POSTGRES_URL" ]; then
+            echo "::error::POSTGRES_URL secret is not set — cannot migrate."
+            exit 1
+          fi
+
+      # No DB_SSLMODE here on purpose. It defaults to `require`, which is what
+      # a connection from a GitHub runner to Supabase should be; the dev
+      # override exists only for the local container.
+      - name: Show current revision
+        env:
+          POSTGRES_URL: ${{ secrets.POSTGRES_URL }}
+        run: uv run alembic current
+
+      - name: Migrate to head
+        env:
+          POSTGRES_URL: ${{ secrets.POSTGRES_URL }}
+        run: uv run alembic upgrade head
 
   deploy:
-    # TODO: re-enable `needs: [test]` once CI test job is stable
+    # The gate. Without `test`, every push to main reached Cloud Run whether or
+    # not the suite passed — including the tenancy predicate, the billing state
+    # machine and the module ceiling, none of which stopped anything. `migrate`
+    # is chained behind it, so the order is: tests pass, schema moves, code
+    # ships. A failure at any point leaves the previous revision serving.
+    needs: [migrate]
     runs-on: ubuntu-latest
 
     steps:

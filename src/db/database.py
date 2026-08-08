@@ -43,7 +43,11 @@ engine = create_engine(
     pool_timeout=DB_POOL_TIMEOUT,
     use_native_hstore=False,      # Required for PgBouncer
     connect_args={
-        "sslmode": "require",
+        # Required by default, so forgetting to set this can only ever make a
+        # connection MORE encrypted, never less. A local Postgres container
+        # speaks no SSL at all, so dev sets DB_SSLMODE=disable — the one thing
+        # that stood between this service and a database that is not production.
+        "sslmode": os.getenv("DB_SSLMODE", "require"),
         "connect_timeout": 10,
         # TCP keepalives - detect dead connections faster
         "keepalives": 1,
