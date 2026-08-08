@@ -53,7 +53,7 @@ def other_org(db) -> Organization:
 async def test_falls_back_to_default_org_without_cookie(db, test_account, test_org):
     ctx = await _resolve(db, test_account.id)
     assert ctx.org_id == test_org.id
-    assert ctx.tier_key == "free"
+    assert ctx.tier_key == "member"
 
 
 async def test_cookie_selects_a_joined_org(db, test_account, test_org, other_org):
@@ -161,7 +161,7 @@ async def test_super_admin_does_not_bypass_org_membership(db, test_org, other_or
     db.flush()
     db.add(OrganizationMember(
         org_id=test_org.id, account_id=super_admin.id,
-        tier_key="org_owner", granted_by="grant",
+        tier_key="owner", granted_by="grant",
     ))
     db.flush()
 

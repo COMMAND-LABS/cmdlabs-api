@@ -32,7 +32,7 @@ def super_admin_account(db, test_org):
     db.flush()
     db.add(OrganizationMember(
         org_id=test_org.id, account_id=account.id,
-        tier_key="org_owner", granted_by="grant",
+        tier_key="owner", granted_by="grant",
     ))
     db.flush()
     return account

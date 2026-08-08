@@ -201,7 +201,7 @@ def super_admin_client_and_org(db: Session):
                     default_org_id=ROOT_ORG_ID)
     db.add(super_admin); db.flush()
     db.add(OrganizationMember(org_id=ROOT_ORG_ID, account_id=super_admin.id,
-                              tier_key="org_owner", granted_by="grant"))
+                              tier_key="owner", granted_by="grant"))
     db.flush()
     return super_admin
 
