@@ -38,7 +38,7 @@ def super_admin(db: Session, test_org: Organization):
                 default_org_id=ROOT_ORG_ID)
     db.add(a); db.flush()
     db.add(OrganizationMember(org_id=ROOT_ORG_ID, account_id=a.id,
-                              tier_key="org_owner", granted_by="grant"))
+                              tier_key="owner", granted_by="grant"))
     db.flush()
     return a
 

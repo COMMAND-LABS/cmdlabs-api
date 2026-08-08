@@ -44,12 +44,26 @@ from src.services import audit
 
 logger = logging.getLogger(__name__)
 
+# The two tiers every org is seeded with. A tier is a named SET of modules the
+# owner hands out; it is not a level, and nothing orders these two.
 TIER_OWNER = "owner"
 TIER_MEMBER = "member"
 
-# The tier super admins hold in the platform org. TIER_FREE / TIER_PREMIUM
-# lived here too and are gone: nothing read them, and a plan is not a tier.
-TIER_ORG_OWNER = "org_owner"
+# TIER_ORG_OWNER = "org_owner" lived here and is gone, along with TIER_FREE and
+# TIER_PREMIUM before it. Three reasons, in order:
+#
+#   - it named OWNERSHIP, which is organizations.owner_account_id and not a
+#     tier at all. An owner bypasses their tier outright
+#     (modules.effective_modules), so an "Org Owner" tier could never affect
+#     anybody who held it.
+#   - only ONE organization in production ever had a row for it — the platform
+#     org, seeded by the original 2024 migration. The admin join assigned it to
+#     super admins joining ANY org, so every such join wrote a tier_key naming
+#     a tier that did not exist there. Harmless only because super admins
+#     bypass tiers, which is safety by accident of a bypass rather than by
+#     construction.
+#   - `free` and `premium` were tier names borrowed from the PLAN axis, which
+#     is the one thing this vocabulary must not be confused with.
 
 # Membership provenance. Unrelated to the org's PLAN, which is now a single
 # nullable column (Organization.pinned_plan) rather than a flag over a stored

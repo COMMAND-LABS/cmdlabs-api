@@ -215,8 +215,13 @@ def test_org(db: Session) -> Organization:
         for t in db.query(OrganizationTier).filter(
             OrganizationTier.org_id == org.id).all()
     }
-    for tier_key, label in (("free", "Free"), ("premium", "Premium"),
-                            ("org_owner", "Org Owner")):
+    # The surviving vocabulary, matching what ensure_org_tiers() seeds and what
+    # b3c4d5e6f7a8 left behind. 'free', 'premium' and 'org_owner' were seeded
+    # here until then — the first two borrowed the PLAN axis's names and the
+    # third named ownership, which is organizations.owner_account_id and not a
+    # tier at all. Seeding them here kept the tests exercising a shape the
+    # product no longer has.
+    for tier_key, label in (("owner", "Owner"), ("member", "Member")):
         tier = existing.get(tier_key)
         if tier is None:
             db.add(OrganizationTier(org_id=org.id, tier_key=tier_key,
@@ -244,7 +249,12 @@ def test_account(db: Session, test_org: Organization) -> Account:
     db.add(OrganizationMember(
         org_id=test_org.id,
         account_id=account.id,
-        tier_key="free",
+        # 'free' until b3c4d5e6f7a8 retired it. It was a PLAN name doing a
+        # tier's job, and the fixture seeded it with every module — so a tier
+        # called "free" quietly granted more than the premium plan sells. The
+        # surviving 'member' tier is seeded the same way, so what this account
+        # can open is unchanged; only the name it goes by is.
+        tier_key="member",
         granted_by="grant",
     ))
     db.flush()

@@ -14,7 +14,7 @@ from src.db.models import Organization, OrganizationMember
 from src.deps import db_dependency, super_admin_dependency
 from src.rate_limit import limiter
 from src.services import audit
-from src.services.organizations import GRANTED_BY_GRANT, TIER_ORG_OWNER
+from src.services.organizations import GRANTED_BY_GRANT, TIER_MEMBER
 from src.utils.errors import handle_db_error
 
 router = APIRouter()
@@ -146,18 +146,24 @@ async def join_organization(
         member = OrganizationMember(
             org_id=org.id,
             account_id=super_admin.id,
-            tier_key=TIER_ORG_OWNER,
+            # The org's ordinary member tier, which every org actually has.
+            # This used to be a dedicated 'org_owner' tier that existed in only
+            # ONE organization, so joining any other wrote a tier_key naming a
+            # tier that was not there. Nothing read it — super admins bypass
+            # tiers — but a dangling reference behind a bypass is a bad thing
+            # to leave lying around, and the value was claiming ownership it
+            # never conferred.
+            tier_key=TIER_MEMBER,
             granted_by=GRANTED_BY_GRANT,
             # A super admin joining does NOT become an owner of the customer's
-            # org — they join to read, not to take over. That used to be an
-            # is_owner=False that a future edit could have flipped; now it is
-            # structural, because ownership is organizations.owner_account_id
-            # and joining does not touch it.
+            # org — they join to read, not to take over. Structural now:
+            # ownership is organizations.owner_account_id, and joining does not
+            # touch it.
         )
         db.add(member)
         audit.record_membership(
             db, event_type=audit.SUPER_ADMIN_JOIN, org_id=org.id,
-            account_id=super_admin.id, tier_key=TIER_ORG_OWNER,
+            account_id=super_admin.id, tier_key=TIER_MEMBER,
             actor_account_id=super_admin.id,
         )
         db.commit()
