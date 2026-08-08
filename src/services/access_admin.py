@@ -6,8 +6,8 @@ grantee resolution (email → account). Keeping this in one place means every
 sharing endpoint creates grants identically and the audit view reads a single
 table.
 
-A grant names ONE PERSON. Sharing with a set of people is sharing into a space
-(routers/spaces, space_resources), which is a different table on purpose — see
+A grant names ONE PERSON. Sharing with a SET of people used to be sharing into
+a space (space_resources), a different table on purpose — see
 the AccessGrant docstring. So there is no principal_type to resolve here any
 more; there is only "which account is this email".
 """

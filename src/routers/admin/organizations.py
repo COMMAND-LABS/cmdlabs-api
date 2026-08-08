@@ -61,7 +61,7 @@ async def set_plan(
     This used to take a LIST OF MODULES and write it to the org. That made a
     comp a snapshot, so a module added to the premium plan afterwards never
     reached any comped client — all three on the platform silently ended up
-    without `courses` and `spaces`. A plan tracks PLAN_MODULES as it grows,
+    without `courses`. A plan tracks PLAN_MODULES as it grows,
     which is the only version of this that stays true on its own.
 
     If a client genuinely needs a set no plan sells, the answer is a new plan

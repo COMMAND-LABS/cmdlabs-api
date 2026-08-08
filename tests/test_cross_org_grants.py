@@ -114,8 +114,8 @@ def test_a_grant_can_no_longer_name_anything_but_an_account(db: Session, acme):
     While `principal_type` admitted 'group', assert_same_org had to reason
     about a second kind of principal with its own org — including groups
     predating org scoping, whose NULL org had to be treated as "unusable"
-    rather than "matches". Groups are spaces now, and a space's audience
-    deliberately crosses orgs, which is why it lives in space_resources
+    rather than "matches". Groups became spaces, whose audience deliberately
+    crossed orgs, which is why it lived in space_resources
     instead of here. This asserts the column cannot quietly grow the arm back.
     """
     ours = _agent(acme); db.add(ours); db.flush()

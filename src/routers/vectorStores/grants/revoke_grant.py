@@ -1,8 +1,9 @@
 """
 Revoke a knowledge-base access grant. Index owner only.
 
-It used to also admit a manager of the granted GROUP. Groups are spaces now,
-and a space share is revoked from the space by its owner — the authority moved
+It used to also admit a manager of the granted GROUP. Groups became spaces,
+and a space share was revoked from the space by its owner (spaces have since
+been removed altogether) — the authority moved
 with the thing it was an authority over.
 """
 from fastapi import APIRouter, HTTPException, status, Request

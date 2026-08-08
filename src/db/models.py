@@ -19,8 +19,8 @@ import uuid
 # is a value that drifts — hence the reconciliation script that existed only to
 # drag it back. Deriving paid-ness removes the drift by removing the copy.
 #
-# NOTE: SpaceMember.tier_key is a per-space relationship and never had anything
-# to do with billing either. It is untouched.
+# (SpaceMember.tier_key was the other per-container tier and had nothing to do
+# with billing either. It went with spaces.)
 
 # Stripe subscription statuses that mean "this account has paid and is entitled
 # to the Premium features". Deliberately excludes past_due/unpaid/incomplete:
@@ -99,9 +99,6 @@ class Account(Base):
     org_memberships = relationship('OrganizationMember', back_populates='account',
                                    foreign_keys='OrganizationMember.account_id',
                                    cascade='all, delete-orphan')
-    # Space membership is deliberately NOT a relationship here. Spaces belong
-    # to no tenant and are queried through services/spaces.py so there is one
-    # place that decides who is in one; an ORM collection would be a second.
     tool_approvals = relationship('PendingToolApproval', back_populates='account', cascade='all, delete-orphan')
     email_events = relationship('EmailEvent', back_populates='account', cascade='all, delete-orphan')
     email_templates = relationship('EmailTemplate', back_populates='account', cascade='all, delete-orphan')
@@ -139,7 +136,8 @@ class Organization(Base):
     public `slug`, and the one whose slug was 'root' was the platform's own —
     the home of catalog content and the org super admins had to be placed in to
     work. Both jobs are gone: super admins bypass the module ceiling wherever
-    they are, and publishing became a Space. An id identifies an org in every
+    they are, and publishing became a Space (itself since removed). An id
+    identifies an org in every
     route, so the slug was a permanent public name carrying squatting and
     link-stability consequences that nothing needed. Cheap to reintroduce;
     impossible to withdraw once links point at it.
@@ -629,23 +627,24 @@ class Course(Base):
 
     ONE HOME PER ROW
     ----------------
-    A course lives in an ORG or in a SPACE, never both and never neither:
+    A course lives in an ORG. `org_id` is NOT NULL, and every member of that org
+    may open it.
 
-        org_id   set -> every member of that org may open it
-        space_id set -> every member of that space may open it
-
-    Enforced by ck_courses_one_home, not by convention. The moment a row could
-    belong to both, "who can see this?" becomes a join across two membership
+    It used to be dual-homed — org_id OR space_id, never both and never neither,
+    enforced by ck_courses_one_home. Spaces were removed to simplify the
+    platform, so the second home went and the constraint became a plain NOT NULL.
+    If spaces return, the check returns with them: the moment a row can belong to
+    both containers, "who can see this?" becomes a join across two membership
     tables and stops having a single answer — which is the property that makes
     access here auditable at all.
 
-    CONTAINER MEMBERSHIP IS THE GRANT. Being in the container is what opens
-    its courses — there is no per-course permission on top, in either kind of
-    container. `visibility` used to admit a third value, 'granted', which meant
-    "only the accounts named by an AccessGrant"; it was a second access
-    mechanism layered over the membership that had already decided who was in.
-    Narrowing a course to some people is now putting it in a SPACE and inviting
-    them, which is one mechanism instead of two and reaches across orgs.
+    CONTAINER MEMBERSHIP IS THE GRANT. Being in the org is what opens its
+    courses — there is no per-course permission on top. `visibility` used to
+    admit a third value, 'granted', meaning "only the accounts named by an
+    AccessGrant"; it was a second access mechanism layered over the membership
+    that had already decided who was in. Narrowing a course to SOME of an org's
+    people is, for now, not expressible — that was what putting it in a space
+    was for.
 
     What is left is not really a visibility scale:
 
@@ -658,11 +657,9 @@ class Course(Base):
     __tablename__ = 'courses'
 
     id = Column(Integer, primary_key=True, index=True)
-    # Exactly one of org_id / space_id is set. See ck_courses_one_home.
+    # The only home a course has. Was nullable while space_id was the other one.
     org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
-                    nullable=True, index=True)
-    space_id = Column(Integer, ForeignKey('spaces.id', ondelete='CASCADE'),
-                      nullable=True, index=True)
+                    nullable=False, index=True)
     course_key = Column(String(64), nullable=False)
     title = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
@@ -680,12 +677,7 @@ class Course(Base):
                         nullable=False)
 
     __table_args__ = (
-        # Postgres treats NULLs as distinct, so each of these constrains only
-        # the rows that actually live in that kind of container.
         UniqueConstraint('org_id', 'course_key', name='uq_course_org_key'),
-        UniqueConstraint('space_id', 'course_key', name='uq_course_space_key'),
-        CheckConstraint('(org_id IS NULL) <> (space_id IS NULL)',
-                        name='ck_courses_one_home'),
         CheckConstraint("visibility IN ('org','catalog')",
                         name='ck_courses_visibility'),
         CheckConstraint("required_plan IN ('free','premium')",
@@ -693,8 +685,7 @@ class Course(Base):
     )
 
     def __repr__(self):
-        home = f'org={self.org_id}' if self.org_id else f'space={self.space_id}'
-        return f'<Course {self.course_key} {home}>'
+        return f'<Course {self.course_key} org={self.org_id}>'
 
 
 class VectorStore(Base):
@@ -759,18 +750,20 @@ class AccessGrant(Base):
     express, and the narrowness is the point.
 
     `principal_type` used to admit 'group' as well, so a grant could name an
-    access group. Groups are now spaces, and a space's audience deliberately
-    crosses org boundaries — which this table's org confinement (below, and in
+    access group. Groups became spaces, whose audience deliberately crossed org
+    boundaries — which this table's org confinement (below, and in
     accessible_resource_ids) may not. Rather than teach the most
-    security-sensitive filter in the codebase an exception, the cross-org arm
-    lives in its own table, space_resources, where "this can be read from
-    another org" is visible in the schema instead of hidden in a predicate.
+    security-sensitive filter in the codebase an exception, that cross-org arm
+    lived in its own table, space_resources, where "this can be read from
+    another org" was visible in the schema instead of hidden in a predicate.
 
-    So there are exactly two ways to reach somebody else's resource, and you
-    can tell which one you are looking at by the table name:
+    Spaces were removed to simplify the platform, so this table is now the ONLY
+    way to reach somebody else's resource, and it never crosses an org:
 
         access_grants     a person, inside this org        (never crosses)
-        space_resources   the members of a space           (crosses, one way)
+
+    Whatever restores cross-org reach belongs in a table of its own again, for
+    the reason above. Do not add a "this grant may cross" column here.
 
     - principal_type/principal_id: 'account' + the account's id.
     - resource_type/resource_id: 'agent' | 'vector_store' | 'credential' +
@@ -882,6 +875,12 @@ class AccessGrantEvent(Base):
             "'tier.modules_change',"
             "'catalog.publish','catalog.unpublish','catalog.grant','catalog.revoke',"
             "'super_admin.join',"
+            # RETAINED DELIBERATELY. Nothing writes a space.* event any more —
+            # spaces were removed — but rows recording that they once happened
+            # are still in this table, and narrowing the constraint would both
+            # fail to apply and quietly assert those events never occurred. An
+            # audit log that rewrites its own history when a feature is deleted
+            # is not an audit log. See services/audit.py.
             "'space.create','space.archive',"
             "'space.member_add','space.member_remove',"
             "'space.request','space.request_approve','space.request_deny',"
@@ -1445,8 +1444,9 @@ class EmailCampaignRating(Base):
 #
 # Registering here rather than in each consumer means there is ONE place to
 # get this right instead of one per entry point.
-# Spaces are the platform's SECOND container — shared content whose members
-# come from many orgs. They live in their own module because they belong to no
-# tenant, and the file layout should say so: everything in THIS file is either
-# tenant data or org-confined, and everything in that one deliberately is not.
-from . import space_models  # noqa: F401,E402
+#
+# Spaces — the platform's SECOND container, shared content whose members came
+# from many orgs — used to be imported here from db/space_models.py. They were
+# removed to simplify the platform. The separate module is worth recreating if
+# they return: everything in THIS file is either tenant data or org-confined,
+# and a container that belongs to no tenant should not be able to hide among it.

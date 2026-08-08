@@ -26,8 +26,8 @@ async def list_grants(
 ):
     """List the people this knowledge base is shared with. Index owner only.
 
-    Space shares are not listed here: they belong to the space and appear in
-    GET /api/spaces/{id}/resources.
+    Space shares were not listed here either: they belonged to the space.
+    Spaces are gone, so grants are now the whole list.
     """
     try:
         account_id = account_id_from_claims(jwt)

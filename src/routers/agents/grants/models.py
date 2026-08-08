@@ -8,8 +8,8 @@ from datetime import datetime
 class CreateGrantRequest(BaseModel):
     """Share an agent with ONE named person.
 
-    Sharing with a set of people is putting the agent in a SPACE
-    (POST /api/spaces/{id}/resources) — a different table, because a space's
+    Sharing with a SET of people was putting the agent in a SPACE
+    — a different table, because a space's
     audience deliberately crosses org boundaries and a grant may not.
     """
     granteeEmail: str

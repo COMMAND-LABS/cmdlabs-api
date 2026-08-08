@@ -69,7 +69,7 @@ def org_entitlement(db: Session, org_id: int,
     kept the other, and a copy with no invalidation path is a value that
     drifts. It did: every module added to a plan after an org was comped never
     reached it, and all three comped orgs on the platform quietly lost
-    `courses` and `spaces` without anyone touching them.
+    `courses` without anyone touching them.
 
     A PIN IS NEVER RECOMPUTED DOWNWARD, AND NEVER GOES READ-ONLY. A super
     admin giving a client a plan is a promise this function must not withdraw

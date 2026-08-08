@@ -36,7 +36,6 @@ from src.db.models import (
     OrganizationMember,
     OrganizationTier,
 )
-from src.db.space_models import SPACE_ACTIVE, Space, SpaceMember
 from src.deps import db_dependency, org_dependency
 from src.rate_limit import limiter
 from src.services import modules
@@ -69,13 +68,6 @@ class TierSummary(BaseModel):
     member_count: int
 
 
-class OwnedSpace(BaseModel):
-    id: int
-    name: str
-    member_count: int
-    discoverable: bool
-
-
 class OrganizationOverviewResponse(BaseModel):
     # --- Identity -------------------------------------------------------
     org_id: int
@@ -105,17 +97,9 @@ class OrganizationOverviewResponse(BaseModel):
     # --- Access ---------------------------------------------------------
     tiers: List[TierSummary]
 
-    # --- Spaces billed to this org --------------------------------------
-    #
-    # THE ONE PLACE owner_org_id is read, and it is read for exactly what the
-    # column is for: accountability. "Which spaces is this organization
-    # answerable for and paying for?" is the owner's question and it has had no
-    # home until now.
-    #
-    # It is NOT an access list. Nobody reaches a space's content because of
-    # anything on this page — that is SpaceMember's job, and the org owner
-    # appears here whether or not they are a member of the spaces listed.
-    owned_spaces: List[OwnedSpace]
+    # `owned_spaces` used to close this response: the spaces billed to this org,
+    # and THE ONE PLACE Space.owner_org_id was read — for exactly what the column
+    # was for, accountability. It was never an access list. It went with spaces.
 
 
 def _require_owner(org):
@@ -178,16 +162,6 @@ async def my_organization(db: db_dependency, org: org_dependency, request: Reque
                        .filter(OrganizationTier.org_id == org.org_id)
                        .order_by(OrganizationTier.id.asc()).all())
 
-        space_rows = (db.query(Space)
-                        .filter(Space.owner_org_id == org.org_id,
-                                Space.status == SPACE_ACTIVE)
-                        .order_by(Space.name.asc()).all())
-        space_members = dict(
-            db.query(SpaceMember.space_id, func.count(SpaceMember.id))
-              .filter(SpaceMember.space_id.in_([s.id for s in space_rows] or [0]))
-              .group_by(SpaceMember.space_id).all()
-        )
-
         return OrganizationOverviewResponse(
             org_id=organization.id,
             name=organization.name,
@@ -221,12 +195,6 @@ async def my_organization(db: db_dependency, org: org_dependency, request: Reque
                     member_count=per_tier.get(t.tier_key, 0),
                 )
                 for t in tier_rows
-            ],
-            owned_spaces=[
-                OwnedSpace(id=s.id, name=s.name,
-                           member_count=space_members.get(s.id, 0),
-                           discoverable=s.discoverable)
-                for s in space_rows
             ],
         )
     except HTTPException:

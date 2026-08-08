@@ -80,17 +80,18 @@ PLAN_LABELS = {
 # have a rival: an org could carry a frozen LIST of modules instead, which is
 # what "comp this client" was implemented as. A list is a snapshot, so every
 # module added to a plan afterwards simply never reached the comped orgs —
-# all three of them ended up missing `courses` and `spaces` without anybody
+# all three of them ended up missing `courses` (and, then, `spaces`) without anybody
 # doing anything wrong. Comping now pins a PLAN (organizations.pinned_plan),
 # so it tracks this table as it grows.
 #
 # PREMIUM IS A STRICT SUPERSET OF FREE. Nothing is only-on-free; upgrading can
 # never take a screen away. Asserted in tests/test_course_plans.py.
 #
-# `courses` and `spaces` are in BOTH: the catalog is how somebody on the free
-# plan sees what the paid one contains, so gating the browser itself would
-# defeat the point. Which COURSES they can open is decided per course by
-# Course.required_plan, not by hiding the module.
+# `courses` is in BOTH: the catalog is how somebody on the free plan sees what
+# the paid one contains, so gating the browser itself would defeat the point.
+# Which COURSES they can open is decided per course by Course.required_plan, not
+# by hiding the module. (`spaces` was in both for the same reason, until spaces
+# were removed.)
 #
 # TWO MODULE KEYS ARE DELIBERATELY IN NEITHER PLAN, and that is not an
 # oversight — it is the same oversight this table just stopped having, so it
@@ -109,11 +110,11 @@ PLAN_LABELS = {
 # Neither has any route_prefixes in modules_registry, so nothing on the API
 # consults them at all.
 PLAN_MODULES = {
-    PLAN_FREE: ("home", "courses", "spaces", "prompts", "settings"),
+    PLAN_FREE: ("home", "courses", "prompts", "settings"),
     PLAN_PREMIUM: ("home", "agents", "agent_chat", "contacts", "contact_lists",
                    "companies", "deals", "prompts", "knowledge_bases", "access",
                    "credentials", "email_templates", "email_campaigns",
-                   "courses", "spaces", "analytics", "settings"),
+                   "courses", "analytics", "settings"),
 }
 
 

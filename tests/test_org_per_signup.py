@@ -181,7 +181,7 @@ def test_a_pinned_plan_follows_the_plan_as_it_grows(db: Session):
 
     A pin used to store the resolved module LIST, which made it a snapshot:
     every module added to the plan afterwards never reached the pinned org.
-    All three pinned orgs on the platform lost `courses` and `spaces` that way,
+    All three pinned orgs on the platform lost `courses` that way,
     silently. Pinning the PLAN means a plan that grows reaches them too.
     """
     acct = _account(db, 8113)

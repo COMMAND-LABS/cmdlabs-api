@@ -25,8 +25,8 @@ async def list_grants(
 ):
     """List the people this agent is shared with. Agent owner only.
 
-    Space shares are not listed here: they belong to the space, are managed
-    from it, and appear in GET /api/spaces/{id}/resources.
+    Space shares were not listed here either: they belonged to the space and
+    were managed from it. Spaces are gone, so grants are now the whole list.
     """
     try:
         account_id = account_id_from_claims(jwt)

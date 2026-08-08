@@ -8,7 +8,8 @@ from pydantic import BaseModel, ConfigDict
 class CreateCredentialGrantRequest(BaseModel):
     """Share a credential with ONE named person, by email.
 
-    A credential can be shared with a person and NEVER with a space. It is an
+    A credential can be shared with a person and NEVER with a space (back when
+    spaces existed, space_resources' resource_type CHECK refused it). It is an
     API key with a bill attached: the org that owns it is the one being
     charged, and a space's audience crosses orgs by design. Enforced by
     space_resources' resource_type CHECK, which admits agents and knowledge

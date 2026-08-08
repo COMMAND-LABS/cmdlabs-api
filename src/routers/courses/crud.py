@@ -14,20 +14,20 @@ first — fine for hiding a menu item, useless for gating paid courseware, since
 the lesson paints before it vanishes. So `GET /api/courses/{course_key}` is the
 gate a course's server component calls before rendering anything.
 
-WHO CAN OPEN IT — TWO ANSWERS, NOT THREE
-----------------------------------------
-    a CONTAINER's course   its members open it
-                           org_id set -> the org's members
-                           space_id set -> the space's members
+WHO CAN OPEN IT — TWO ANSWERS
+-----------------------------
+    an ORG's course        its members open it
     a CATALOG course       platform courseware, visible to EVERY org and
                            gated by required_plan instead of by membership
 
 There used to be a third: `visibility='granted'` plus an AccessGrant naming
 individual accounts inside the org — a per-course permission layered on top of
-the container that already decides who is in. It is gone. Reaching a SUBSET of
-people is what the second container is for: put the course in a space and
-invite exactly those people. That is one mechanism doing the job of two, and it
-is the one that already works across orgs.
+the container that already decides who is in. It is gone, and reaching a SUBSET
+of an org's people is currently not expressible. That was the job of the second
+container: put the course in a SPACE and invite exactly those people. Spaces
+were removed to simplify the platform, so the gap is deliberate and known.
+Do NOT close it by reviving a per-course grant — that is the two-mechanism
+design this file already walked away from once.
 
 The catalog arm is one-directional by construction — only SUPER ADMINS may
 mark a course 'catalog' (_assert_may_publish), so it can only ever add OUR
@@ -52,7 +52,6 @@ from src.config import plans_registry as plans
 from src.db.models import Course
 from src.deps import db_dependency, org_dependency
 from src.rate_limit import limiter
-from src.services import spaces
 from src.services.org_scope import tenant_predicate
 from src.utils.errors import handle_db_error
 
@@ -79,9 +78,6 @@ class CourseResponse(BaseModel):
     # True for platform courseware published to every org, false for a course
     # this org enabled for itself.
     catalog: bool
-    # Set when the course lives in a SPACE rather than in an org. Its members
-    # open it whatever org they belong to; None means it is an org enablement.
-    space_id: Optional[int] = None
     # True when it is listed for BROWSING but this caller's plan cannot open
     # it. Only ever true for a catalog course — a tenant's own courses are
     # never listed locked, because which courses another team bought is not
@@ -99,10 +95,6 @@ class CreateCourseRequest(BaseModel):
     sort_order: int = 0
     visibility: str = "org"
     required_plan: str = plans.PLAN_FREE
-    # Put the course in a SPACE instead of in the caller's org. Requires
-    # owning that space. Exactly one home — the database enforces it too
-    # (ck_courses_one_home), so a bug here is a 500 rather than a leak.
-    space_id: Optional[int] = None
 
     @field_validator("course_key")
     @classmethod
@@ -182,21 +174,15 @@ def _assert_may_publish(db, org, visibility: Optional[str]) -> None:
 def _writable_course(db, org, course_id: int) -> Course:
     """The course, if this caller may change it. 404 otherwise.
 
-    Two homes, two owners, and they are not interchangeable: an ORG course
-    belongs to the org's owner, a SPACE course to the space's owner. Being an
-    org owner grants nothing over a space's content, and vice versa — which is
-    the same wall the read path enforces, applied to writes.
+    One home, one owner: a course belongs to its org's owner. There was a second
+    arm for SPACE courses, checked against the space's owner rather than the
+    org's, on the principle that being an org owner granted nothing over a
+    space's content and vice versa. It went with spaces.
     """
     course = db.query(Course).filter(Course.id == course_id).first()
     if course is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail="Not found")
-
-    if course.space_id is not None:
-        if not spaces.is_owner(db, course.space_id, org.account_id):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                detail="Not found")
-        return course
 
     if course.org_id != org.org_id or not org.is_owner:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
@@ -213,29 +199,12 @@ def _own_arm(db, org):
     support `visibility='granted'`, a per-course permission sitting on top of
     the org membership that had already decided who was in.
 
-    Narrowing a course to some of an org's people is now done by putting it in
-    a SPACE and inviting them, which is one mechanism instead of two and works
-    across orgs as well as inside one.
+    Narrowing a course to some of an org's people was done by putting it in a
+    SPACE and inviting them. With spaces gone it cannot be done at all — see the
+    module docstring. Keep this one clause anyway: the three sub-arms were the
+    cost of the mechanism that got removed, not something to rebuild.
     """
     return and_(tenant_predicate(Course, org), Course.visibility == "org")
-
-
-def _space_arm(db, org):
-    """Courses living in a space this caller belongs to.
-
-    CONTAINER MEMBERSHIP IS THE GRANT. There is no visibility column consulted
-    here and no per-course grant to check: being in the space is what opens its
-    content, which is the entire point of a space and the reason it does not
-    need an access mechanism of its own.
-
-    Note what is NOT read — the space's owner_org_id. A space's content is
-    reachable by its members, never by the org that happens to be billed for
-    it. Asserted in tests/test_space_isolation.py.
-    """
-    space_ids = spaces.space_ids_for(db, org.account_id)
-    if not space_ids:
-        return None
-    return Course.space_id.in_(space_ids)
 
 
 def _catalog_arm(db):
@@ -262,13 +231,6 @@ def _query(db, org, *, browsing: bool):
     """
     arms = [_own_arm(db, org)]
 
-    # Space courses are reached by membership alone — no plan gate, because the
-    # space owner already decided who is in. A paid space charges at the door
-    # (SpaceTier), not per course.
-    space = _space_arm(db, org)
-    if space is not None:
-        arms.append(space)
-
     catalog = _catalog_arm(db)
     if catalog is not None:
         if not browsing and not plans.includes(org.plan, plans.PLAN_PREMIUM):
@@ -288,7 +250,6 @@ def _visible(db, org):
 def _to_response(course: Course, plan: str) -> CourseResponse:
     is_catalog = course.visibility == "catalog"
     return CourseResponse(
-        space_id=course.space_id,
         id=course.id, course_key=course.course_key, title=course.title,
         description=course.description, sort_order=course.sort_order,
         visibility=course.visibility,
@@ -350,43 +311,6 @@ async def create_course(body: CreateCourseRequest, db: db_dependency,
                         org: org_dependency, request: Request):
     """Enable a course for this organization."""
     try:
-        if body.space_id is not None:
-            # A course in a space is the space owner's decision, not the org
-            # owner's — so ownership is checked against the SPACE, and being an
-            # org owner grants nothing here.
-            if not spaces.is_owner(db, body.space_id, org.account_id):
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                    detail="Not found")
-            if body.visibility == "catalog":
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="A space course is opened by the space's members. "
-                           "It cannot also be catalog content.")
-            existing = (db.query(Course)
-                          .filter(Course.space_id == body.space_id,
-                                  Course.course_key == body.course_key).first())
-            if existing:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="That course is already in this space.")
-            course = Course(
-                org_id=None,
-                space_id=body.space_id,
-                course_key=body.course_key,
-                title=body.title.strip(),
-                description=body.description,
-                sort_order=body.sort_order,
-                # Membership in the space is the grant; there is no second
-                # visibility rule and no plan gate on top of it.
-                visibility="org",
-                required_plan=plans.PLAN_FREE,
-                account_id=org.account_id,
-            )
-            db.add(course)
-            db.commit()
-            db.refresh(course)
-            return _to_response(course, org.plan)
-
         _require_owner(org)
         _assert_may_publish(db, org, body.visibility)
 

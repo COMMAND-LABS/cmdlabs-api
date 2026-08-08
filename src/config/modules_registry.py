@@ -74,11 +74,11 @@ MODULES = (
     # keys are platform-wide and stable, while tier_key is a per-org string
     # that means nothing in a second org.
     Module("courses", "Courses", ("/api/courses",)),
-    # Spaces are the SECOND container — shared content across orgs. Gated like
-    # any other product area: the module decides whether you see the feature at
-    # all, and SpaceMember decides which spaces you can actually reach. Two
-    # different questions, and the module answer is never the access answer.
-    Module("spaces", "Spaces", ("/api/spaces",)),
+    # A "spaces" module gating /api/spaces sat here — the second container,
+    # shared content across orgs. Removed with the feature. Note the shape it
+    # had if it returns: the MODULE decided whether you saw spaces at all, and
+    # SpaceMember decided which ones you could reach. Two different questions,
+    # and the module answer was never the access answer.
     Module("analytics", "Analytics", ()),
     Module("membership", "Membership", ()),
     Module("settings", "Settings", ()),

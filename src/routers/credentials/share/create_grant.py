@@ -1,8 +1,9 @@
 """
 Share a credential with one named person (credential owner only).
 
-A credential is never shareable into a space: it is an API key with a bill
-attached, and a space's audience crosses orgs by design.
+A credential was never shareable into a space: it is an API key with a bill
+attached, and a space's audience crossed orgs by design. Keep that true of
+whatever cross-org sharing replaces spaces.
 
 Writes a unified AccessGrant (resource_type='credential', role='use').
 """

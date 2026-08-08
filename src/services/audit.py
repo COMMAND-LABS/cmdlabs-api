@@ -59,25 +59,17 @@ CATALOG_REVOKE = "catalog.revoke"
 # on trust.
 SUPER_ADMIN_JOIN = "super_admin.join"
 
-# Spaces — the second container. Every door into a space writes one of these,
-# so "who can see this space's content, and how did they get in?" is one query
-# against one log rather than a reconstruction.
-SPACE_CREATE = "space.create"
-SPACE_ARCHIVE = "space.archive"
-SPACE_MEMBER_ADD = "space.member_add"
-SPACE_MEMBER_REMOVE = "space.member_remove"
-SPACE_REQUEST = "space.request"
-SPACE_REQUEST_APPROVE = "space.request_approve"
-SPACE_REQUEST_DENY = "space.request_deny"
-SPACE_RESOURCE_ADD = "space.resource_add"
-SPACE_RESOURCE_REMOVE = "space.resource_remove"
+# The nine space.* event types lived here — one per door into a space, so that
+# "who can see this space's content, and how did they get in?" was one query
+# against one log rather than a reconstruction. They went with spaces. Note that
+# HISTORICAL ROWS carrying those event types are NOT deleted: an audit log that
+# rewrites itself when a feature is removed is not an audit log.
 
 # Resource types beyond the original agent | vector_store | credential.
 RESOURCE_ORGANIZATION = "organization"
 RESOURCE_MEMBERSHIP = "membership"
 RESOURCE_TIER = "tier"
 RESOURCE_CATALOG_ITEM = "catalog_item"
-RESOURCE_SPACE = "space"
 
 
 def _actor_email(db: Session, actor_account_id: int | None) -> str | None:
@@ -134,37 +126,6 @@ def record(
 # ── convenience wrappers ─────────────────────────────────────────────────────
 # Each snapshots the labels its event needs, so no caller has to remember which
 # ones matter for which verb.
-
-def record_space(db: Session, *, event_type: str, space_id: int,
-                 space_name: str | None = None,
-                 account_id: int | None = None,
-                 tier_key: str | None = None,
-                 detail: str | None = None,
-                 actor_account_id: int | None = None) -> None:
-    """One event about a space, or about somebody's access to one.
-
-    `org_id` is deliberately NULL. A space is not tenant data and belongs to no
-    org's log — filing its events under the owner's org would put entries about
-    members from other organizations into a tenant's audit trail, which is both
-    wrong and a small leak of who those members are. The space's own log is
-    read by space_id.
-    """
-    email = (db.query(Account.email).filter(Account.id == account_id).scalar()
-             if account_id is not None else None)
-    record(
-        db,
-        event_type=event_type,
-        org_id=None,
-        resource_type=RESOURCE_SPACE,
-        resource_id=space_id,
-        resource_label=space_name,
-        principal_type="account" if account_id is not None else None,
-        principal_id=account_id,
-        principal_label=email,
-        role=tier_key,
-        detail=detail,
-        actor_account_id=actor_account_id,
-    )
 
 def record_membership(db: Session, *, event_type: str, org_id: int,
                       account_id: int, tier_key: str | None = None,

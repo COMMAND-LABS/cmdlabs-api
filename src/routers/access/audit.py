@@ -57,14 +57,17 @@ class ReverseAuditItem(BaseModel):
 
 
 class SharedGrant(BaseModel):
-    # Negative for a SPACE share. The two live in different tables with their
-    # own id sequences, so a positive id alone would be ambiguous — and this
-    # list is read by people deciding what to revoke.
+    # Space shares used to appear here too, carrying a NEGATIVE id: the two
+    # lived in different tables with their own id sequences, so a positive id
+    # alone would have been ambiguous to a reader deciding what to revoke.
+    # Every id here is a positive access_grants id now.
     grant_id: int
-    label: str          # the grantee's email, or "Space: <name>"
+    label: str          # the grantee's email
     role: str
-    # 'person' | 'space'. The one thing a reader of this page most needs to
-    # know: a person is inside this org, a space deliberately is not.
+    # 'person', and currently nothing else. Kept because the value it existed to
+    # distinguish — 'space', a reach that deliberately left the org — is the
+    # thing a reader of this page most needs told apart, and the field should be
+    # here waiting rather than reintroduced along with it.
     reach: str = "person"
 
 
@@ -185,11 +188,12 @@ async def shared_by_me(
 ):
     """Every resource the caller OWNS that is shared, with whom, and how far.
 
-    BOTH ARMS, because a report that shows only the org-confined one is worse
-    than no report: the arm it omits is the one that leaves the organization.
-    Grants and space shares are listed side by side and labelled with their
-    reach, so "who can see this?" is answered once rather than assembled from
-    this page plus a walk through every space you own.
+    ONE ARM today: grants, which never leave the org. There was a second for
+    space shares, listed side by side and labelled with its reach, on the
+    principle that a report showing only the org-confined arm is worse than no
+    report — the arm it omits is the one that leaves the organization. That
+    principle outlives spaces: anything that restores cross-org reach must
+    appear here in the same pass, not on a page of its own.
     """
     try:
         account_id = account_id_from_claims(jwt)
@@ -220,24 +224,6 @@ async def shared_by_me(
             by_resource.setdefault(key, []).append(
                 SharedGrant(grant_id=g.id, label=grant_label(db, g),
                             role=g.role, reach="person")
-            )
-
-        # The cross-org arm. Same list, labelled for what it is.
-        from src.db.space_models import Space, SpaceResource
-
-        shares = (
-            db.query(SpaceResource.id, SpaceResource.resource_type,
-                     SpaceResource.resource_id, Space.name)
-            .join(Space, Space.id == SpaceResource.space_id)
-            .all()
-        )
-        for row_id, rtype, rid, space_name in shares:
-            key = (rtype, rid)
-            if key not in owned:
-                continue
-            by_resource.setdefault(key, []).append(
-                SharedGrant(grant_id=-row_id, label=f"Space: {space_name}",
-                            role="read", reach="space")
             )
 
         return [

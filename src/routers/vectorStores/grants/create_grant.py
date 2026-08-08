@@ -32,8 +32,8 @@ async def create_grant(
     You can only share an index reachable by your own Pinecone key (you are the
     owner). role 'read' = view; 'write' = ingest/edit.
 
-    To share with a group of people, put the knowledge base in a SPACE
-    (POST /api/spaces/{id}/resources). That arm is read-only and may cross org
+    Sharing with a GROUP of people meant putting the knowledge base in a SPACE.
+    Spaces are gone, so there is no such arm today. It was read-only and crossed org
     boundaries, which is exactly why it is a different endpoint.
     """
     try:

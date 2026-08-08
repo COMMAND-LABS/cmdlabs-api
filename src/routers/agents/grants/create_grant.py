@@ -2,7 +2,7 @@
 Share an agent with one named person (agent owner only).
 
 Writes a unified AccessGrant (resource_type='agent', role='use'). Sharing with
-a group of people is putting the agent in a space instead — see spaces/crud.py.
+a group of people was putting the agent in a space instead; spaces are gone.
 """
 from fastapi import APIRouter, HTTPException, status, Request
 from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims

@@ -49,8 +49,9 @@ _CREATED_BY_COLUMN = {
     'vector_stores': 'owner_account_id',
 }
 
-# Resource types that can be published through the catalog. Deliberately
-# narrow — CRM rows are tenant data and may never appear in a catalog.
+# Resource types that are SHARABLE — the ones a grant may name. Deliberately
+# narrow, and it stays narrow: CRM rows are tenant data and may never become
+# something one account hands to another.
 AGENT = 'agent'
 VECTOR_STORE = 'vector_store'
 
@@ -128,85 +129,33 @@ def resource_predicate(model, ctx):
     )
 
 
-def shared_resource_ids(db: Session, ctx, resource_type: str):
-    """IDs of resources shared with this caller through a SPACE.
-
-    Additive only, and one-directional by construction: a space_resources row
-    can only be created by somebody who OWNS the resource, so this arm can
-    surface "an org shared its own agent" and can never express "an org shared
-    somebody else's".
-
-    Replaced catalog_resource_ids, which asked the same question through two
-    tables and a platform-only restriction. The audience is now the space's
-    members — the one membership question the platform asks everywhere else.
-    """
-    from src.db.space_models import SpaceMember, SpaceResource
-
-    my_spaces = (
-        db.query(SpaceMember.space_id)
-        .filter(SpaceMember.account_id == ctx.account_id)
-        .subquery()
-    )
-
-    return (
-        db.query(SpaceResource.resource_id)
-        .filter(
-            SpaceResource.resource_type == resource_type,
-            SpaceResource.space_id.in_(db.query(my_spaces)),
-        )
-    )
-
-
-def shares_resource(db: Session, account_id: int, resource_type: str,
-                    resource_id: int) -> bool:
-    """The SINGLE-ROW twin of shared_resource_ids.
-
-    A list predicate alone is half a feature. Without this, a resource shared
-    into a space appears in its members' lists and then 404s when opened —
-    which is precisely what the catalog did, and precisely the sort of bug that
-    reads as flakiness rather than as a missing arm.
-
-    READ ONLY, like its sibling. A space share says "my members may use this",
-    never "may reconfigure it": write still resolves through services/access.py,
-    which is org-confined with no exceptions.
-    """
-    from src.db.space_models import SpaceMember, SpaceResource
-
-    return db.query(
-        db.query(SpaceResource)
-          .join(SpaceMember, SpaceMember.space_id == SpaceResource.space_id)
-          .filter(SpaceResource.resource_type == resource_type,
-                  SpaceResource.resource_id == resource_id,
-                  SpaceMember.account_id == account_id)
-          .exists()
-    ).scalar()
-
-
 def visible_resource_predicate(db: Session, model, ctx, resource_type: str,
                                granted_ids=None):
     """Everything a caller may reach for a publishable resource type.
 
-    Three additive arms, each of which can only ever WIDEN, never cross the
-    tenant boundary:
+    Two additive arms, neither of which crosses the tenant boundary:
 
       1. resource_predicate — own org, honouring visibility;
       2. explicit AccessGrant ids — an individual or a department inside the
-         same org (the caller resolves these; C6 enforces same-org);
-      3. SPACES — resources shared into a space this caller belongs to,
-         by whoever owns them.
+         same org (the caller resolves these; C6 enforces same-org).
 
-    Arm 3 is safe precisely because a space_resources row can only be written
-    by somebody who owns the resource, so it can never surface a row its owner
-    did not offer. It is the one arm that crosses an org boundary, and it does
-    so in one direction only.
+    There was a third arm — resources shared into a SPACE this caller belonged
+    to — and it was the only one that crossed an org boundary. Spaces were
+    removed to simplify the platform, so today NOTHING here reaches outside
+    ctx.org_id. When spaces return, the arm returns here and nowhere else: it
+    is the single place a cross-org read is expressible, which is what makes it
+    reviewable.
 
     Deliberately not a flag on tenant_predicate: the CRM tables must never be
     able to acquire a sharing arm by someone passing the wrong argument.
+
+    `db` and `resource_type` are now unused. They are kept because they are the
+    parameters the sharing arm reads, and every call site already passes them —
+    threading them back through later should not be a signature change.
     """
     arms = [resource_predicate(model, ctx)]
     if granted_ids:
         arms.append(model.id.in_(granted_ids))
-    arms.append(model.id.in_(shared_resource_ids(db, ctx, resource_type)))
     return or_(*arms)
 
 

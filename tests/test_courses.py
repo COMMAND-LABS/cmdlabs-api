@@ -16,8 +16,6 @@ import pytest
 from sqlalchemy.orm import Session
 
 from src.db.models import Course, OrganizationTier
-from src.db.space_models import JOIN_INVITE
-from src.services import spaces
 from tests.org_isolation import client_for, make_tenant
 
 COURSES = "/api/courses"
@@ -36,28 +34,19 @@ def student(db: Session, acme):
                        tier_key="member", is_owner=False)
 
 
-def _course(db, tenant, key, visibility="org", title=None, space=None):
-    """A course in the tenant's ORG, or in `space` — never both.
+def _course(db, tenant, key, visibility="org", title=None):
+    """A course in the tenant's ORG — the only home there is.
 
-    ck_courses_one_home enforces the exclusivity in the database; this helper
-    just makes the call sites read as the choice it is.
+    It took a `space=` argument while courses were dual-homed, and the database
+    refused anything with both homes or neither (ck_courses_one_home). org_id is
+    plain NOT NULL now.
     """
-    c = Course(org_id=None if space is not None else tenant.org_id,
-               space_id=space.id if space is not None else None,
+    c = Course(org_id=tenant.org_id,
                course_key=key, title=title or key.title(),
                visibility=visibility, account_id=tenant.account_id)
     db.add(c)
     db.flush()
     return c
-
-
-def _space(db, owner, name):
-    space = spaces.create_space(
-        db, name=name, description=None, owner_account_id=owner.account_id,
-        owner_org_id=owner.org_id, discoverable=False,
-        join_policy=JOIN_INVITE)
-    db.flush()
-    return space
 
 
 # ---------------------------------------------------------------------------
@@ -115,59 +104,17 @@ async def test_the_same_key_in_two_orgs_is_two_enablements(
 #
 # There used to be a third visibility, 'granted', plus AccessGrant rows naming
 # individual accounts — a per-course permission on top of the org membership
-# that had already decided who was in. It is gone. Narrowing is putting the
-# course in a SPACE and inviting exactly those people, which is one mechanism
-# instead of two and reaches across organizations as well as inside one.
-
-async def test_a_space_course_is_hidden_from_the_orgs_other_members(
-    db: Session, _override_db, acme, student
-):
-    """The replacement for 'granted', and it has to be at least as narrow.
-
-    `student` is in the same org as the space's owner and is NOT in the space.
-    If an org course and a space course were reachable by the same people, the
-    second container would not be narrowing anything.
-    """
-    space = _space(db, acme, "Cohort 3")
-    _course(db, acme, "advanced", space=space)
-
-    async with client_for(student) as c:
-        assert (await c.get(f"{COURSES}/advanced")).status_code == 404
-        assert (await c.get(f"{COURSES}/")).json() == []
-
-
-async def test_inviting_them_to_the_space_opens_it(
-    db: Session, _override_db, acme, student
-):
-    space = _space(db, acme, "Cohort 3")
-    _course(db, acme, "advanced", space=space)
-
-    spaces.add_member(db, space=space, account_id=student.account_id,
-                      tier_key="member", actor_account_id=acme.account_id)
-    db.flush()
-
-    async with client_for(student) as c:
-        assert (await c.get(f"{COURSES}/advanced")).status_code == 200
-
-
-async def test_removing_them_closes_it_on_the_next_request(
-    db: Session, _override_db, acme, student
-):
-    space = _space(db, acme, "Cohort 3")
-    _course(db, acme, "advanced", space=space)
-    spaces.add_member(db, space=space, account_id=student.account_id,
-                      tier_key="member", actor_account_id=acme.account_id)
-    db.flush()
-
-    async with client_for(student) as c:
-        assert (await c.get(f"{COURSES}/advanced")).status_code == 200
-
-    spaces.remove_member(db, space=space, account_id=student.account_id)
-    db.flush()
-
-    async with client_for(student) as c:
-        assert (await c.get(f"{COURSES}/advanced")).status_code == 404
-
+# that had already decided who was in. It is gone, and its replacement went too:
+# narrowing was putting the course in a SPACE and inviting exactly those people,
+# one mechanism instead of two, reaching across organizations as well as inside
+# one.
+#
+# So narrowing is CURRENTLY NOT POSSIBLE — an org's course is open to the whole
+# org. Three tests covered the replacement and were deleted with spaces: that a
+# space course was hidden from the org's other members (it had to be at least as
+# narrow as 'granted' to be a replacement at all), that inviting someone opened
+# it, and that removing them closed it on the next request. Restore all three
+# with whatever narrowing mechanism arrives; the first is the one that matters.
 
 async def test_a_course_can_no_longer_be_marked_granted(
     db: Session, _override_db, acme
@@ -229,18 +176,17 @@ async def test_the_key_cannot_be_edited(db: Session, _override_db, acme):
     assert resp.json()["course_key"] == "stable-key"
 
 
-async def test_a_space_owner_can_open_their_own_space_course(
+async def test_an_owner_can_open_their_own_orgs_course(
     db: Session, _override_db, acme
 ):
-    """They are a member of their own space, so nothing special is needed.
+    """No owner bypass needed, and that is the point.
 
-    This used to need an explicit owner bypass in _own_arm: an owner who marked
-    a course 'granted' was not themselves a grant holder and could not open
-    what they had just published. Container membership has no such gap — you
-    cannot own a space without being in it.
+    _own_arm used to carry an explicit one: an owner who marked a course
+    'granted' was not themselves a grant holder and could not open what they had
+    just published. Container membership has no such gap — you cannot own a
+    container without being in it.
     """
-    space = _space(db, acme, "Mine")
-    _course(db, acme, "narrow", space=space)
+    _course(db, acme, "narrow")
     async with client_for(acme) as c:
         assert (await c.get(f"{COURSES}/narrow")).status_code == 200
 

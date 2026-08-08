@@ -8,7 +8,7 @@ and that row id is what every sharing mechanism refers to.
 The distinction is not pedantry. An index is a thing in Pinecone; a VectorStore
 is the platform's handle on it, carrying its org, its credential bindings and
 its grants. You cannot share what has no handle, so a UI offering "put this in
-a space" has to pick from THIS list rather than from Pinecone's.
+a container" has to pick from THIS list rather than from Pinecone's.
 
 Read-only, and deliberately so. It would be easy to make this create a missing
 row on the way past, which is exactly how a GET starts writing.

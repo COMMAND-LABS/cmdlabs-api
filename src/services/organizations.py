@@ -18,7 +18,7 @@ f4a5b6c7d8e9 split the orgs apart and removed it.
 There is no longer a special org. Root used to be the platform's own — where
 catalog content lived and where super admins had to be placed to work at all.
 Super admins now bypass the module ceiling wherever they are, and publishing
-became a Space, so the platform's org is an ordinary tenant like any
+became a Space (itself since removed), so the platform's org is an ordinary tenant like any
 customer's.
 
 WHY THE CEILING, NOT THE TIER
@@ -98,7 +98,7 @@ def pin_plan(db: Session, org: Organization) -> None:
     modules and set a flag saying billing could no longer touch them, which
     made the pin a snapshot: every module added to a plan afterwards never
     reached the org. All three pinned orgs on the platform lost `courses` and
-    `spaces` that way, silently, and it read as a missing menu item rather than
+    `courses` that way, silently, and it read as a missing menu item rather than
     as a stale cache. A pinned plan tracks PLAN_MODULES as it grows.
 
     Idempotent: an org that is already pinned is left exactly as it is.

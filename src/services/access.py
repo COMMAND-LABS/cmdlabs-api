@@ -9,11 +9,16 @@ AccessGrant row (principal × resource × role).
 
 A PRINCIPAL IS A PERSON. It used to be a person OR an access group, and this
 file carried the expansion (members_of) that turned the second into the first.
-Groups became spaces, and a space's audience crosses org boundaries by design —
-which the org confinement below may not. So the cross-org arm moved to its own
-table (space_resources, read through org_scope.shared_resource_ids) and what
-is left here is one row meaning one named person inside one org. The expansion
-step is gone rather than renamed: there is nothing left to expand.
+Groups became spaces, and spaces have since been removed to simplify the
+platform. What is left is one row meaning one named person inside one org. The
+expansion step is gone rather than renamed: there is nothing left to expand.
+
+There is therefore NO cross-org arm anywhere in this file today, and none
+anywhere else either — reaching another org's resource means joining that org.
+Spaces were where cross-org sharing lived, and when they return it must live in
+its own table again rather than as an exemption here. An AccessGrant that could
+opt out of the org filter would make this table a documented way around
+org_id.
 
 CANONICAL FILE. Mirrored byte-for-byte into kalygo3-agent-api
 (src/services/access.py) via the repo-root sync scripts. Edit the ai-api copy,
@@ -139,9 +144,9 @@ def can_access(
     Org check, then owner short-circuit, then a single indexed query over the
     grants naming this account, filtered to roles that satisfy required.
 
-    Deliberately does NOT consult space shares. This function answers "may they
-    act on it", and a space share is a read: what it widens is what appears in
-    a list (org_scope.visible_resource_predicate), not what may be written or
+    This function answers "may they ACT on it". A share — when sharing returns
+    — is a read: what it widens is what appears in a list
+    (org_scope.visible_resource_predicate), not what may be written or
     reconfigured. A caller wanting the read answer should ask that predicate.
 
     ``org_id`` CONFINES the answer to one organization, and every caller with a
@@ -211,11 +216,11 @@ def accessible_resource_ids(
     that already exist, which is the half that protects data written before the
     check landed.
 
-    UNCONDITIONAL, and it stays that way. Cross-org sharing is a real feature —
-    it is what a space is for — and the temptation is to let one kind of grant
-    opt out of this filter. That would put "may cross a tenant boundary" inside
-    a loop body where it can only be found by reading the code. It lives in a
-    different table instead (org_scope.shared_resource_ids).
+    UNCONDITIONAL, and it stays that way. When cross-org sharing comes back the
+    temptation will be to let one kind of grant opt out of this filter. That
+    would put "may cross a tenant boundary" inside a loop body where it can only
+    be found by reading the code. It belongs in a different table instead — as
+    it did when spaces owned it.
 
     ``None`` means "do not confine", and exists only for callers that have no
     request context at all (maintenance scripts). Prefer passing an org.
@@ -261,8 +266,15 @@ def effective_accounts(db: Session, resource_type: str, resource_id: int) -> lis
     Resolve a resource's access to individual accounts, for audit.
 
     Returns a list of dicts: {account_id, email, role, via} where via is
-    'owner' | 'direct' | 'space:<name>'. When an account is reachable by multiple
-    paths the highest role wins (and 'owner' supersedes all).
+    'owner' | 'direct'. When an account is reachable by multiple paths the
+    highest role wins (and 'owner' supersedes all).
+
+    There was a third `via` — 'space:<name>' — for everyone a space share
+    reached. Spaces are gone, and with them the only path into a resource that
+    did not name a person. Whatever reintroduces cross-org reach MUST add its
+    arm back here at the same time: an audit that answers "who can reach this?"
+    with a number that is too small is the one kind of wrong answer this may
+    not give.
     """
     owner = _resource_owner(db, resource_type, resource_id)
     best: dict = {}  # account_id -> {role, via}
@@ -287,13 +299,6 @@ def effective_accounts(db: Session, resource_type: str, resource_id: int) -> lis
         if principal_type == ACCOUNT:
             _consider(principal_id, role, "direct")
 
-    # Spaces the resource has been shared into. Without this arm the audit
-    # would answer "who can reach this?" with a number that is too small,
-    # which is the one kind of wrong answer an access audit may not give.
-    for space_id, space_name, account_id in _space_reach(db, resource_type,
-                                                         resource_id):
-        _consider(account_id, "read", f"space:{space_name or space_id}")
-
     if not best:
         return []
     emails = {
@@ -306,25 +311,6 @@ def effective_accounts(db: Session, resource_type: str, resource_id: int) -> lis
     ]
 
 
-def _space_reach(db: Session, resource_type: str, resource_id: int) -> list:
-    """(space_id, space_name, account_id) for everyone a space share reaches.
-
-    Imported locally: spaces belong to no tenant and live in their own module,
-    and importing them at the top of the file that owns the org-confined rule
-    invites the two from being read as one mechanism.
-    """
-    from src.db.space_models import Space, SpaceMember, SpaceResource
-
-    return (
-        db.query(SpaceResource.space_id, Space.name, SpaceMember.account_id)
-        .join(Space, Space.id == SpaceResource.space_id)
-        .join(SpaceMember, SpaceMember.space_id == SpaceResource.space_id)
-        .filter(SpaceResource.resource_type == resource_type,
-                SpaceResource.resource_id == resource_id)
-        .all()
-    )
-
-
 def _role_priority(role: str) -> int:
     """Ordering for 'best role wins' in audit (owner highest)."""
     return {"read": 1, "use": 1, "write": 2, "owner": 3}.get(role, 0)
@@ -335,10 +321,12 @@ def resources_for_account(db: Session, account_id: int) -> list:
     Reverse audit: every resource *account_id* can reach that it does not own,
     with the role and the path it came by. Returns list of
     {resource_type, resource_id, role, via}, where `via` is 'direct' for a
-    grant naming this person and 'space:<name>' for one of their spaces.
-    """
-    from src.db.space_models import Space, SpaceMember, SpaceResource
+    grant naming this person.
 
+    'space:<name>' was the other possible `via`, for a resource shared into one
+    of their spaces. It went with spaces; see effective_accounts, whose forward
+    half of this question has the same gap.
+    """
     grants = (
         db.query(AccessGrant.resource_type, AccessGrant.resource_id,
                  AccessGrant.role)
@@ -357,17 +345,6 @@ def resources_for_account(db: Session, account_id: int) -> list:
 
     for rtype, rid, role in grants:
         _consider(rtype, rid, role, "direct")
-
-    shares = (
-        db.query(SpaceResource.resource_type, SpaceResource.resource_id,
-                 Space.name)
-        .join(Space, Space.id == SpaceResource.space_id)
-        .join(SpaceMember, SpaceMember.space_id == SpaceResource.space_id)
-        .filter(SpaceMember.account_id == account_id)
-        .all()
-    )
-    for rtype, rid, space_name in shares:
-        _consider(rtype, rid, "read", f"space:{space_name}")
 
     return [
         {"resource_type": rtype, "resource_id": rid, "role": info["role"], "via": info["via"]}

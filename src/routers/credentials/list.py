@@ -103,7 +103,7 @@ def _build_shared_labels(db, account_id: int, shared_ids: set) -> dict:
     Map each shared credential id -> a human-readable label describing how the
     caller can access it: "Shared by <owner>".
 
-    One shape, because a credential grant names one person. There is no space
+    One shape, because a credential grant names one person. There was no space
     arm to fall back to — a credential is an API key with a bill attached and
     space_resources refuses the type outright.
     """

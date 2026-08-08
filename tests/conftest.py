@@ -191,7 +191,7 @@ def test_org(db: Session) -> Organization:
 
     An ORDINARY org that happens to be the first one. There is no platform org
     any more: super admins bypass the module ceiling wherever they are, and
-    publishing became a Space, so nothing works because of this row's id or its
+    publishing became a Space (itself since removed), so nothing works because of this row's id or its
     name.
     """
     org = db.query(Organization).filter(Organization.id == ROOT_ORG_ID).first()

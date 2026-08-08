@@ -295,7 +295,7 @@ def test_super_admin_are_never_the_last_to_open_a_new_module(db: Session, test_o
 
     Two module keys are in no plan at all (membership, organization), and any
     new one starts that way until it is added — which is how `courses` and
-    `spaces` both once shipped invisible to super admins. Fixed by removing the
+    `courses` once shipped invisible to super admins. Fixed by removing the
     cap for super admins rather than by keeping something in step with the
     registry.
     """

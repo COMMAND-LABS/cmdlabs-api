@@ -9,8 +9,9 @@ class CreateVectorStoreGrantRequest(BaseModel):
     """Share a knowledge base with ONE named person, at a given role.
 
     role is 'read' (view) or 'write' (ingest/edit). Sharing with a set of
-    people is putting the knowledge base in a SPACE, which is always read-only:
-    a space share offers something to be consulted, never reconfigured.
+    people was putting the knowledge base in a SPACE, which was always
+    read-only: a space share offered something to be consulted, never
+    reconfigured. Spaces are gone, so a grant is the only way.
     """
     index_name: str
     granteeEmail: str
@@ -38,7 +39,8 @@ class VectorStoreAccessGrantResponse(BaseModel):
 class SharedVectorStore(BaseModel):
     """A knowledge base the caller can reach without owning it.
 
-    By a grant naming them, or by membership of a space it was shared into.
+    By a grant naming them. (Space membership was the other way, until spaces
+    were removed.)
     `can_write` is only ever true for a grant — see vector_store_access.
     """
 
