@@ -178,3 +178,5 @@ workspace/*
 scratch/*
 
 scratchspace
+
+db_backups
