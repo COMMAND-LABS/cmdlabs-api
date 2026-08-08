@@ -396,11 +396,70 @@ async def get_org_context(
             detail="No organization for this account.",
         )
 
-    # Fail closed, in _org_context_for. Notably we do NOT silently fall back to
-    # the default org when a cookie names an org the caller is not in: that
-    # would turn a revoked membership into "you are quietly somewhere else"
-    # instead of a visible error, and would mask a tampered cookie entirely.
+    # A COOKIE NAMING AN ORG THEY ARE NOT IN FALLS BACK TO THEIR DEFAULT.
+    #
+    # This used to be a flat refusal, and the note here argued for it: falling
+    # back would turn a revoked membership into "you are quietly somewhere
+    # else" instead of a visible error, and would mask a tampered cookie.
+    #
+    # Both halves of that turned out to be wrong in practice, in the same
+    # incident. The cookie is written by client JS with a one-year max-age and
+    # was cleared by nothing — not sign-out, not sign-in — so it outlived both
+    # the session and the membership. Two ordinary things then bricked an
+    # account completely:
+    #
+    #   an owner removes somebody from an org, and their next request 403s
+    #   a second account signs in on a browser where anyone had ever switched
+    #
+    # And "visible error" overstated what the user got. EVERY org-scoped route
+    # 403s, including /organizations/mine — so the switcher that would fix it
+    # cannot render, and the product is a page of error toasts with no way out
+    # that does not involve devtools. A failure nobody can act on is not
+    # feedback.
+    #
+    # The fallback gives up none of the enforcement. _org_context_for still
+    # re-checks membership against organization_members, and the fallback
+    # target is the account's OWN default — a value only this server writes,
+    # never the client. A tampered cookie therefore buys exactly what it bought
+    # before: nothing. It is now ignored rather than fatal, and logged at
+    # WARNING so it is still visible to us.
+    #
+    # The cookie is also cleared on login and logout now (the UI's
+    # shared/server/session-cookie), so this path is the backstop rather than
+    # the routine case.
+    if requested_org_id is not None and requested_org_id != account.default_org_id:
+        if not _is_member(db, account_id, requested_org_id):
+            logger.warning(
+                "[ORG] account %s carries a cookie for org %s it is not in — "
+                "falling back to its default org %s",
+                account_id, requested_org_id, account.default_org_id,
+            )
+            if account.default_org_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="No organization for this account.",
+                )
+            target_org_id = account.default_org_id
+
+    # Fail closed, in _org_context_for.
     return _org_context_for(db, account, account_id, target_org_id)
+
+
+def _is_member(db: Session, account_id: int, org_id: int) -> bool:
+    """Membership, asked as a question rather than as a refusal.
+
+    Deliberately separate from _org_context_for, which raises: this is used to
+    DECIDE between two org ids before either one is committed to, and a gate
+    that throws cannot be used to choose.
+    """
+    from src.db.models import OrganizationMember
+
+    return db.query(
+        db.query(OrganizationMember)
+          .filter(OrganizationMember.account_id == account_id,
+                  OrganizationMember.org_id == org_id)
+          .exists()
+    ).scalar()
 
 
 org_dependency = Annotated[OrgContext, Depends(get_org_context)]

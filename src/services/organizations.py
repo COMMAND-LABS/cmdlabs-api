@@ -154,19 +154,83 @@ def ensure_membership(db: Session, account: Account,
                       org: Organization | None = None) -> OrganizationMember | None:
     """Ensure `account` can act somewhere. Idempotent.
 
-    With no `org`, this creates (or finds) the account's own personal
-    workspace. Passing an org joins that one instead — which is what an invite
-    will do.
+    With no `org`, this finds the account somewhere to be, creating a personal
+    workspace only if it has nowhere else. Passing an org joins that one
+    instead.
 
     Called at first VERIFIED login rather than at account creation, because
     accounts are INSERTed in /request-code, before the OTP is checked. An
     unverified squatter therefore gets an account row and no org, and since
     they can never obtain a JWT they never need one — and no empty workspace is
     created for an address nobody controls.
+
+    "NOWHERE ELSE" IS FOUR QUESTIONS, AND IT USED TO BE ONE
+    -------------------------------------------------------
+    This function used to jump straight to `personal_org_for(...) or
+    _create_personal_org(...)`, which asks only "do they own an org?". Every
+    invited person answered no, so every invited person got a workspace of
+    their own minted at their first sign-in — an empty org named after their
+    email address, which they owned, on top of the team they had actually been
+    invited to. They were then dropped into whichever one default_org_id
+    happened to name.
+
+    So the order below is the fix, and each step is a different reason not to
+    create anything:
+
+      1. Already a member somewhere  — creating a second home for somebody who
+                                       has one is the bug above.
+      2. Owns an org but holds no    — drift, not a missing workspace. Join the
+         membership row in it          org they already own rather than making
+                                       a second one they also own.
+      3. Has an outstanding          — they have somewhere to go and have not
+         invitation                    answered yet. Minting a workspace here
+                                       is the same bug as (1), just two minutes
+                                       earlier. Returns None: they are
+                                       org-less on purpose until they answer,
+                                       and the dashboard routes them to the
+                                       invitation (routers/organizations/
+                                       invitations.py, /invitations/mine).
+      4. None of the above           — an ordinary self-serve signup. Create
+                                       the workspace.
+
+    Step 3 is the one with a consequence worth stating: between signing in and
+    answering, every org-scoped request they make is a 403. That is deliberate
+    — there is genuinely no org they may act in yet — and declining is what
+    resolves it, which is why decline_invitation calls back into here.
     """
     if org is None:
+        # 1. Anywhere at all. The cheapest question and the one that was never
+        #    asked; an invitee who has accepted lands here.
+        existing_anywhere = (
+            db.query(OrganizationMember)
+            .filter(OrganizationMember.account_id == account.id)
+            .first()
+        )
+        if existing_anywhere:
+            if account.default_org_id is None:
+                account.default_org_id = existing_anywhere.org_id
+                db.commit()
+            return existing_anywhere
+
+        # 2. An org they own but are somehow not a member of. Historically this
+        #    drift existed and left owners unable to open their own org, so it
+        #    is repaired rather than papered over with a second workspace.
         org = personal_org_for(db, account.id)
+
         if org is None:
+            # 3. Imported here rather than at module scope: services/
+            #    invitations imports pin_plan and GRANTED_BY_GRANT from this
+            #    module, and a top-level import both ways is a cycle.
+            from src.services import invitations
+
+            if invitations.has_pending_for_email(db, account.email):
+                logger.info(
+                    "[ORG] account %s has a pending invitation — no personal "
+                    "workspace created", account.id,
+                )
+                return None
+
+            # 4.
             org = _create_personal_org(db, account)
 
     existing = (

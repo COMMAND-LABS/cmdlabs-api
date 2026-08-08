@@ -39,6 +39,17 @@ GRANT_ROLE_CHANGE = "role_change"
 MEMBER_ADD = "member.add"
 MEMBER_REMOVE = "member.remove"
 MEMBER_ROLE_CHANGE = "member.role_change"
+
+# The invitation lifecycle. MEMBER_ADD still marks the moment access is
+# actually gained, which is the ACCEPT — an invitation that is sent and never
+# opened has given nobody anything, and a log that recorded it as a member.add
+# would overstate what happened. So these record the offer and its ends, and
+# the accept is written as an ordinary member.add by the same code path that
+# writes every other one.
+MEMBER_INVITE = "member.invite"
+MEMBER_INVITE_RESEND = "member.invite_resend"
+MEMBER_INVITE_REVOKE = "member.invite_revoke"
+MEMBER_INVITE_DECLINE = "member.invite_decline"
 # Retained for the rows already written under it. Nothing emits it now:
 # tiers became roles, and relabelling history is not this log's job.
 MEMBER_TIER_CHANGE = "member.tier_change"
@@ -148,6 +159,38 @@ def record_membership(db: Session, *, event_type: str, org_id: int,
         principal_id=account_id,
         principal_label=email,
         role=role,
+        actor_account_id=actor_account_id,
+    )
+
+
+def record_invitation(db: Session, *, event_type: str, org_id: int,
+                      email: str, role: str | None = None,
+                      actor_account_id: int | None = None,
+                      detail: str | None = None) -> None:
+    """An offer of membership, or one of its ends.
+
+    Takes an EMAIL where record_membership takes an account_id, because at the
+    moment an invitation is sent there may be no account — an invitation names
+    an address and the account is created when its owner proves they read that
+    inbox (see db/models.OrganizationInvitation).
+
+    So `principal_id` is None here and `principal_label` carries the address.
+    That is the honest shape: the log's principal columns snapshot who a thing
+    was done TO, and until they sign in there is no id to name them by.
+    """
+    org_name = db.query(Organization.name).filter(Organization.id == org_id).scalar()
+    record(
+        db,
+        event_type=event_type,
+        org_id=org_id,
+        resource_type=RESOURCE_ORGANIZATION,
+        resource_id=org_id,
+        resource_label=org_name,
+        principal_type="account",
+        principal_id=None,
+        principal_label=email,
+        role=role,
+        detail=detail,
         actor_account_id=actor_account_id,
     )
 

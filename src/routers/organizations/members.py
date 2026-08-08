@@ -1,23 +1,40 @@
 """
 Members of an organization: who is in it, in what role, and who put them there.
 
-THE INVITE, AND WHY IT HAS NO TOKEN
------------------------------------
-Adding someone by email creates their account if it does not exist and emails
-them the ordinary sign-in code. There is no invite token, no accept step, and
-no pending state — because none of them would add security. The platform
-authenticates by OTP, so access already requires controlling that inbox; a
-token would be a second secret sent to the same place, and a pending state
-would be a row to expire, resend, and explain.
+THE INVITE, AND WHY IT NOW HAS A TOKEN
+--------------------------------------
+This section used to be titled "why it has no token", and argued that adding
+someone by email should write their membership immediately and mail them the
+ordinary sign-in code. The security half of that argument was right and is
+unchanged: the platform authenticates by OTP, so reaching an org already
+requires controlling the invitee's inbox, and a token is a second secret sent
+to the same place. Nothing here is safer than it was.
 
-What that DOES cost is consent: an account that already exists is added
-immediately, without being asked. That is the right trade for colleagues you
-already work with and the wrong one for strangers, and it is the thing to
-revisit when orgs start inviting people they have not met.
+It was revisited for the reason the old note itself gave:
+
+    "What that DOES cost is consent: an account that already exists is added
+    immediately, without being asked. That is the right trade for colleagues
+    you already work with and the wrong one for strangers, and it is the thing
+    to revisit when orgs start inviting people they have not met."
+
+So inviting now writes an organization_invitations row and mails an INVITATION.
+The membership is written when the invitee accepts, and at no earlier moment —
+see services/invitations, which exists to keep that true.
+
+The second thing it fixed is what the invitee received. With no invitation
+there was no invitation email, so an invite sent a bare eight-digit sign-in
+code with no sender, no org and no reason. Correct as a credential, useless as
+a message. There is a sender for this now:
+auth/background_tasks/send_org_invitation_email_ses.
 
 A member is added with granted_by='grant'. Their access comes from the ORG's
 standing, never from a personal subscription they were never asked to buy, and
 no Stripe webhook will ever touch their row.
+
+NO ACCOUNT IS CREATED BY INVITING. It used to be: an invite INSERTed an Account
+for an address that had proved nothing, so a typo left a permanent account row
+nobody controlled. An invitation names an ADDRESS, and the account is created
+by /request-code when its owner shows up.
 
 NO NAMING STEP
 --------------
@@ -28,9 +45,8 @@ one step. The DISPLAY name is still editable, and now it is the only name there
 is.
 """
 import logging
-import random
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
@@ -40,18 +56,13 @@ from src.config import roles_registry as roles
 from src.db.models import Account, Organization, OrganizationMember
 from src.deps import db_dependency, named_org_dependency, org_dependency
 from src.rate_limit import limiter
-from src.routers.auth.background_tasks.send_login_code_email_ses import (
-    send_login_code_email_ses,
-)
-from src.services import audit
-from src.services.organizations import GRANTED_BY_GRANT, pin_plan
+from src.services import audit, invitations
+from src.services.invitation_mail import send_invitation
 from src.utils.errors import handle_db_error
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-OTP_TTL_MINUTES = 10
 
 
 class MemberResponse(BaseModel):
@@ -67,11 +78,32 @@ class MemberResponse(BaseModel):
     created_at: Optional[datetime] = None
 
 
+class PendingInvitationResponse(BaseModel):
+    """Somebody who has been asked and has not answered.
+
+    Deliberately NOT folded into MemberResponse as a "pending member". They are
+    not a member: no row, no access, nothing counted. A list that mixed the two
+    would make "who can see this org's data?" — the question the roster exists
+    to answer — require reading a status column to answer correctly.
+    """
+    id: int
+    email: str
+    role: str
+    invited_by: Optional[str] = None
+    created_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+
+
 class MembersPageResponse(BaseModel):
     org_id: int
     org_name: str
     can_manage: bool
     members: List[MemberResponse]
+    # Outstanding invitations, newest first. Everyone in the org sees them, on
+    # the same reasoning that everyone sees the roster: who is about to be able
+    # to read your org's data is not a secret from the people already in it.
+    # Only an owner can act on them — that is `can_manage`.
+    invitations: List[PendingInvitationResponse] = []
     # Role keys an invite may choose from, so the dropdown cannot offer one
     # this org does not have.
     role_keys: List[str]
@@ -167,10 +199,25 @@ def _members_payload(db, org) -> MembersPageResponse:
                   Account.email.asc())
         .all()
     )
+    pending = invitations.pending_for_org(db, org.org_id)
+    inviter_emails = dict(
+        db.query(Account.id, Account.email)
+          .filter(Account.id.in_([i.invited_by_account_id for i in pending
+                                  if i.invited_by_account_id] or [0])).all()
+    )
+
     return MembersPageResponse(
         org_id=org.org_id,
         org_name=organization.name,
         can_manage=org.is_owner,
+        invitations=[
+            PendingInvitationResponse(
+                id=i.id, email=i.email, role=i.role,
+                invited_by=inviter_emails.get(i.invited_by_account_id),
+                created_at=i.created_at, expires_at=i.expires_at,
+            )
+            for i in pending
+        ],
         members=[
             MemberResponse(
                 account_id=m.account_id, email=a.email, role=m.role,
@@ -282,101 +329,78 @@ async def rename_organization_by_id(
 
 
 async def _invite(body: InviteRequest, db, org,
-                  background_tasks: BackgroundTasks) -> MemberResponse:
-    """Add somebody to ONE org in a chosen role.
+                  background_tasks: BackgroundTasks) -> PendingInvitationResponse:
+    """Offer somebody a membership in ONE org, in a chosen role.
 
     Takes an already-validated OrgContext, never a bare org id — the same rule
     _members_payload follows, and the reason both mountings below are safe: the
     only way to hold a context is to have passed the membership gate in
     deps._org_context_for, and `org.is_owner` describes THAT org.
+
+    WRITES NO MEMBERSHIP AND NO ACCOUNT. It writes an invitation and sends an
+    email; the membership appears when the invitee accepts, and their account
+    when they sign in. See this module's header for why that changed, and
+    services/invitations for the rules.
     """
     try:
         _require_owner(org)
-        organization = _load_org(db, org.org_id)
+        _load_org(db, org.org_id)
 
         # The role must be one this platform defines. Without this an invite
         # could carry a typo and the member would resolve to no modules at all,
         # which looks like a permissions bug rather than a typo. The database
-        # would refuse it too (ck_org_member_role) — this turns a 500 into a
-        # 422 that says what was wrong.
+        # would refuse it too (ck_org_invitation_role) — this turns a 500 into
+        # a 422 that says what was wrong.
         if not roles.is_valid(body.role):
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 detail="Unknown role.")
 
         email = body.email.strip().lower()
+
+        # Already in? Then there is nothing to offer. Checked by ADDRESS via
+        # the account, because an invitation names an address and a membership
+        # names an account — this is the one place the two have to be lined up.
         account = db.query(Account).filter(Account.email == email).first()
+        if account is not None:
+            existing = (db.query(OrganizationMember)
+                          .filter(OrganizationMember.org_id == org.org_id,
+                                  OrganizationMember.account_id == account.id)
+                          .first())
+            if existing:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="They are already in this organization.")
 
-        created = False
-        if account is None:
-            account = Account(email=email)
-            db.add(account)
-            db.flush()
-            created = True
-
-        existing = (db.query(OrganizationMember)
-                      .filter(OrganizationMember.org_id == org.org_id,
-                              OrganizationMember.account_id == account.id).first())
-        if existing:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
-                                detail="They are already in this organization.")
-
-        # This workspace is becoming a TEAM. Pin it to the plan the owner is
-        # on, so the people about to join do not lose modules when the owner's
-        # card expires. Idempotent for an org that is already pinned.
-        pin_plan(db, organization)
-
-        member = OrganizationMember(
-            org_id=org.org_id,
-            account_id=account.id,
-            role=body.role,
-            # Never 'subscription'. Their access comes from this org, so a
-            # Stripe event on their personal account must never revoke it.
-            granted_by=GRANTED_BY_GRANT,
-            # No is_owner to set false: an invitee is not named in
-            # organizations.owner_account_id, so they are not the owner. The
-            # rule that used to need stating is now the only thing that can
-            # happen.
+        # Refreshes an unanswered invitation in place rather than adding a
+        # second — see services/invitations.issue. So "invite again" is also
+        # how an owner fixes a mis-picked role or revives an expired offer.
+        invitation, token = invitations.issue(
+            db, org_id=org.org_id, email=email, role=body.role,
+            invited_by_account_id=org.account_id,
         )
-        db.add(member)
 
-        # A brand-new account has nowhere else to land, so send them in here.
-        # Someone who already had an account keeps their own default and finds
-        # this org in the switcher.
-        if account.default_org_id is None:
-            account.default_org_id = org.org_id
+        # NOT pin_plan. The org is not a team until somebody actually joins,
+        # and pinning on the offer would freeze a solo owner's plan because
+        # they typed an address once. It happens on accept instead — see
+        # services/invitations.accept.
 
-        audit.record_membership(
-            db, event_type=audit.MEMBER_ADD, org_id=org.org_id,
-            account_id=account.id, role=body.role,
-            actor_account_id=org.account_id,
+        audit.record_invitation(
+            db, event_type=audit.MEMBER_INVITE, org_id=org.org_id,
+            email=email, role=body.role, actor_account_id=org.account_id,
         )
         db.commit()
-        db.refresh(member)
+        db.refresh(invitation)
 
-        if created:
-            # The ordinary sign-in code — there is no separate invite mail,
-            # because there is no separate secret. Sent after commit so a
-            # failed write never produces an email about access that does not
-            # exist.
-            code = str(random.randint(10000000, 99999999))
-            from src.routers.auth.router import _hash_otp
-            account.login_otp = _hash_otp(code)
-            account.login_otp_expires_at = (
-                datetime.now(timezone.utc) + timedelta(minutes=OTP_TTL_MINUTES))
-            db.commit()
-            background_tasks.add_task(send_login_code_email_ses, account.email, code)
+        # After commit, so a failed write never produces an email about an
+        # invitation that does not exist.
+        send_invitation(db, background_tasks, invitation, token)
 
         logger.info("[ORG] account %s invited %s to org %s as %s",
-                    org.account_id, account.id, org.org_id, body.role)
-        return MemberResponse(
-            account_id=account.id, email=account.email, role=member.role,
-            # Derived like everywhere else rather than hardcoded false. An
-            # invitee is not normally the owner, but "normally" is what the
-            # stored copy relied on: an owner who was somehow not a member
-            # would have been reported as a non-owner on the way back in.
-            is_owner=(account.id == _owner_account_id(db, org.org_id)),
-            granted_by=member.granted_by,
-            created_at=member.created_at,
+                    org.account_id, email, org.org_id, body.role)
+        return PendingInvitationResponse(
+            id=invitation.id, email=invitation.email, role=invitation.role,
+            invited_by=_email_for(db, invitation.invited_by_account_id),
+            created_at=invitation.created_at, expires_at=invitation.expires_at,
         )
     except HTTPException:
         raise
@@ -385,8 +409,91 @@ async def _invite(body: InviteRequest, db, org,
         raise handle_db_error(e, "[INVITE MEMBER]")
 
 
+def _email_for(db, account_id: int | None) -> str | None:
+    if account_id is None:
+        return None
+    return db.query(Account.email).filter(Account.id == account_id).scalar()
+
+
+def _revoke_invitation(invitation_id: int, db, org) -> None:
+    """Withdraw an invitation this org sent. Owner only.
+
+    Scoped to org.org_id as well as the id, so a revoke cannot reach into
+    another org's invitations by guessing a number.
+    """
+    try:
+        _require_owner(org)
+
+        from src.db.models import OrganizationInvitation
+        invitation = (db.query(OrganizationInvitation)
+                        .filter(OrganizationInvitation.id == invitation_id,
+                                OrganizationInvitation.org_id == org.org_id)
+                        .first())
+        if invitation is None or not invitations.is_live(invitation):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail="No such invitation.")
+
+        invitations.revoke(db, invitation, org.account_id)
+        db.commit()
+        logger.info("[ORG] account %s revoked the invitation for %s to org %s",
+                    org.account_id, invitation.email, org.org_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise handle_db_error(e, "[REVOKE INVITATION]")
+
+
+def _resend_invitation(invitation_id: int, db, org,
+                       background_tasks: BackgroundTasks
+                       ) -> PendingInvitationResponse:
+    """Send the invitation email again, with a FRESH token.
+
+    Not a re-send of the original message: issue() mints a new token and
+    extends the expiry, which retires the link in the first email. That is the
+    behaviour to want — two live tokens for one invitation is how somebody
+    clicks the dead one — and it is why this goes through the same function
+    inviting does rather than just calling the mailer again.
+    """
+    try:
+        _require_owner(org)
+
+        from src.db.models import OrganizationInvitation
+        invitation = (db.query(OrganizationInvitation)
+                        .filter(OrganizationInvitation.id == invitation_id,
+                                OrganizationInvitation.org_id == org.org_id)
+                        .first())
+        if invitation is None or not invitations.is_live(invitation):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail="No such invitation.")
+
+        invitation, token = invitations.issue(
+            db, org_id=org.org_id, email=invitation.email,
+            role=invitation.role, invited_by_account_id=org.account_id,
+        )
+        audit.record_invitation(
+            db, event_type=audit.MEMBER_INVITE_RESEND, org_id=org.org_id,
+            email=invitation.email, role=invitation.role,
+            actor_account_id=org.account_id,
+        )
+        db.commit()
+        db.refresh(invitation)
+
+        send_invitation(db, background_tasks, invitation, token)
+        return PendingInvitationResponse(
+            id=invitation.id, email=invitation.email, role=invitation.role,
+            invited_by=_email_for(db, invitation.invited_by_account_id),
+            created_at=invitation.created_at, expires_at=invitation.expires_at,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise handle_db_error(e, "[RESEND INVITATION]")
+
+
 @router.post("/members", status_code=status.HTTP_201_CREATED,
-             response_model=MemberResponse)
+             response_model=PendingInvitationResponse)
 @limiter.limit("20/minute")
 async def invite_member(
     body: InviteRequest,
@@ -395,12 +502,12 @@ async def invite_member(
     request: Request,
     background_tasks: BackgroundTasks,
 ):
-    """Add somebody to the caller's ACTIVE org."""
+    """Invite somebody to the caller's ACTIVE org."""
     return await _invite(body, db, org, background_tasks)
 
 
 @router.post("/{org_id}/members", status_code=status.HTTP_201_CREATED,
-             response_model=MemberResponse)
+             response_model=PendingInvitationResponse)
 @limiter.limit("20/minute")
 async def invite_member_for_org(
     body: InviteRequest,
@@ -424,6 +531,51 @@ async def invite_member_for_org(
     owns a different one gets the same 404 here as they would there.
     """
     return await _invite(body, db, org, background_tasks)
+
+
+@router.delete("/invitations/{invitation_id}",
+               status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("30/minute")
+async def revoke_invitation(
+    invitation_id: int, db: db_dependency, org: org_dependency, request: Request,
+):
+    """Withdraw an invitation from the caller's ACTIVE org."""
+    _revoke_invitation(invitation_id, db, org)
+
+
+@router.delete("/{org_id}/invitations/{invitation_id}",
+               status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("30/minute")
+async def revoke_invitation_for_org(
+    invitation_id: int, db: db_dependency, org: named_org_dependency,
+    request: Request,
+):
+    """The same revoke, for an org named in the PATH. See invite_member_for_org
+    for why naming the org relaxes nothing."""
+    _revoke_invitation(invitation_id, db, org)
+
+
+@router.post("/invitations/{invitation_id}/resend",
+             response_model=PendingInvitationResponse)
+@limiter.limit("20/minute")
+async def resend_invitation(
+    invitation_id: int, db: db_dependency, org: org_dependency,
+    request: Request, background_tasks: BackgroundTasks,
+):
+    """Re-send an invitation from the caller's ACTIVE org, with a fresh token."""
+    return _resend_invitation(invitation_id, db, org, background_tasks)
+
+
+@router.post("/{org_id}/invitations/{invitation_id}/resend",
+             response_model=PendingInvitationResponse)
+@limiter.limit("20/minute")
+async def resend_invitation_for_org(
+    invitation_id: int, db: db_dependency, org: named_org_dependency,
+    request: Request, background_tasks: BackgroundTasks,
+):
+    """The same resend, for an org named in the PATH. See invite_member_for_org
+    for why naming the org relaxes nothing."""
+    return _resend_invitation(invitation_id, db, org, background_tasks)
 
 
 async def _update_role(account_id: int, body: UpdateMemberRequest,

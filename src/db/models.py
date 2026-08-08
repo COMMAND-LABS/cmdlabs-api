@@ -268,6 +268,106 @@ class OrganizationMember(Base):
                 f'role={self.role}>')
 
 
+class OrganizationInvitation(Base):
+    """
+    An offer of membership that has not been accepted yet.
+
+    WHY THIS TABLE EXISTS, GIVEN THE ARGUMENT AGAINST IT
+    ----------------------------------------------------
+    routers/organizations/members.py used to open with a section titled "THE
+    INVITE, AND WHY IT HAS NO TOKEN". Its reasoning was sound and remains
+    sound: the platform authenticates by OTP, so reaching an org already
+    requires controlling the invitee's inbox, and a token is a second secret
+    sent to that same inbox. As SECURITY, this table adds nothing.
+
+    It exists for the other half of that note, which the code never acted on:
+
+        "What that DOES cost is consent: an account that already exists is
+        added immediately, without being asked."
+
+    Adding somebody to a tenant is the most consequential thing one account can
+    do to another — it puts their name on a member list, points their dashboard
+    at somebody else's data, and did all of it before they had read a word
+    about it. A row here is the asking. The membership is written on ACCEPT and
+    at no earlier moment.
+
+    It also fixes what the invitee received. With no invitation there was no
+    invitation email, so an invite sent the ordinary sign-in code: a bare
+    eight-digit number, no sender, no org, no reason. Correct as a credential
+    and useless as a message.
+
+    KEYED BY EMAIL, NOT BY ACCOUNT
+    ------------------------------
+    Deliberately. Accounts are INSERTed by /request-code before any OTP is
+    checked, so creating one here would mint an unverified account row for an
+    address the inviter merely typed — and a typo'd invite would leave a
+    permanent account nobody controls. An invitation names an ADDRESS; the
+    account is created when its owner proves they read that inbox.
+
+    ONE PENDING INVITATION PER (ORG, EMAIL)
+    ---------------------------------------
+    Enforced by a partial unique index rather than a plain constraint, because
+    the uniqueness only applies while an invitation is live: the same person
+    may be invited, leave, and be invited again, and each of those is a row.
+    Re-inviting somebody who already has one live invitation refreshes it in
+    place — a second email with a second token, both valid, is how a person
+    ends up clicking the dead one.
+
+    THE TOKEN IS STORED HASHED, for the same reason accounts.login_otp is: a
+    database leak should not hand over live credentials. The raw token exists
+    in the invitation email and nowhere else.
+    """
+    __tablename__ = 'organization_invitations'
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
+                    nullable=False, index=True)
+    # Lowercased on write. An address, not an account — see the docstring.
+    email = Column(String(320), nullable=False, index=True)
+    # Which role they join in. Same vocabulary as OrganizationMember.role, and
+    # constrained identically so an invitation cannot promise a role a
+    # membership could not hold.
+    role = Column(String(32), nullable=False, server_default='community_member')
+    # sha256 of the raw token, hex. Unique so a lookup is one indexed read.
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    # Who sent it. SET NULL rather than CASCADE: an invitation outliving the
+    # account that sent it is odd but harmless, whereas deleting the invitation
+    # would silently revoke access somebody was promised.
+    invited_by_account_id = Column(Integer, ForeignKey('accounts.id', ondelete='SET NULL'),
+                                   nullable=True, index=True)
+
+    created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    # Exactly one of these three is set once the invitation stops being live.
+    # Kept as timestamps rather than one `status` column so the log reads as
+    # what happened and when, and so a row cannot claim two outcomes.
+    accepted_at = Column(DateTime(timezone=True), nullable=True)
+    declined_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        # Mirrors ck_org_member_role. An invitation that promised 'owner' could
+        # never be honoured — ownership is organizations.owner_account_id and
+        # is not grantable — so it is refused at write time rather than at
+        # accept time, when the person is already reading the page.
+        CheckConstraint("role IN ('manager','community_member')",
+                        name='ck_org_invitation_role'),
+        # Partial: only LIVE invitations are unique per (org, email). See the
+        # docstring. Declared here as well as in the migration so the schema
+        # tests/conftest.py builds from metadata carries it too.
+        Index('uq_org_invitation_pending', 'org_id', 'email',
+              unique=True,
+              postgresql_where=text('accepted_at IS NULL AND declined_at IS NULL '
+                                    'AND revoked_at IS NULL')),
+    )
+
+    org = relationship('Organization')
+
+    def __repr__(self):
+        return (f'<OrganizationInvitation org={self.org_id} {self.email} '
+                f'role={self.role}>')
+
+
 class Logins(Base):
     __tablename__ = 'logins'
     id = Column(Integer, primary_key=True, index=True)
@@ -855,6 +955,11 @@ class AccessGrantEvent(Base):
             # the same reason the space.* values below are. Roles replaced
             # tiers; the log does not relabel what already happened.
             "'member.tier_change','member.role_change',"
+            # The invitation lifecycle. member.add still marks the moment
+            # somebody actually gains access — which is now the accept, not the
+            # send — so these four sit alongside it rather than replacing it.
+            "'member.invite','member.invite_revoke',"
+            "'member.invite_decline','member.invite_resend',"
             "'org.create','org.suspend','org.restore','org.ceiling_change',"
             "'org.rename',"
             "'tier.modules_change',"

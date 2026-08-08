@@ -79,23 +79,64 @@ async def test_cookie_selects_a_joined_org(db, test_account, test_org, other_org
 # the cookie is not authority
 # ---------------------------------------------------------------------------
 
-async def test_cookie_naming_a_foreign_org_is_refused(db, test_account, other_org):
-    """The caller is NOT a member of other_org — this must 403, not fall back.
+async def test_cookie_naming_a_foreign_org_is_ignored(
+    db, test_account, test_org, other_org
+):
+    """The caller is NOT a member of other_org, so the cookie buys nothing.
 
-    Falling back to the default org would turn a tampered or stale cookie into
-    "you are quietly somewhere else" rather than a visible error, and would
-    hide exactly the case worth seeing.
+    THIS USED TO ASSERT 403, and the reasoning here was that falling back would
+    turn a tampered or stale cookie into "you are quietly somewhere else"
+    rather than a visible error. Both halves came apart in practice.
+
+    The cookie is written by client JS with a one-year max-age and was cleared
+    by nothing — not sign-out, not sign-in — so it outlived the session AND the
+    membership. Two ordinary things then bricked an account: an owner removing
+    somebody, and a second account signing in on a browser where anybody had
+    ever used the switcher.
+
+    And "visible error" overstated it. EVERY org-scoped route 403'd, including
+    /organizations/mine, so the switcher that would have fixed it could not
+    render. The product became a wall of error toasts with no way out short of
+    devtools, which is not feedback.
+
+    WHAT IS UNCHANGED IS THE PART THAT MATTERS, and it is what this asserts:
+    the caller does not end up in other_org. The cookie is still not authority.
+    The fallback target is the account's own default_org_id — a value only the
+    server writes — so a tampered cookie is ignored rather than obeyed.
     """
+    ctx = await _resolve(db, test_account.id, {ORG_COOKIE_NAME: str(other_org.id)})
+    assert ctx.org_id == test_org.id
+    assert ctx.org_id != other_org.id, "never the org they named and are not in"
+
+
+async def test_a_foreign_cookie_with_no_default_to_fall_back_to_is_refused(
+    db, other_org
+):
+    """Fail closed is still the floor.
+
+    The fallback needs somewhere to fall back TO. An account with no default
+    org and a cookie naming one it is not in gets the refusal, because there is
+    no honest answer to give it.
+    """
+    orphan = Account(id=998, email="orphan-cookie@x.com")
+    db.add(orphan)
+    db.flush()
+
     with pytest.raises(HTTPException) as exc:
-        await _resolve(db, test_account.id, {ORG_COOKIE_NAME: str(other_org.id)})
+        await _resolve(db, orphan.id, {ORG_COOKIE_NAME: str(other_org.id)})
     assert exc.value.status_code == 403
 
 
-async def test_revoked_membership_is_refused_on_the_very_next_request(
+async def test_revoked_membership_bites_on_the_very_next_request(
     db, test_account, test_org, other_org
 ):
     """No token re-issue, no cache to expire — this is why org lives in a
-    cookie rather than in the 7-day JWT."""
+    cookie rather than in the 7-day JWT.
+
+    The removal is just as immediate as when this raised: the very next request
+    stops resolving to other_org. What changed is where they land instead —
+    their own workspace rather than an error they cannot act on.
+    """
     member = OrganizationMember(
         org_id=other_org.id, account_id=test_account.id,
         role="manager", granted_by="grant",
@@ -109,9 +150,7 @@ async def test_revoked_membership_is_refused_on_the_very_next_request(
     db.delete(member)
     db.flush()
 
-    with pytest.raises(HTTPException) as exc:
-        await _resolve(db, test_account.id, cookies)
-    assert exc.value.status_code == 403
+    assert (await _resolve(db, test_account.id, cookies)).org_id == test_org.id
 
 
 async def test_garbage_cookie_falls_back_to_default(db, test_account, test_org):
@@ -168,9 +207,16 @@ async def test_super_admin_does_not_bypass_org_membership(db, test_org, other_or
     ctx = await _resolve(db, super_admin.id)
     assert ctx.is_super_admin is True
 
-    with pytest.raises(HTTPException) as exc:
-        await _resolve(db, super_admin.id, {ORG_COOKIE_NAME: str(other_org.id)})
-    assert exc.value.status_code == 403
+    # Pointing the cookie at an org they have not joined does not get them in.
+    # It resolves to their own org instead of raising — see
+    # test_cookie_naming_a_foreign_org_is_ignored — and the assertion that
+    # carries this test is the same one it always made: not other_org.
+    elsewhere = await _resolve(db, super_admin.id,
+                               {ORG_COOKIE_NAME: str(other_org.id)})
+    assert elsewhere.org_id == test_org.id
+    assert elsewhere.org_id != other_org.id, (
+        "a super admin reads another org's data by JOINING it, which leaves a "
+        "membership row that org can see")
 
 
 # ---------------------------------------------------------------------------
