@@ -36,7 +36,7 @@ from src.db.models import (
     OrganizationMember,
     OrganizationTier,
 )
-from src.deps import db_dependency, named_org_dependency, org_dependency
+from src.deps import db_dependency, named_org_dependency
 from src.rate_limit import limiter
 from src.services import modules
 from src.utils.errors import handle_db_error
