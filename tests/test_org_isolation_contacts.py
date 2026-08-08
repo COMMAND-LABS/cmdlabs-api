@@ -102,7 +102,10 @@ async def test_a_signup_never_shares_an_org_with_another_signup(
     ma = ensure_membership(db, a)
     mb = ensure_membership(db, b)
     assert ma.org_id != mb.org_id, "two signups must never share an org"
-    assert ma.is_owner and mb.is_owner, "each owns their own workspace"
+    oa = db.query(Organization).filter(Organization.id == ma.org_id).one()
+    ob = db.query(Organization).filter(Organization.id == mb.org_id).one()
+    assert oa.owner_account_id == a.id and ob.owner_account_id == b.id, (
+        "each owns their own workspace")
 
     org_b = db.query(Organization).filter(Organization.id == mb.org_id).one()
     theirs = _contact(mb.org_id, b.id, "stranger@iso.test")

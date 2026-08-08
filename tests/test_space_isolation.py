@@ -155,7 +155,7 @@ def test_ownership_is_read_from_membership_not_from_the_column(
     """
     space = _space(db, publisher, name="Attribution Space")
     spaces.add_member(db, space=space, account_id=outsider.account_id,
-                      tier_key="owner", is_owner=True,
+                      tier_key="owner",
                       actor_account_id=publisher.account_id)
     spaces.remove_member(db, space=space, account_id=publisher.account_id,
                          actor_account_id=outsider.account_id)

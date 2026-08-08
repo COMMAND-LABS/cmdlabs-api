@@ -59,8 +59,12 @@ async def test_falls_back_to_default_org_without_cookie(db, test_account, test_o
 async def test_cookie_selects_a_joined_org(db, test_account, test_org, other_org):
     db.add(OrganizationMember(
         org_id=other_org.id, account_id=test_account.id,
-        tier_key="premium", granted_by="grant", is_owner=True,
+        tier_key="premium", granted_by="grant",
     ))
+    # Ownership is the ORG's column, so making this account the owner is now
+    # said here rather than on the membership row. The membership is what lets
+    # them IN; this is what makes them the owner once inside.
+    other_org.owner_account_id = test_account.id
     db.flush()
 
     ctx = await _resolve(db, test_account.id, {ORG_COOKIE_NAME: str(other_org.id)})
@@ -94,7 +98,7 @@ async def test_revoked_membership_is_refused_on_the_very_next_request(
     cookie rather than in the 7-day JWT."""
     member = OrganizationMember(
         org_id=other_org.id, account_id=test_account.id,
-        tier_key="premium", granted_by="grant", is_owner=False,
+        tier_key="premium", granted_by="grant",
     )
     db.add(member)
     db.flush()
@@ -121,7 +125,7 @@ async def test_api_key_path_ignores_the_cookie(db, test_account, test_org, other
     would let a key issued for one org be aimed at another."""
     db.add(OrganizationMember(
         org_id=other_org.id, account_id=test_account.id,
-        tier_key="premium", granted_by="grant", is_owner=False,
+        tier_key="premium", granted_by="grant",
     ))
     db.flush()
 
@@ -157,7 +161,7 @@ async def test_super_admin_does_not_bypass_org_membership(db, test_org, other_or
     db.flush()
     db.add(OrganizationMember(
         org_id=test_org.id, account_id=super_admin.id,
-        tier_key="org_owner", granted_by="grant", is_owner=True,
+        tier_key="org_owner", granted_by="grant",
     ))
     db.flush()
 
@@ -167,3 +171,45 @@ async def test_super_admin_does_not_bypass_org_membership(db, test_org, other_or
     with pytest.raises(HTTPException) as exc:
         await _resolve(db, super_admin.id, {ORG_COOKIE_NAME: str(other_org.id)})
     assert exc.value.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# ownership has one home
+# ---------------------------------------------------------------------------
+
+async def test_ownership_is_read_from_the_org_not_the_membership(
+    db, test_account, other_org,
+):
+    """The point of collapsing it: there is nothing left to disagree with.
+
+    Ownership was stored twice — organizations.owner_account_id and a per-row
+    is_owner flag — and drifted, leaving accounts that owned an org they could
+    not open. Moving the owner column is now the ONLY way to change who owns an
+    org, and the context follows it on the next request with nothing to keep in
+    step.
+    """
+    db.add(OrganizationMember(
+        org_id=other_org.id, account_id=test_account.id,
+        tier_key="premium", granted_by="grant",
+    ))
+    other_org.owner_account_id = None
+    db.flush()
+
+    ctx = await _resolve(db, test_account.id, {ORG_COOKIE_NAME: str(other_org.id)})
+    assert ctx.is_owner is False, "a member of an ownerless org is not its owner"
+
+    other_org.owner_account_id = test_account.id
+    db.flush()
+    ctx = await _resolve(db, test_account.id, {ORG_COOKIE_NAME: str(other_org.id)})
+    assert ctx.is_owner is True, "and the very next request sees it"
+
+
+async def test_the_membership_row_can_no_longer_claim_ownership(db):
+    """The column is gone, so the second opinion cannot be written at all.
+
+    Asserted against the mapper rather than by trying to set it, because the
+    guarantee is that there is no such field to set — in this service or in the
+    agent runtime that mirrors this model byte for byte.
+    """
+    assert not hasattr(OrganizationMember, "is_owner"), (
+        "is_owner is organizations.owner_account_id now, and nowhere else")

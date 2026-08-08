@@ -251,9 +251,17 @@ class OrganizationMember(Base):
       'subscription' - owned by the Stripe webhook; lapses when billing does.
       'grant'        - set by an owner; NEVER written by any webhook.
 
-    is_owner is a bypass rather than a stored set of grants. An owner always
-    reaches every module the org's ceiling allows, so a bad save in the matrix
-    can never lock them out of the page that would undo it.
+    OWNERSHIP IS NOT HERE. It is organizations.owner_account_id, and nowhere
+    else. There used to be an is_owner column on this table too, which made
+    ownership a fact stored twice with nothing keeping the copies in step — and
+    they drifted: orgs whose owner_account_id named an account holding no
+    is_owner row, so the owner could not open the org they owned. deps.py
+    derives it now (`org.owner_account_id == account_id`) off a row it has
+    already joined, so the two cannot disagree because there is only one.
+
+    Ownership remains a module BYPASS rather than a stored set of grants: an
+    owner always reaches every module the org's ceiling allows, so a bad save
+    in the tier matrix can never lock them out of the page that would undo it.
     """
     __tablename__ = 'organization_members'
 
@@ -264,7 +272,6 @@ class OrganizationMember(Base):
                         nullable=False, index=True)
     tier_key = Column(String(64), nullable=False)
     granted_by = Column(String(20), nullable=False, server_default='grant')
-    is_owner = Column(Boolean, nullable=False, server_default=text('false'))
     created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
 
     __table_args__ = (

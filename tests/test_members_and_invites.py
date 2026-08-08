@@ -126,13 +126,19 @@ async def test_removal_bites_on_the_very_next_request(
         assert (await c.get("/api/contacts/")).status_code == 403
 
 
-async def test_the_last_owner_cannot_be_removed(db: Session, _override_db, team):
-    """An org with no owner has nobody who can invite, set tiers, or hand it
-    over — it would need a super admin to become usable again."""
+async def test_the_owner_cannot_be_removed(db: Session, _override_db, team):
+    """An owner outside their own org can invite nobody, set no tiers, and hand
+    it over to no one — it would need a super admin to become usable again.
+
+    Was "the LAST owner", which only sounded plural because ownership used to
+    be a flag on each membership row. An org names exactly one owner, so there
+    is never a second to fall back on and the check is an equality rather than
+    a count.
+    """
     async with client_for(team) as c:
         resp = await c.delete(f"{MEMBERS}/{team.account_id}")
     assert resp.status_code == 409
-    assert "only owner" in resp.json()["detail"].lower()
+    assert "owner" in resp.json()["detail"].lower()
 
 
 async def test_a_removed_member_keeps_their_authored_rows(
@@ -177,8 +183,7 @@ async def test_the_switcher_reflects_a_new_membership(
 ):
     joiner = make_tenant(db, slug="joiner-home", account_id=9609)
     db.add(OrganizationMember(org_id=team.org_id, account_id=joiner.account_id,
-                              tier_key="member", granted_by="grant",
-                              is_owner=False))
+                              tier_key="member", granted_by="grant"))
     db.flush()
 
     async with client_for(joiner) as c:
@@ -196,8 +201,7 @@ def super_admin_client_and_org(db: Session):
                     default_org_id=ROOT_ORG_ID)
     db.add(super_admin); db.flush()
     db.add(OrganizationMember(org_id=ROOT_ORG_ID, account_id=super_admin.id,
-                              tier_key="org_owner", granted_by="grant",
-                              is_owner=True))
+                              tier_key="org_owner", granted_by="grant"))
     db.flush()
     return super_admin
 

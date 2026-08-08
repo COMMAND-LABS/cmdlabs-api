@@ -38,7 +38,7 @@ def super_admin(db: Session, test_org: Organization):
                 default_org_id=ROOT_ORG_ID)
     db.add(a); db.flush()
     db.add(OrganizationMember(org_id=ROOT_ORG_ID, account_id=a.id,
-                              tier_key="org_owner", granted_by="grant", is_owner=True))
+                              tier_key="org_owner", granted_by="grant"))
     db.flush()
     return a
 
@@ -253,9 +253,11 @@ async def test_super_admin_join_is_recorded_and_visible_to_the_org(
     after = db.query(OrganizationMember).filter(
         OrganizationMember.org_id == acme.org_id).all()
     assert len(after) == before + 1
-    joined = next(m for m in after if m.account_id == super_admin.id)
-    assert joined.is_owner is False, (
-        "super admins join to read, not to take over")
+    next(m for m in after if m.account_id == super_admin.id)
+    org = db.query(Organization).filter(Organization.id == acme.org_id).one()
+    assert org.owner_account_id != super_admin.id, (
+        "super admins join to read, not to take over — joining adds a "
+        "membership row and never touches who the org says owns it")
 
     ev = db.query(AccessGrantEvent).filter(
         AccessGrantEvent.event_type == audit.SUPER_ADMIN_JOIN).one()
@@ -301,7 +303,7 @@ def test_super_admin_are_never_the_last_to_open_a_new_module(db: Session, test_o
     db.add(narrow)
     db.flush()
 
-    super_admin = OrgContext(account_id=1, org_id=narrow.id, tier_key="owner", is_owner=True, is_super_admin=True)
+    super_admin = OrgContext(account_id=1, org_id=narrow.id, tier_key="owner", is_super_admin=True)
     assert modules.effective_modules(db, super_admin) == list(MODULE_KEYS)
 
 
@@ -344,6 +346,6 @@ def test_a_non_super_admin_member_of_the_platform_org_is_still_capped_by_their_t
     db.flush()
 
     ctx = OrgContext(account_id=stray.account_id, org_id=test_org.id,
-                     tier_key="free", is_owner=False,
+                     tier_key="free",
                      is_super_admin=False)
     assert modules.effective_modules(db, ctx) == ["home", "settings"]

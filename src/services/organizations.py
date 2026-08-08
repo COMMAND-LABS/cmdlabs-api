@@ -170,8 +170,11 @@ def ensure_membership(db: Session, account: Account,
             db.commit()
         return existing
 
-    is_owner = (org.owner_account_id == account.id)
-    tier_key = TIER_OWNER if is_owner else TIER_MEMBER
+    # Ownership is not written here — it is organizations.owner_account_id, and
+    # this row no longer carries a copy. The comparison survives only to pick a
+    # starting tier, which is a label an owner can change later and not a
+    # permission.
+    tier_key = TIER_OWNER if org.owner_account_id == account.id else TIER_MEMBER
     member = OrganizationMember(
         org_id=org.id,
         account_id=account.id,
@@ -180,7 +183,6 @@ def ensure_membership(db: Session, account: Account,
         # personal org billing moves the CEILING, and for a team org the member
         # is there because an owner put them there.
         granted_by=GRANTED_BY_GRANT,
-        is_owner=is_owner,
     )
     db.add(member)
     if account.default_org_id is None:

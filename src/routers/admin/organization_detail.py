@@ -167,11 +167,17 @@ async def organization_detail(
                 OrganizationTier.org_id == org_id).all()
         }
 
+        # The org's one owner. Everything below asks "is this member that
+        # account?" rather than reading a per-row flag, so this page cannot
+        # disagree with what the org itself says.
+        owner_id = org.owner_account_id
+
         member_rows = (
             db.query(OrganizationMember, Account)
             .join(Account, Account.id == OrganizationMember.account_id)
             .filter(OrganizationMember.org_id == org_id)
-            .order_by(OrganizationMember.is_owner.desc(), Account.email.asc())
+            .order_by((OrganizationMember.account_id == owner_id).desc(),
+                      Account.email.asc())
             .all()
         )
 
@@ -179,7 +185,7 @@ async def organization_detail(
             # Mirrors services.modules.effective_modules. Recomputed here from
             # already-loaded rows rather than called per member, which would be
             # two queries each; the intersection itself is the same expression.
-            if member.is_owner:
+            if member.account_id == owner_id:
                 return ceiling
             granted = set(tier_modules.get(member.tier_key, []))
             return [k for k in ceiling if k in granted]
@@ -187,7 +193,7 @@ async def organization_detail(
         members = [
             AdminMember(
                 account_id=m.account_id, email=a.email, tier_key=m.tier_key,
-                is_owner=m.is_owner, granted_by=m.granted_by,
+                is_owner=(m.account_id == owner_id), granted_by=m.granted_by,
                 effective_modules=_effective(m), created_at=m.created_at,
             )
             for m, a in member_rows
