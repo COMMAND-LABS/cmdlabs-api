@@ -177,18 +177,40 @@ async def test_a_missing_org_looks_the_same_as_one_you_cannot_reach(
 
 # ── the active-org routes are untouched ─────────────────────────────────────
 
-async def test_the_cookie_routes_still_answer_for_the_active_org(
+async def test_the_cookie_route_still_answers_for_the_active_org(
     db: Session, _override_db, acme, beta
 ):
-    """The refactor that extracted the shared payload builders changed nothing.
+    """/members must still describe the ACTIVE org.
 
-    /me/overview and /members must still describe the ACTIVE org, whatever
-    other orgs the caller now happens to be able to name in a path.
+    The caller can now name Beta in a path, and that must not have changed what
+    the unqualified route means. This is the half of the members surface the
+    Members screen still uses.
+
+    /me/overview was the other assertion here and is gone — the route was
+    removed with /dashboard/settings/organization, the only page that called
+    it. Its owner-gating cases live on against the path route in
+    tests/test_organization_overview.py.
     """
     async with client_for(acme) as c:
-        overview = await c.get("/api/organizations/me/overview")
         members = await c.get("/api/organizations/members")
 
-    assert overview.status_code == 200, overview.text
-    assert overview.json()["org_id"] == acme.org_id
+    assert members.status_code == 200, members.text
     assert members.json()["org_id"] == acme.org_id
+
+
+async def test_the_removed_cookie_overview_route_is_gone(
+    db: Session, _override_db, acme
+):
+    """Deleted, not quietly shadowed by the path route.
+
+    `/me/overview` and `/{org_id}/overview` have the same shape, and org_id is
+    an int — so if the literal route were ever removed while something still
+    called it, FastAPI would try "me" as an org id and answer 422 rather than
+    404. Pinned so the difference between "this endpoint is gone" and "this
+    endpoint is broken" stays visible.
+    """
+    async with client_for(acme) as c:
+        resp = await c.get("/api/organizations/me/overview")
+
+    assert resp.status_code in (404, 422), resp.text
+    assert resp.status_code != 200, "the route was removed"
