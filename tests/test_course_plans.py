@@ -151,7 +151,7 @@ async def test_the_orgs_plan_covers_a_member_who_never_paid(
     db.add(invited)
     db.flush()
     db.add(OrganizationMember(org_id=premium_user.org_id, account_id=invited.id,
-                              tier_key="owner", is_owner=False))
+                              tier_key="owner"))
     db.flush()
     assert plans.plan_for_account(invited) == plans.PLAN_FREE, (
         "the point of the test: this account has bought nothing itself")

@@ -206,8 +206,12 @@ class OrgContext:
     account_id: int
     org_id: int
     tier_key: str
-    is_owner: bool
-    is_super_admin: bool
+    # Both default to FALSE, which is the safe direction: a context built
+    # without them is less privileged, never more. get_org_context always
+    # passes both; the defaults exist for the test helpers that assemble a
+    # context by hand, and for the same reason read_only and plan have them.
+    is_owner: bool = False
+    is_super_admin: bool = False
     # True during the GRACE window after the owner's subscription lapsed:
     # everything still opens, nothing may be changed. Derived per request from
     # the owner's accounts.subscription_lapsed_at, never stored — see
@@ -313,7 +317,14 @@ async def get_org_context(
         account_id=account_id,
         org_id=org.id,
         tier_key=member.tier_key,
-        is_owner=member.is_owner,
+        # DERIVED, not stored. An org names its owner in one column; a second
+        # copy on the membership row was a cache with no invalidation, and it
+        # drifted — orgs whose owner_account_id named somebody who held no
+        # is_owner row, and so could not open the org they owned.
+        #
+        # The Organization is already joined for the membership check above, so
+        # this costs nothing and cannot disagree with itself.
+        is_owner=(org.owner_account_id == account_id),
         is_super_admin=account.is_super_admin,
         read_only=entitlement.read_only,
         grace_ends_at=entitlement.grace_ends_at,

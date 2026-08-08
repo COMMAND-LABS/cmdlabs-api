@@ -148,9 +148,14 @@ async def my_organization(db: db_dependency, org: org_dependency, request: Reque
         member_count = (db.query(func.count(OrganizationMember.id))
                           .filter(OrganizationMember.org_id == org.org_id)
                           .scalar()) or 0
+        # An org names one owner, so this is 1 when that account is actually a
+        # member and 0 when it is not — which is the state worth surfacing,
+        # because an owner outside their own org cannot administer it.
+        owner_id = (db.query(Organization.owner_account_id)
+                      .filter(Organization.id == org.org_id).scalar())
         owner_count = (db.query(func.count(OrganizationMember.id))
                          .filter(OrganizationMember.org_id == org.org_id,
-                                 OrganizationMember.is_owner.is_(True))
+                                 OrganizationMember.account_id == owner_id)
                          .scalar()) or 0
         recent = (
             db.query(OrganizationMember, Account)
@@ -204,7 +209,7 @@ async def my_organization(db: db_dependency, org: org_dependency, request: Reque
             recent_members=[
                 RecentMember(
                     account_id=m.account_id, email=a.email,
-                    tier_key=m.tier_key, is_owner=m.is_owner,
+                    tier_key=m.tier_key, is_owner=(m.account_id == owner_id),
                     created_at=m.created_at,
                 )
                 for m, a in recent

@@ -32,7 +32,7 @@ def super_admin_account(db, test_org):
     db.flush()
     db.add(OrganizationMember(
         org_id=test_org.id, account_id=account.id,
-        tier_key="org_owner", granted_by="grant", is_owner=True,
+        tier_key="org_owner", granted_by="grant",
     ))
     db.flush()
     return account
@@ -71,7 +71,7 @@ def seeded_orgs(db, test_org, test_account):
     db.add(OrganizationTier(org_id=acme.id, tier_key="member", label="Member",
                             modules=["contacts"]))
     db.add(OrganizationMember(org_id=acme.id, account_id=test_account.id,
-                              tier_key="member", granted_by="grant", is_owner=False))
+                              tier_key="member", granted_by="grant"))
     db.flush()
     return acme, lapsed
 

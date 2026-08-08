@@ -110,12 +110,22 @@ def make_tenant(
 
     db.add(OrganizationMember(
         org_id=org.id, account_id=account.id,
-        tier_key=tier_key, granted_by="grant", is_owner=is_owner,
+        tier_key=tier_key, granted_by="grant",
     ))
     db.flush()
 
-    org.owner_account_id = org.owner_account_id or account.id
-    db.flush()
+    # `is_owner` now decides ONE thing, and it is on the org rather than the
+    # membership. The parameter and all ~45 call sites are unchanged; what
+    # moved is where the answer is written.
+    #
+    # This used to read `org.owner_account_id = org.owner_account_id or
+    # account.id`, which made the first member the owner whatever the caller
+    # asked for — so a tenant created with is_owner=False was simultaneously
+    # the org's owner_account_id and not an owner. Exactly the disagreement
+    # this change removes, sitting in the fixture that builds every test.
+    if is_owner and org.owner_account_id is None:
+        org.owner_account_id = account.id
+        db.flush()
     return Tenant(org=org, account=account)
 
 

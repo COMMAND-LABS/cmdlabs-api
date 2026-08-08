@@ -148,9 +148,11 @@ async def join_organization(
             account_id=super_admin.id,
             tier_key=TIER_ORG_OWNER,
             granted_by=GRANTED_BY_GRANT,
-            # NOT an owner of the customer's org — super admin join to read,
-            # not to take over. Ownership stays with the customer.
-            is_owner=False,
+            # A super admin joining does NOT become an owner of the customer's
+            # org — they join to read, not to take over. That used to be an
+            # is_owner=False that a future edit could have flipped; now it is
+            # structural, because ownership is organizations.owner_account_id
+            # and joining does not touch it.
         )
         db.add(member)
         audit.record_membership(

@@ -246,7 +246,6 @@ def test_account(db: Session, test_org: Organization) -> Account:
         account_id=account.id,
         tier_key="free",
         granted_by="grant",
-        is_owner=False,
     ))
     db.flush()
     return account

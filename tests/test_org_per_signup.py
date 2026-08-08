@@ -57,7 +57,9 @@ def test_a_signup_owns_the_org_it_lands_in(db: Session):
     org = own_org_for(db, acct.id)
     assert org is not None
     assert member.org_id == org.id
-    assert member.is_owner is True
+    assert org.owner_account_id == acct.id, (
+        "ownership is the org's column — the membership row no longer\n"
+        "        carries a second copy of it")
     assert org.owner_account_id == acct.id
     assert acct.default_org_id == org.id
 
@@ -125,7 +127,7 @@ def test_a_free_signup_sees_exactly_the_free_modules(db: Session):
     assert modules.ceiling_for(db, org.id) == FREE_CEILING
 
     from src.deps import OrgContext
-    ctx = OrgContext(account_id=acct.id, org_id=org.id, tier_key="owner", is_owner=True, is_super_admin=False)
+    ctx = OrgContext(account_id=acct.id, org_id=org.id, tier_key="owner", is_super_admin=False)
     # Owner bypass means the ceiling IS what they can open — the tier layer is
     # inert until this org has somebody in it who is not the owner.
     assert modules.effective_modules(db, ctx) == FREE_CEILING
@@ -215,8 +217,7 @@ def test_billing_only_follows_the_owner_s_subscription(db: Session):
     acct = _account(db, 8111)
     ensure_membership(db, acct)
     db.add(OrganizationMember(org_id=team.org_id, account_id=acct.id,
-                              tier_key="member", granted_by="grant",
-                              is_owner=False))
+                              tier_key="member", granted_by="grant"))
     db.flush()
 
     before = modules.ceiling_for(db, team.org_id)

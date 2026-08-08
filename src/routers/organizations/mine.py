@@ -63,7 +63,9 @@ async def my_organizations(db: db_dependency, org: org_dependency, request: Requ
                 MyOrganization(
                     id=o.id,
                     name=o.name,
-                    is_owner=m.is_owner,
+                    # From the org's own column. The Organization is already
+                    # joined for the name, so this needs no extra query.
+                    is_owner=(o.owner_account_id == org.account_id),
                     is_personal=(member_counts.get(o.id, 0) == 1),
                     is_active=(o.id == org.org_id),
                 )

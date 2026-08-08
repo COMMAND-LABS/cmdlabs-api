@@ -127,10 +127,16 @@ def _load_org(db, org_id: int) -> Organization:
     return db.query(Organization).filter(Organization.id == org_id).one()
 
 
-def _owner_count(db, org_id: int) -> int:
-    return (db.query(OrganizationMember)
-              .filter(OrganizationMember.org_id == org_id,
-                      OrganizationMember.is_owner.is_(True)).count())
+def _owner_account_id(db, org_id: int) -> int | None:
+    """Who owns this org. One column, one answer.
+
+    Replaced _owner_count(), which counted is_owner rows in order to ask "would
+    removing this person leave the org ownerless?". That question had a
+    plural-sounding answer only because ownership was stored per membership;
+    an org names exactly one owner, so the check is now an equality.
+    """
+    return (db.query(Organization.owner_account_id)
+              .filter(Organization.id == org_id).scalar())
 
 
 @router.get("/members", response_model=MembersPageResponse)
@@ -144,11 +150,16 @@ async def list_members(db: db_dependency, org: org_dependency, request: Request)
     """
     try:
         organization = _load_org(db, org.org_id)
+        owner_id = organization.owner_account_id
         rows = (
             db.query(OrganizationMember, Account)
             .join(Account, Account.id == OrganizationMember.account_id)
             .filter(OrganizationMember.org_id == org.org_id)
-            .order_by(OrganizationMember.is_owner.desc(), Account.email.asc())
+            # Owner first, then alphabetical. Ordered against the org's owner
+            # column rather than a per-row flag, which is now the only place
+            # that knows.
+            .order_by((OrganizationMember.account_id == owner_id).desc(),
+                      Account.email.asc())
             .all()
         )
         tiers = (db.query(OrganizationTier.tier_key)
@@ -162,7 +173,7 @@ async def list_members(db: db_dependency, org: org_dependency, request: Request)
             members=[
                 MemberResponse(
                     account_id=m.account_id, email=a.email, tier_key=m.tier_key,
-                    is_owner=m.is_owner, granted_by=m.granted_by,
+                    is_owner=(m.account_id == owner_id), granted_by=m.granted_by,
                     created_at=m.created_at,
                 )
                 for m, a in rows
@@ -267,7 +278,10 @@ async def invite_member(
             # Never 'subscription'. Their access comes from this org, so a
             # Stripe event on their personal account must never revoke it.
             granted_by=GRANTED_BY_GRANT,
-            is_owner=False,
+            # No is_owner to set false: an invitee is not named in
+            # organizations.owner_account_id, so they are not the owner. The
+            # rule that used to need stating is now the only thing that can
+            # happen.
         )
         db.add(member)
 
@@ -302,7 +316,12 @@ async def invite_member(
                     org.account_id, account.id, org.org_id, body.tier_key)
         return MemberResponse(
             account_id=account.id, email=account.email, tier_key=member.tier_key,
-            is_owner=False, granted_by=member.granted_by,
+            # Derived like everywhere else rather than hardcoded false. An
+            # invitee is not normally the owner, but "normally" is what the
+            # stored copy relied on: an owner who was somehow not a member
+            # would have been reported as a non-owner on the way back in.
+            is_owner=(account.id == _owner_account_id(db, org.org_id)),
+            granted_by=member.granted_by,
             created_at=member.created_at,
         )
     except HTTPException:
@@ -349,7 +368,8 @@ async def update_member_tier(
         db.refresh(member)
         return MemberResponse(
             account_id=account_id, email=account.email, tier_key=member.tier_key,
-            is_owner=member.is_owner, granted_by=member.granted_by,
+            is_owner=(account_id == _owner_account_id(db, org.org_id)),
+            granted_by=member.granted_by,
             created_at=member.created_at,
         )
     except HTTPException:
@@ -385,14 +405,19 @@ async def remove_member(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                                 detail="Not a member of this organization.")
 
-        # The last owner cannot be removed, including by themselves. An org
-        # with no owner has nobody who can invite, set tiers, or hand it over —
-        # it would need super admin intervention to become usable again.
-        if member.is_owner and _owner_count(db, org.org_id) <= 1:
+        # The owner cannot be removed, including by themselves. An org whose
+        # owner is not in it has nobody who can invite, set tiers, or hand it
+        # over — it would need a super admin to become usable again, and it is
+        # exactly the half-state this collapse exists to make unreachable.
+        #
+        # No longer "the LAST owner": an org names one owner, so there is never
+        # a second one to fall back on. The count that used to be here only
+        # looked plural because ownership was stored per membership row.
+        if account_id == _owner_account_id(db, org.org_id):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="This is the only owner. Make somebody else an owner "
-                       "first.",
+                detail="This is the organization's owner and cannot be "
+                       "removed.",
             )
 
         audit.record_membership(
