@@ -9,16 +9,20 @@ Here the filter on OrganizationMember.account_id is the entire boundary, with
 nothing behind it — answering "which orgs am I in" across orgs is the point.
 
 So the tests below are less about the happy path than about the SHAPE of what
-comes back: the caller's own membership rows and nothing else. The endpoint
-feeds both the org switcher and the account-settings card, and the second is
-what motivated tier_key — a member could previously see their tier nowhere at
-all, because /me/entitlements covers only the active org and the owner's
-console 404s for them.
+comes back: the caller's own membership rows and nothing else.
+
+WHAT CHANGED WITH ROLES. This used to return `tier_key` plus a `tier_label`
+looked up from organization_tiers, and a chunk of this file guarded that lookup
+— that it was filtered to the caller's own (org, tier) pairs so the org's other
+tiers never entered the process, and that joining it could not fan the list out
+into duplicate orgs. Roles are platform-wide constants, so there is no lookup,
+no matrix to leak, and no join to duplicate rows. Those tests are gone with the
+query they were protecting; the boundary tests are not.
 """
 import pytest
 from sqlalchemy.orm import Session
 
-from src.db.models import OrganizationTier
+from src.config.roles_registry import ROLE_COMMUNITY_MEMBER, ROLE_MANAGER
 from tests.org_isolation import client_for, make_tenant
 
 MINE = "/api/organizations/mine"
@@ -26,90 +30,78 @@ MINE = "/api/organizations/mine"
 
 @pytest.fixture()
 def acme(db: Session):
-    """An org whose owner holds the 'owner' tier."""
-    return make_tenant(db, slug="mine-acme", account_id=9601, tier_key="owner",
-                       is_owner=True)
+    """An org and its owner."""
+    return make_tenant(db, slug="mine-acme", account_id=9601,
+                       role=ROLE_MANAGER, is_owner=True)
 
 
 @pytest.fixture()
 def colleague(db: Session, acme):
-    """A plain member of the SAME org, on a different tier."""
+    """A plain member of the SAME org, in the narrower role."""
     return make_tenant(db, slug="mine-acme", account_id=9602,
-                       tier_key="analyst", is_owner=False)
+                       role=ROLE_COMMUNITY_MEMBER, is_owner=False)
 
 
-async def test_lists_the_callers_own_membership_with_its_tier(
+async def test_lists_the_callers_own_membership_with_its_role(
     db: Session, _override_db, acme
 ):
     async with client_for(acme) as c:
         resp = await c.get(MINE)
 
     assert resp.status_code == 200, resp.text
-    orgs = resp.json()["organizations"]
-    mine = next(o for o in orgs if o["id"] == acme.org_id)
-    assert mine["tier_key"] == "owner"
+    mine = next(o for o in resp.json()["organizations"]
+                if o["id"] == acme.org_id)
+    assert mine["role"] == ROLE_MANAGER
     assert mine["is_owner"] is True
 
 
-async def test_the_tier_carries_the_owners_label_not_the_raw_key(
-    db: Session, _override_db, acme
-):
+async def test_the_role_carries_a_display_label(db: Session, _override_db,
+                                                colleague):
     """A key is an identifier; a label is what a person should be shown.
 
-    tier_label is what the settings card renders. Without it the UI would fall
-    back to the key, which is how internal vocabulary leaks into the product.
+    Resolved from a constant now rather than from an org's own row, so unlike
+    the tier label it replaced it can never come back null.
     """
-    tier = (db.query(OrganizationTier)
-              .filter(OrganizationTier.org_id == acme.org_id,
-                      OrganizationTier.tier_key == "owner").one())
-    tier.label = "Founding Team"
-    db.flush()
-
-    async with client_for(acme) as c:
+    async with client_for(colleague) as c:
         resp = await c.get(MINE)
 
     mine = next(o for o in resp.json()["organizations"]
-                if o["id"] == acme.org_id)
-    assert mine["tier_label"] == "Founding Team"
+                if o["id"] == colleague.org_id)
+    assert mine["role"] == ROLE_COMMUNITY_MEMBER
+    assert mine["role_label"] == "Community Member"
 
 
-async def test_each_member_sees_their_OWN_tier_in_the_same_org(
+async def test_each_member_sees_their_OWN_role_in_the_same_org(
     db: Session, _override_db, acme, colleague
 ):
     """THE SHARPEST EDGE HERE.
 
-    Two accounts, one org, different tiers. Each must see the tier they hold —
+    Two accounts, one org, different roles. Each must see the role they hold —
     not the org's, not the owner's, not the first row the join happened to
-    return. A bug that keyed the label lookup by org alone would pass every
-    other test in this file and fail this one.
+    return.
     """
     async with client_for(acme) as c:
         owner_view = await c.get(MINE)
     async with client_for(colleague) as c:
         member_view = await c.get(MINE)
 
-    def tier_in(resp, org_id):
+    def role_in(resp, org_id):
         return next(o for o in resp.json()["organizations"]
-                    if o["id"] == org_id)["tier_key"]
+                    if o["id"] == org_id)["role"]
 
-    assert tier_in(owner_view, acme.org_id) == "owner"
-    assert tier_in(member_view, acme.org_id) == "analyst"
+    assert role_in(owner_view, acme.org_id) == ROLE_MANAGER
+    assert role_in(member_view, acme.org_id) == ROLE_COMMUNITY_MEMBER
 
 
-async def test_a_member_is_not_told_the_orgs_other_tiers(
+async def test_the_response_carries_nothing_but_the_callers_own_membership(
     db: Session, _override_db, acme, colleague
 ):
-    """The tier MATRIX is the owner's, and it stays behind _require_owner.
+    """Pinned as an EXACT key set rather than a list of absences.
 
-    organizations/overview.py serves it and 404s everyone else. This endpoint
-    may say "you are an Analyst"; it may not say what other tiers exist, who is
-    on them, or which modules they open.
-
-    Pinned as an EXACT key set rather than a list of absences: "modules is not
-    in the row" only catches the leak somebody already thought of, while this
-    fails on any field added to the response model without a decision. If that
-    is deliberate, the failure is one line to update and a prompt to re-read
-    the boundary note in mine.py.
+    "modules is not in the row" only catches the leak somebody already thought
+    of; this fails on any field added to the response model without a decision.
+    If the addition is deliberate, the failure is one line to update and a
+    prompt to re-read the boundary note in mine.py.
     """
     async with client_for(colleague) as c:
         resp = await c.get(MINE)
@@ -119,14 +111,9 @@ async def test_a_member_is_not_told_the_orgs_other_tiers(
 
     assert set(row) == {
         "id", "name", "is_owner", "is_personal", "is_active",
-        "tier_key", "tier_label",
+        "role", "role_label",
     }, "a new field on this endpoint needs a look at what it discloses"
-
-    # Their own tier, and no trace of the one the owner holds.
-    assert row["tier_key"] == "analyst"
-    assert "owner" not in {
-        str(v).lower() for k, v in row.items() if k.startswith("tier_")
-    }, "the org's other tiers are the owner's matrix, not this response"
+    assert row["role"] == ROLE_COMMUNITY_MEMBER, "their own role, not the owner's"
 
 
 async def test_only_orgs_the_caller_belongs_to_are_listed(
@@ -134,7 +121,7 @@ async def test_only_orgs_the_caller_belongs_to_are_listed(
 ):
     """The account_id filter IS the boundary — see the module docstring."""
     stranger = make_tenant(db, slug="mine-beta", account_id=9603,
-                           tier_key="owner", is_owner=True)
+                           role=ROLE_MANAGER, is_owner=True)
 
     async with client_for(acme) as c:
         resp = await c.get(MINE)
@@ -144,38 +131,16 @@ async def test_only_orgs_the_caller_belongs_to_are_listed(
     assert stranger.org_id not in ids, "an org they are not a member of"
 
 
-async def test_one_membership_row_per_org(db: Session, _override_db, acme,
-                                          colleague):
-    """The tier join must not fan the list out.
+async def test_one_row_per_org(db: Session, _override_db, acme, colleague):
+    """One membership, one entry.
 
-    Joining organization_tiers without confining it to the caller's own
-    (org, tier) pair would return one row per tier in the org, and the switcher
-    would show the same org several times.
+    Cheap to keep even though the join that could fan it out is gone: the
+    switcher renders this list directly, and a duplicated org there is both
+    confusing and a sign something upstream started returning rows per
+    something-else.
     """
     async with client_for(colleague) as c:
         resp = await c.get(MINE)
 
     ids = [o["id"] for o in resp.json()["organizations"]]
     assert len(ids) == len(set(ids)), f"duplicated orgs: {ids}"
-
-
-async def test_a_tier_with_no_row_degrades_to_a_null_label(
-    db: Session, _override_db, acme
-):
-    """tier_key is a plain string, not an FK, so the label can genuinely miss.
-
-    It must come back null rather than 500 or silently echo the key.
-    """
-    db.query(OrganizationTier).filter(
-        OrganizationTier.org_id == acme.org_id,
-        OrganizationTier.tier_key == "owner").delete()
-    db.flush()
-
-    async with client_for(acme) as c:
-        resp = await c.get(MINE)
-
-    assert resp.status_code == 200, resp.text
-    mine = next(o for o in resp.json()["organizations"]
-                if o["id"] == acme.org_id)
-    assert mine["tier_key"] == "owner"
-    assert mine["tier_label"] is None

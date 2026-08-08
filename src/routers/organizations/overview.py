@@ -6,7 +6,7 @@ WHY THIS EXISTS
 Platform super admins have had /api/admin/organizations/{id} — every org, in
 full — since orgs shipped. An org's OWNER had no equivalent for their own org:
 the answer to "what is the state of my organization?" was spread across the
-members list, the tiers matrix, the membership page and the audit log, and
+members list, the roles, the membership page and the audit log, and
 nowhere did those four add up to one view. This is that view.
 
 A READ MODEL, AND NOTHING ELSE
@@ -17,7 +17,7 @@ anything, and a bug in this file can at worst show an owner their own org's
 configuration in the wrong shape. Editing still happens where it happened
 before, which is why the UI deep-links out rather than growing forms.
 
-Owner only, 404 to everyone else, matching tiers.py: a member who cannot
+Owner only, 404 to everyone else, matching members.py: a member who cannot
 administer the org should not have its admin surface confirm it exists.
 Platform super admins are not owners here and are not admitted either — they
 administer an org by setting its ceiling, not by reading the owner's console.
@@ -30,11 +30,11 @@ from pydantic import BaseModel
 from sqlalchemy import func
 
 from src.config.modules_registry import BY_KEY, MODULE_KEYS
+from src.config import roles_registry as role_registry
 from src.db.models import (
     Account,
     Organization,
     OrganizationMember,
-    OrganizationTier,
 )
 from src.deps import db_dependency, named_org_dependency
 from src.rate_limit import limiter
@@ -56,13 +56,19 @@ class ModuleSummary(BaseModel):
 class RecentMember(BaseModel):
     account_id: int
     email: str
-    tier_key: str
+    role: str
     is_owner: bool
     created_at: Optional[datetime] = None
 
 
-class TierSummary(BaseModel):
-    tier_key: str
+class RoleSummary(BaseModel):
+    """One role, and how many of this org's people hold it.
+
+    PLATFORM-WIDE, unlike the tier summary it replaces. Every org has exactly
+    these roles with exactly these modules, so the only per-org fact here is
+    the count.
+    """
+    role: str
     label: str
     module_count: int
     member_count: int
@@ -95,7 +101,7 @@ class OrganizationOverviewResponse(BaseModel):
     recent_members: List[RecentMember]
 
     # --- Access ---------------------------------------------------------
-    tiers: List[TierSummary]
+    roles: List[RoleSummary]
 
     # `owned_spaces` used to close this response: the spaces billed to this org,
     # and THE ONE PLACE Space.owner_org_id was read — for exactly what the column
@@ -105,7 +111,7 @@ class OrganizationOverviewResponse(BaseModel):
 def _require_owner(org):
     """Only an owner sees their org's console.
 
-    404 rather than 403, the same choice tiers.py, members.py and
+    404 rather than 403, the same choice members.py and
     require_super_admin all make: the surface does not confirm its own
     existence to somebody who cannot use it.
     """
@@ -156,16 +162,13 @@ def _overview_payload(db, org) -> OrganizationOverviewResponse:
         .all()
     )
 
-    per_tier = dict(
-        db.query(OrganizationMember.tier_key,
+    per_role = dict(
+        db.query(OrganizationMember.role,
                  func.count(OrganizationMember.id))
           .filter(OrganizationMember.org_id == org.org_id)
-          .group_by(OrganizationMember.tier_key)
+          .group_by(OrganizationMember.role)
           .all()
     )
-    tier_rows = (db.query(OrganizationTier)
-                   .filter(OrganizationTier.org_id == org.org_id)
-                   .order_by(OrganizationTier.id.asc()).all())
 
     return OrganizationOverviewResponse(
         org_id=organization.id,
@@ -188,18 +191,23 @@ def _overview_payload(db, org) -> OrganizationOverviewResponse:
         recent_members=[
             RecentMember(
                 account_id=m.account_id, email=a.email,
-                tier_key=m.tier_key, is_owner=(m.account_id == owner_id),
+                role=m.role, is_owner=(m.account_id == owner_id),
                 created_at=m.created_at,
             )
             for m, a in recent
         ],
-        tiers=[
-            TierSummary(
-                tier_key=t.tier_key, label=t.label,
-                module_count=len(t.modules or []),
-                member_count=per_tier.get(t.tier_key, 0),
+        # Every role that exists, whether or not anybody here holds it: an
+        # owner deciding who to invite needs to see the option they have not
+        # used yet. Module counts are capped by THIS org's ceiling, so a role's
+        # breadth reads correctly for the plan actually in force.
+        roles=[
+            RoleSummary(
+                role=key,
+                label=role_registry.label(key),
+                module_count=len(role_registry.modules_for(key, ceiling)),
+                member_count=per_role.get(key, 0),
             )
-            for t in tier_rows
+            for key in role_registry.ROLE_KEYS
         ],
     )
 

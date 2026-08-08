@@ -14,7 +14,8 @@ from src.db.models import Organization, OrganizationMember
 from src.deps import db_dependency, super_admin_dependency
 from src.rate_limit import limiter
 from src.services import audit
-from src.services.organizations import GRANTED_BY_GRANT, TIER_MEMBER
+from src.config import roles_registry as roles
+from src.services.organizations import GRANTED_BY_GRANT
 from src.utils.errors import handle_db_error
 
 router = APIRouter()
@@ -39,7 +40,7 @@ class JoinResponse(BaseModel):
     org_id: int
     org_name: str
     account_id: int
-    tier_key: str
+    role: str
 
 
 @router.put("/organizations/{org_id}/plan", response_model=PlanResponse)
@@ -68,8 +69,8 @@ async def set_plan(
     in config/plans_registry.py — one line, named, and it applies to everybody
     who is given it rather than to one row nobody can explain later.
 
-    Narrowing does NOT rewrite the org's tiers. Entitlement intersects at read
-    time, so the change takes effect on the next request and no tier row is
+    Narrowing does NOT rewrite anybody's role. Entitlement intersects at read
+    time, so the change takes effect on the next request and no membership row is
     left holding a grant that could re-widen access later.
     """
     try:
@@ -141,19 +142,20 @@ async def join_organization(
                               OrganizationMember.account_id == super_admin.id).first())
         if existing:
             return JoinResponse(org_id=org.id, org_name=org.name,
-                                account_id=super_admin.id, tier_key=existing.tier_key)
+                                account_id=super_admin.id, role=existing.role)
 
         member = OrganizationMember(
             org_id=org.id,
             account_id=super_admin.id,
-            # The org's ordinary member tier, which every org actually has.
-            # This used to be a dedicated 'org_owner' tier that existed in only
-            # ONE organization, so joining any other wrote a tier_key naming a
-            # tier that was not there. Nothing read it — super admins bypass
-            # tiers — but a dangling reference behind a bypass is a bad thing
-            # to leave lying around, and the value was claiming ownership it
-            # never conferred.
-            tier_key=TIER_MEMBER,
+            # The smallest role, and every org has it because roles are
+            # platform-wide constants. This used to name a dedicated 'org_owner'
+            # tier that existed in exactly ONE organization, so joining any
+            # other org wrote a tier_key pointing at nothing. Nothing read it —
+            # super admins bypass the module layer — but a dangling reference
+            # behind a bypass is a bad thing to leave lying around, and the
+            # value was claiming an ownership it never conferred. Constants
+            # remove the failure mode rather than fixing an instance of it.
+            role=roles.DEFAULT_ROLE,
             granted_by=GRANTED_BY_GRANT,
             # A super admin joining does NOT become an owner of the customer's
             # org — they join to read, not to take over. Structural now:
@@ -163,14 +165,14 @@ async def join_organization(
         db.add(member)
         audit.record_membership(
             db, event_type=audit.SUPER_ADMIN_JOIN, org_id=org.id,
-            account_id=super_admin.id, tier_key=TIER_MEMBER,
+            account_id=super_admin.id, role=roles.DEFAULT_ROLE,
             actor_account_id=super_admin.id,
         )
         db.commit()
         db.refresh(member)
 
         return JoinResponse(org_id=org.id, org_name=org.name,
-                            account_id=super_admin.id, tier_key=member.tier_key)
+                            account_id=super_admin.id, role=member.role)
     except HTTPException:
         raise
     except Exception as e:

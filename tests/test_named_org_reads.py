@@ -45,7 +45,7 @@ def _members(org_id: int) -> str:
 def acme(db: Session):
     """Account 9701 OWNS Acme, and acts in it by default."""
     return make_tenant(db, slug="named-acme", account_id=9701,
-                       tier_key="owner", is_owner=True)
+                       role="manager", is_owner=True)
 
 
 @pytest.fixture()
@@ -56,9 +56,9 @@ def beta(db: Session, acme):
     one org and a plain member in another, acting in the first.
     """
     other = make_tenant(db, slug="named-beta", account_id=9702,
-                        tier_key="owner", is_owner=True)
+                        role="manager", is_owner=True)
     db.add(OrganizationMember(org_id=other.org_id, account_id=acme.account_id,
-                              tier_key="member", granted_by="grant"))
+                              role="manager", granted_by="grant"))
     db.flush()
     return other
 
@@ -67,7 +67,7 @@ def beta(db: Session, acme):
 def stranger(db: Session):
     """An org our caller has nothing to do with."""
     return make_tenant(db, slug="named-stranger", account_id=9703,
-                       tier_key="owner", is_owner=True)
+                       role="manager", is_owner=True)
 
 
 # ── the point of the routes ─────────────────────────────────────────────────

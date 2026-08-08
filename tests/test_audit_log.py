@@ -39,7 +39,7 @@ def super_admin(db: Session, test_org: Organization):
                    default_org_id=ROOT_ORG_ID)
     db.add(acct); db.flush()
     db.add(OrganizationMember(org_id=ROOT_ORG_ID, account_id=acct.id,
-                              tier_key="owner", granted_by="grant"))
+                              role="manager", granted_by="grant"))
     db.flush()
     return acct
 
@@ -82,7 +82,10 @@ def test_joining_an_org_is_recorded(db: Session, test_org):
     assert ev.org_id != test_org.id, "a signup must not land in the platform org"
     assert ev.principal_id == newcomer.id
     assert ev.principal_label == "newcomer@x.com"   # snapshotted
-    assert ev.role == "owner"                       # the tier they joined on
+    # The ROLE they joined on. Every signup joins in the smallest role — even
+    # the owner of the org being created, whose role is inert because ownership
+    # bypasses it.
+    assert ev.role == "community_member"
 
 
 def test_membership_is_recorded_once_not_on_every_login(db: Session, test_org):

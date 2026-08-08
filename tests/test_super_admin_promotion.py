@@ -36,7 +36,7 @@ from src.services.organizations import ensure_membership
 
 def _ctx(account_id, org, is_super_admin=True):
     return OrgContext(
-        account_id=account_id, org_id=org.id, tier_key="owner",
+        account_id=account_id, org_id=org.id, role="manager",
         is_owner=True, is_super_admin=is_super_admin)
 
 

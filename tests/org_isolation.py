@@ -29,12 +29,11 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.orm import Session
 
 from src.config import plans_registry as plans
-from src.config.modules_registry import MODULE_KEYS
+from src.config.roles_registry import ROLE_MANAGER
 from src.db.models import (
     Account,
     Organization,
     OrganizationMember,
-    OrganizationTier,
 )
 from src.main import app
 from tests.conftest import make_token
@@ -62,13 +61,20 @@ def make_tenant(
     account_id: int,
     email: str | None = None,
     data_scope: str | None = None,
-    tier_key: str = "member",
+    role: str = ROLE_MANAGER,
     is_owner: bool = True,
 ) -> Tenant:
     """Create an org with one member.
 
     Calling twice with the same slug adds a second member to the SAME org,
     which is how a team is built here.
+
+    `role` defaults to MANAGER, which preserves what this fixture always meant.
+    It used to take `tier_key` and seed that tier with EVERY module key, so a
+    "member" built here had the full surface — the tenancy suites are about
+    org_id, not about menus, and a fixture that silently withheld modules would
+    make them pass for the wrong reason. Manager is that same "sees everything
+    the plan allows". Pass role="community_member" to test the narrow role.
 
     `data_scope` is accepted and ignored. Orgs no longer have one: every
     account owns its own org, so the flag that once distinguished the shared
@@ -93,15 +99,8 @@ def make_tenant(
         db.add(org)
         db.flush()
 
-    # A non-owner resolves their modules through a tier, so the tier has to
-    # exist or they would see nothing regardless of the ceiling.
-    if not db.query(OrganizationTier).filter(
-            OrganizationTier.org_id == org.id,
-            OrganizationTier.tier_key == tier_key).first():
-        db.add(OrganizationTier(org_id=org.id, tier_key=tier_key,
-                                label=tier_key.title(),
-                                modules=list(MODULE_KEYS)))
-        db.flush()
+    # Nothing to seed per org any more: roles are platform-wide constants, so
+    # a member resolves modules without any row existing beforehand.
 
     account = Account(id=account_id, email=email or f"{slug}-{account_id}@x.com",
                       default_org_id=org.id)
@@ -110,7 +109,7 @@ def make_tenant(
 
     db.add(OrganizationMember(
         org_id=org.id, account_id=account.id,
-        tier_key=tier_key, granted_by="grant",
+        role=role, granted_by="grant",
     ))
     db.flush()
 

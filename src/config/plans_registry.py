@@ -10,25 +10,32 @@ That made "what does premium include?" a question you answered by reading the
 signup path. It is a product fact and it belongs in one place, next to
 modules_registry.py, which is where the module keys themselves live.
 
-PLAN vs TIER vs CEILING — three words, three different axes
+PLAN vs ROLE vs CEILING — three words, three different axes
 -----------------------------------------------------------
     PLAN     what the PLATFORM sells to a customer      free | premium
     CEILING  the modules a plan opens for an org        derived from the plan
-    TIER     how an org OWNER divides their ceiling     organization_tiers
+    ROLE     what a PERSON is inside an org             config/roles_registry
 
 A CEILING IS ALWAYS A PLAN. It is either the plan the owner pays for, or one
 pinned by super admins (organizations.pinned_plan) so billing cannot take it
 away. There is no third form and, in particular, no stored list of modules: see
 PLAN_MODULES below for why that mattered.
 
-A plan is not a tier, and the difference is not cosmetic. Tier rows are
-editable by the org's own owner (PUT /api/organizations/tiers/{key}/modules),
-and every self-serve signup owns their personal workspace. If free vs premium
-were expressed as a tier, a free user could rewrite their own tier and
-self-upgrade; the only reason they cannot today is that clamp_to_ceiling pins
-them to the plan stored on the ceiling. So the plan is stored one level ABOVE
-what the customer controls, and tiers stay what they are good at: an org owner
-dividing what they bought among their own people.
+A PLAN IS NOT A ROLE, and the difference is not cosmetic: a plan is what the
+org BOUGHT, a role is who a person IS inside it. The cap runs one way — a role
+can never open something the plan does not include.
+
+This distinction used to carry more weight than it does now, and the reason is
+worth keeping. The right-hand column above was TIER: organization_tiers rows,
+editable by the org's own owner. Since every self-serve signup owns their
+personal workspace, expressing free vs premium as a tier would have let a free
+user rewrite their own tier and self-upgrade — the only thing stopping them was
+that the plan lived one level ABOVE what the customer controlled.
+
+Roles are constants in code, editable by nobody, so that particular hole is
+closed by construction rather than by a clamp. Keep the levels separate anyway:
+the moment anything customer-editable reappears on the module axis, the
+argument above comes straight back.
 
 WHY THE SUBSCRIPTION DECIDES, NOT accounts.role
 -----------------------------------------------
@@ -102,7 +109,7 @@ PLAN_LABELS = {
 #                 (roles.ts ALWAYS_VISIBLE) and always-allowed on the API
 #                 (/api/billing in modules_registry.ALWAYS_ALLOWED_PREFIXES).
 #   organization  the owner's console. Gated on OWNERSHIP rather than on the
-#                 plan — routers/organizations/overview.py and tiers.py use
+#                 plan — routers/organizations/overview.py uses
 #                 _require_owner — so an owner whose plan happened to omit it
 #                 could not administer their own org while the API served
 #                 them perfectly well.

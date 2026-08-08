@@ -1,5 +1,5 @@
 """
-Members of an organization: who is in it, on what tier, and who put them there.
+Members of an organization: who is in it, in what role, and who put them there.
 
 THE INVITE, AND WHY IT HAS NO TOKEN
 -----------------------------------
@@ -36,7 +36,8 @@ from typing import List, Optional
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
 
-from src.db.models import Account, Organization, OrganizationMember, OrganizationTier
+from src.config import roles_registry as roles
+from src.db.models import Account, Organization, OrganizationMember
 from src.deps import db_dependency, named_org_dependency, org_dependency
 from src.rate_limit import limiter
 from src.routers.auth.background_tasks.send_login_code_email_ses import (
@@ -56,7 +57,9 @@ OTP_TTL_MINUTES = 10
 class MemberResponse(BaseModel):
     account_id: int
     email: str
-    tier_key: str
+    # Their role in THIS org: 'manager' | 'community_member'. Inert when
+    # is_owner is true — an owner bypasses roles entirely.
+    role: str
     is_owner: bool
     # 'grant' | 'subscription'. Invited members are always granted: their
     # access rides on the org, not on a subscription they never bought.
@@ -69,9 +72,9 @@ class MembersPageResponse(BaseModel):
     org_name: str
     can_manage: bool
     members: List[MemberResponse]
-    # Tier keys an invite may choose from, so the dropdown cannot offer a tier
+    # Role keys an invite may choose from, so the dropdown cannot offer one
     # this org does not have.
-    tier_keys: List[str]
+    role_keys: List[str]
 
 
 # Deliberately not pydantic's EmailStr: that pulls in email-validator, which
@@ -83,7 +86,7 @@ EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 class InviteRequest(BaseModel):
     email: str
-    tier_key: str = Field(description="Which tier the new member joins on")
+    role: str = Field(description="Which role the new member joins in")
 
     @field_validator("email")
     @classmethod
@@ -109,13 +112,13 @@ class RenameOrgRequest(BaseModel):
 
 
 class UpdateMemberRequest(BaseModel):
-    tier_key: str
+    role: str
 
 
 def _require_owner(org):
     """Only an owner shapes their org's membership.
 
-    404 rather than 403, matching require_module and the tiers surface: a
+    404 rather than 403, matching require_module: a
     member who cannot manage the org should not have its admin endpoints
     confirm they exist.
     """
@@ -164,23 +167,20 @@ def _members_payload(db, org) -> MembersPageResponse:
                   Account.email.asc())
         .all()
     )
-    tiers = (db.query(OrganizationTier.tier_key)
-               .filter(OrganizationTier.org_id == org.org_id)
-               .order_by(OrganizationTier.id.asc()).all())
-
     return MembersPageResponse(
         org_id=org.org_id,
         org_name=organization.name,
         can_manage=org.is_owner,
         members=[
             MemberResponse(
-                account_id=m.account_id, email=a.email, tier_key=m.tier_key,
+                account_id=m.account_id, email=a.email, role=m.role,
                 is_owner=(m.account_id == owner_id), granted_by=m.granted_by,
                 created_at=m.created_at,
             )
             for m, a in rows
         ],
-        tier_keys=[t[0] for t in tiers],
+        # A constant, not a query: every org offers the same roles.
+        role_keys=list(roles.ROLE_KEYS),
     )
 
 
@@ -189,7 +189,7 @@ def _members_payload(db, org) -> MembersPageResponse:
 async def list_members(db: db_dependency, org: org_dependency, request: Request):
     """Everyone in the caller's ACTIVE org.
 
-    Readable by any member, unlike the tiers matrix: knowing who your
+    Readable by any member: knowing who your
     colleagues are is not privileged inside a team, and hiding it would make
     "who can see my contacts?" unanswerable from inside the product.
     """
@@ -213,9 +213,9 @@ async def list_members_for_org(db: db_dependency, org: named_org_dependency,
     that the sibling route does not have would mean the same person sees their
     colleagues on one screen and not on another.
 
-    What a non-owner still cannot reach through it is the tiers MATRIX — which
-    modules each tier opens — served by tiers.py behind _require_owner.
-    `tier_keys` below is names only, which the member list already needed.
+    There is no longer a tiers MATRIX for it to leak — what each role opens is
+    a platform-wide constant in config/roles_registry, the same in every org and
+    not a secret. `role_keys` below is the invite picker's option list.
     """
     try:
         return _members_payload(db, org)
@@ -225,12 +225,8 @@ async def list_members_for_org(db: db_dependency, org: named_org_dependency,
         raise handle_db_error(e, "[LIST MEMBERS]")
 
 
-@router.put("/name", response_model=MembersPageResponse)
-@limiter.limit("30/minute")
-async def rename_organization(
-    body: RenameOrgRequest, db: db_dependency, org: org_dependency, request: Request,
-):
-    """Change the display name.
+def _rename(body: RenameOrgRequest, db, org) -> MembersPageResponse:
+    """Change the display name of ONE already-validated org.
 
     The only name an org has, now that slugs are gone. It is a label — what
     members see in the switcher and what the audit log snapshots — not an
@@ -254,7 +250,10 @@ async def rename_organization(
                 actor_account_id=org.account_id,
             )
         db.commit()
-        return await list_members(db=db, org=org, request=request)
+        # The refreshed roster, read straight from the payload builder rather
+        # than by calling the list route — which is rate-limit decorated, so
+        # invoking it here would charge a rename against the read budget too.
+        return _members_payload(db, org)
     except HTTPException:
         raise
     except Exception as e:
@@ -262,31 +261,47 @@ async def rename_organization(
         raise handle_db_error(e, "[RENAME ORG]")
 
 
-@router.post("/members", status_code=status.HTTP_201_CREATED,
-             response_model=MemberResponse)
-@limiter.limit("20/minute")
-async def invite_member(
-    body: InviteRequest,
-    db: db_dependency,
-    org: org_dependency,
-    request: Request,
-    background_tasks: BackgroundTasks,
+@router.put("/name", response_model=MembersPageResponse)
+@limiter.limit("30/minute")
+async def rename_organization(
+    body: RenameOrgRequest, db: db_dependency, org: org_dependency, request: Request,
 ):
-    """Add somebody to this org on a chosen tier."""
+    """Rename the caller's ACTIVE org."""
+    return _rename(body, db, org)
+
+
+@router.put("/{org_id}/name", response_model=MembersPageResponse)
+@limiter.limit("30/minute")
+async def rename_organization_by_id(
+    body: RenameOrgRequest, db: db_dependency, org: named_org_dependency,
+    request: Request,
+):
+    """The same rename, for an org named in the PATH. See invite_member_for_org
+    for why naming the org relaxes nothing."""
+    return _rename(body, db, org)
+
+
+async def _invite(body: InviteRequest, db, org,
+                  background_tasks: BackgroundTasks) -> MemberResponse:
+    """Add somebody to ONE org in a chosen role.
+
+    Takes an already-validated OrgContext, never a bare org id — the same rule
+    _members_payload follows, and the reason both mountings below are safe: the
+    only way to hold a context is to have passed the membership gate in
+    deps._org_context_for, and `org.is_owner` describes THAT org.
+    """
     try:
         _require_owner(org)
         organization = _load_org(db, org.org_id)
 
-        # The tier must exist HERE. Without this an invite could name a tier
-        # from another org — or a typo — and the member would resolve to no
-        # modules at all, which looks like a permissions bug rather than a
-        # typo.
-        tier = (db.query(OrganizationTier)
-                  .filter(OrganizationTier.org_id == org.org_id,
-                          OrganizationTier.tier_key == body.tier_key).first())
-        if not tier:
+        # The role must be one this platform defines. Without this an invite
+        # could carry a typo and the member would resolve to no modules at all,
+        # which looks like a permissions bug rather than a typo. The database
+        # would refuse it too (ck_org_member_role) — this turns a 500 into a
+        # 422 that says what was wrong.
+        if not roles.is_valid(body.role):
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                                detail="Unknown tier for this organization.")
+                                detail="Unknown role.")
 
         email = body.email.strip().lower()
         account = db.query(Account).filter(Account.email == email).first()
@@ -313,7 +328,7 @@ async def invite_member(
         member = OrganizationMember(
             org_id=org.org_id,
             account_id=account.id,
-            tier_key=body.tier_key,
+            role=body.role,
             # Never 'subscription'. Their access comes from this org, so a
             # Stripe event on their personal account must never revoke it.
             granted_by=GRANTED_BY_GRANT,
@@ -332,7 +347,7 @@ async def invite_member(
 
         audit.record_membership(
             db, event_type=audit.MEMBER_ADD, org_id=org.org_id,
-            account_id=account.id, tier_key=body.tier_key,
+            account_id=account.id, role=body.role,
             actor_account_id=org.account_id,
         )
         db.commit()
@@ -351,10 +366,10 @@ async def invite_member(
             db.commit()
             background_tasks.add_task(send_login_code_email_ses, account.email, code)
 
-        logger.info("[ORG] account %s invited %s to org %s on tier %s",
-                    org.account_id, account.id, org.org_id, body.tier_key)
+        logger.info("[ORG] account %s invited %s to org %s as %s",
+                    org.account_id, account.id, org.org_id, body.role)
         return MemberResponse(
-            account_id=account.id, email=account.email, tier_key=member.tier_key,
+            account_id=account.id, email=account.email, role=member.role,
             # Derived like everywhere else rather than hardcoded false. An
             # invitee is not normally the owner, but "normally" is what the
             # stored copy relied on: an owner who was somehow not a member
@@ -370,22 +385,56 @@ async def invite_member(
         raise handle_db_error(e, "[INVITE MEMBER]")
 
 
-@router.put("/members/{account_id}", response_model=MemberResponse)
-@limiter.limit("30/minute")
-async def update_member_tier(
-    account_id: int, body: UpdateMemberRequest,
-    db: db_dependency, org: org_dependency, request: Request,
+@router.post("/members", status_code=status.HTTP_201_CREATED,
+             response_model=MemberResponse)
+@limiter.limit("20/minute")
+async def invite_member(
+    body: InviteRequest,
+    db: db_dependency,
+    org: org_dependency,
+    request: Request,
+    background_tasks: BackgroundTasks,
 ):
-    """Move a member to a different tier."""
+    """Add somebody to the caller's ACTIVE org."""
+    return await _invite(body, db, org, background_tasks)
+
+
+@router.post("/{org_id}/members", status_code=status.HTTP_201_CREATED,
+             response_model=MemberResponse)
+@limiter.limit("20/minute")
+async def invite_member_for_org(
+    body: InviteRequest,
+    db: db_dependency,
+    org: named_org_dependency,
+    request: Request,
+    background_tasks: BackgroundTasks,
+):
+    """The same invite, for an org named in the PATH rather than the cookie.
+
+    So an owner of several orgs can staff any of them from the account-settings
+    Organizations page without switching the whole dashboard into it first —
+    reading about an org should not move you into it, and neither should adding
+    somebody to it.
+
+    NOTHING IS RELAXED BY NAMING THE ORG. named_org_dependency re-checks
+    membership against organization_members exactly as the cookie path does,
+    and _require_owner inside _invite reads `is_owner` for THE ORG IN THE
+    CONTEXT — which _org_context_for derives from that org's owner column, not
+    from whether the caller owns something somewhere. A member of this org who
+    owns a different one gets the same 404 here as they would there.
+    """
+    return await _invite(body, db, org, background_tasks)
+
+
+async def _update_role(account_id: int, body: UpdateMemberRequest,
+                       db, org) -> MemberResponse:
+    """Move a member to a different role, in ONE already-validated org."""
     try:
         _require_owner(org)
 
-        tier = (db.query(OrganizationTier)
-                  .filter(OrganizationTier.org_id == org.org_id,
-                          OrganizationTier.tier_key == body.tier_key).first())
-        if not tier:
+        if not roles.is_valid(body.role):
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                                detail="Unknown tier for this organization.")
+                                detail="Unknown role.")
 
         row = (db.query(OrganizationMember, Account)
                  .join(Account, Account.id == OrganizationMember.account_id)
@@ -396,17 +445,17 @@ async def update_member_tier(
                                 detail="Not a member of this organization.")
         member, account = row
 
-        if member.tier_key != body.tier_key:
-            member.tier_key = body.tier_key
+        if member.role != body.role:
+            member.role = body.role
             audit.record_membership(
-                db, event_type=audit.MEMBER_TIER_CHANGE, org_id=org.org_id,
-                account_id=account_id, tier_key=body.tier_key,
+                db, event_type=audit.MEMBER_ROLE_CHANGE, org_id=org.org_id,
+                account_id=account_id, role=body.role,
                 actor_account_id=org.account_id,
             )
         db.commit()
         db.refresh(member)
         return MemberResponse(
-            account_id=account_id, email=account.email, tier_key=member.tier_key,
+            account_id=account_id, email=account.email, role=member.role,
             is_owner=(account_id == _owner_account_id(db, org.org_id)),
             granted_by=member.granted_by,
             created_at=member.created_at,
@@ -418,12 +467,29 @@ async def update_member_tier(
         raise handle_db_error(e, "[UPDATE MEMBER]")
 
 
-@router.delete("/members/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.put("/members/{account_id}", response_model=MemberResponse)
 @limiter.limit("30/minute")
-async def remove_member(
-    account_id: int, db: db_dependency, org: org_dependency, request: Request,
+async def update_member_role(
+    account_id: int, body: UpdateMemberRequest,
+    db: db_dependency, org: org_dependency, request: Request,
 ):
-    """Remove somebody from this org.
+    """Move a member of the ACTIVE org to a different role."""
+    return await _update_role(account_id, body, db, org)
+
+
+@router.put("/{org_id}/members/{account_id}", response_model=MemberResponse)
+@limiter.limit("30/minute")
+async def update_member_role_for_org(
+    account_id: int, body: UpdateMemberRequest,
+    db: db_dependency, org: named_org_dependency, request: Request,
+):
+    """The same role change, for an org named in the PATH. See
+    invite_member_for_org for why naming the org relaxes nothing."""
+    return await _update_role(account_id, body, db, org)
+
+
+def _remove(account_id: int, db, org) -> None:
+    """Remove somebody from ONE already-validated org.
 
     Takes effect on their VERY NEXT request: get_org_context re-checks
     membership every time, so there is no token to revoke and no cache to
@@ -445,7 +511,7 @@ async def remove_member(
                                 detail="Not a member of this organization.")
 
         # The owner cannot be removed, including by themselves. An org whose
-        # owner is not in it has nobody who can invite, set tiers, or hand it
+        # owner is not in it has nobody who can invite, set roles, or hand it
         # over — it would need a super admin to become usable again, and it is
         # exactly the half-state this collapse exists to make unreachable.
         #
@@ -461,7 +527,7 @@ async def remove_member(
 
         audit.record_membership(
             db, event_type=audit.MEMBER_REMOVE, org_id=org.org_id,
-            account_id=account_id, tier_key=member.tier_key,
+            account_id=account_id, role=member.role,
             actor_account_id=org.account_id,
         )
         db.delete(member)
@@ -484,3 +550,24 @@ async def remove_member(
     except Exception as e:
         db.rollback()
         raise handle_db_error(e, "[REMOVE MEMBER]")
+
+
+@router.delete("/members/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("30/minute")
+async def remove_member(
+    account_id: int, db: db_dependency, org: org_dependency, request: Request,
+):
+    """Remove somebody from the caller's ACTIVE org."""
+    _remove(account_id, db, org)
+
+
+@router.delete("/{org_id}/members/{account_id}",
+               status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("30/minute")
+async def remove_member_for_org(
+    account_id: int, db: db_dependency, org: named_org_dependency,
+    request: Request,
+):
+    """The same removal, for an org named in the PATH. See
+    invite_member_for_org for why naming the org relaxes nothing."""
+    _remove(account_id, db, org)

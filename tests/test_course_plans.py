@@ -51,13 +51,13 @@ def _org_plan(db, tenant, plan):
 def free_user(db: Session):
     """An org on the free plan. The account's own status is beside the point."""
     return _org_plan(db, make_tenant(db, slug="plan-free-co", account_id=9801,
-                                     tier_key="owner", is_owner=True),
+                                     role="manager", is_owner=True),
                      plans.PLAN_FREE)
 
 
 @pytest.fixture()
 def premium_user(db: Session):
-    t = make_tenant(db, slug="plan-paid-co", account_id=9802, tier_key="owner",
+    t = make_tenant(db, slug="plan-paid-co", account_id=9802, role="manager",
                     is_owner=True)
     account = db.query(Account).filter(Account.id == t.account_id).one()
     account.subscription_status = "active"
@@ -151,7 +151,7 @@ async def test_the_orgs_plan_covers_a_member_who_never_paid(
     db.add(invited)
     db.flush()
     db.add(OrganizationMember(org_id=premium_user.org_id, account_id=invited.id,
-                              tier_key="owner"))
+                              role="manager"))
     db.flush()
     assert plans.plan_for_account(invited) == plans.PLAN_FREE, (
         "the point of the test: this account has bought nothing itself")
@@ -175,7 +175,7 @@ async def test_leaving_the_paid_org_is_not_something_a_member_can_stage(
     can create membership" is the whole of what stops this being a hole.
     """
     other = make_tenant(db, slug="plan-paid-co-2", account_id=9898,
-                        tier_key="owner", is_owner=True)
+                        role="manager", is_owner=True)
     org = db.query(Organization).filter(Organization.id == other.org_id).one()
     org.pinned_plan = plans.PLAN_PREMIUM
     db.flush()
@@ -209,7 +209,7 @@ async def test_a_tenants_own_courses_are_never_listed_locked(
     all — locked or otherwise. Which courses a tenant bought is theirs.
     """
     other = make_tenant(db, slug="plan-other-co", account_id=9803,
-                        tier_key="owner", is_owner=True)
+                        role="manager", is_owner=True)
     db.add(Course(org_id=other.org_id, course_key="theirs", title="Theirs",
                   visibility="org", required_plan=plans.PLAN_PREMIUM))
     db.flush()
@@ -243,7 +243,7 @@ async def test_being_in_the_platform_org_is_not_enough(db: Session,
     """
     # A member of the platform org who is an OWNER there but is not a super
     # admin — the case an org-only check would wave through.
-    signup = make_tenant(db, slug="root", account_id=9804, tier_key="owner",
+    signup = make_tenant(db, slug="root", account_id=9804, role="manager",
                          is_owner=True)
     async with client_for(signup) as c:
         resp = await c.post(f"{COURSES}/", json={

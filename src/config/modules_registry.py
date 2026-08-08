@@ -11,7 +11,7 @@ renaming "Deals" to "Pipeline" in the UI must not revoke anybody's access. That
 is the whole reason this file exists rather than matching on menu labels.
 
 The route prefixes are what make a module grant mean something on the server.
-Without them the tiers matrix only hides menu items, and anyone who crafts a
+Without them a role would only hide menu items, and anyone who crafts a
 request by hand reaches the data anyway — which is precisely the state
 cmdlabs-ui/src/config/roles.ts documents in its own header comment.
 
@@ -53,8 +53,8 @@ MODULES = (
     # (services/uploadChatFile.ts) — attaching a file to a chat and opening the
     # document behind a citation. source_url.py gates on can_access_agent, so
     # it is agent-scoped by construction. Classifying it under knowledge_bases
-    # took chat file upload and citation links away from every tier that has
-    # Agents but not Knowledge Bases, which is what the seeded premium tier is.
+    # took chat file upload and citation links away from anybody with Agents
+    # but not Knowledge Bases.
     Module("agents", "Agents", ("/api/agents", "/api/tool-approvals", "/api/files")),
     Module("agent_chat", "Agent Chat", ("/api/chat-sessions",)),
     Module("contacts", "Contacts", ("/api/contacts",)),
@@ -69,10 +69,9 @@ MODULES = (
     Module("email_templates", "Email Templates", ("/api/email-templates",)),
     Module("email_campaigns", "Email Campaigns",
            ("/api/email-campaigns", "/api/emails", "/api/email-events")),
-    # Courses are gated like any other product area. Banding free vs paid
-    # courseware is therefore a TIER question, not a per-course one — module
-    # keys are platform-wide and stable, while tier_key is a per-org string
-    # that means nothing in a second org.
+    # Courses are gated like any other product area. Which COURSES a plan opens
+    # is a per-course question (Course.required_plan); whether you see the area
+    # at all is this key.
     Module("courses", "Courses", ("/api/courses",)),
     # A "spaces" module gating /api/spaces sat here — the second container,
     # shared content across orgs. Removed with the feature. Note the shape it

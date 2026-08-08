@@ -38,6 +38,9 @@ GRANT_ROLE_CHANGE = "role_change"
 
 MEMBER_ADD = "member.add"
 MEMBER_REMOVE = "member.remove"
+MEMBER_ROLE_CHANGE = "member.role_change"
+# Retained for the rows already written under it. Nothing emits it now:
+# tiers became roles, and relabelling history is not this log's job.
 MEMBER_TIER_CHANGE = "member.tier_change"
 
 ORG_CREATE = "org.create"
@@ -46,6 +49,8 @@ ORG_RESTORE = "org.restore"
 ORG_CEILING_CHANGE = "org.ceiling_change"
 ORG_RENAME = "org.rename"
 
+# Emitted by the tier matrix, which is gone with organization_tiers. Kept
+# only so historical rows stay readable.
 TIER_MODULES_CHANGE = "tier.modules_change"
 
 CATALOG_PUBLISH = "catalog.publish"
@@ -128,7 +133,7 @@ def record(
 # ones matter for which verb.
 
 def record_membership(db: Session, *, event_type: str, org_id: int,
-                      account_id: int, tier_key: str | None = None,
+                      account_id: int, role: str | None = None,
                       actor_account_id: int | None = None) -> None:
     org_name = db.query(Organization.name).filter(Organization.id == org_id).scalar()
     email = db.query(Account.email).filter(Account.id == account_id).scalar()
@@ -142,7 +147,7 @@ def record_membership(db: Session, *, event_type: str, org_id: int,
         principal_type="account",
         principal_id=account_id,
         principal_label=email,
-        role=tier_key,
+        role=role,
         actor_account_id=actor_account_id,
     )
 

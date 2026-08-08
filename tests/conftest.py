@@ -54,7 +54,6 @@ from src.db.models import (
     Account,
     Organization,
     OrganizationMember,
-    OrganizationTier,
 )
 from src.deps import get_db
 from src.main import app
@@ -210,25 +209,10 @@ def test_org(db: Session) -> Organization:
     # billing's business and not every suite's.
     org.pinned_plan = plans.PLAN_PREMIUM
 
-    existing = {
-        t.tier_key: t
-        for t in db.query(OrganizationTier).filter(
-            OrganizationTier.org_id == org.id).all()
-    }
-    # The surviving vocabulary, matching what ensure_org_tiers() seeds and what
-    # b3c4d5e6f7a8 left behind. 'free', 'premium' and 'org_owner' were seeded
-    # here until then — the first two borrowed the PLAN axis's names and the
-    # third named ownership, which is organizations.owner_account_id and not a
-    # tier at all. Seeding them here kept the tests exercising a shape the
-    # product no longer has.
-    for tier_key, label in (("owner", "Owner"), ("member", "Member")):
-        tier = existing.get(tier_key)
-        if tier is None:
-            db.add(OrganizationTier(org_id=org.id, tier_key=tier_key,
-                                    label=label, modules=list(MODULE_KEYS)))
-        else:
-            tier.modules = list(MODULE_KEYS)
-    db.flush()
+    # NOTHING TO SEED. Tiers were per-org rows that had to exist before a
+    # member resolved any modules; roles are platform-wide constants, so a
+    # membership works the moment it is written. The block that lived here
+    # created 'owner' and 'member' tiers holding every module key.
 
     # An explicit id does NOT advance the sequence, so the next org created
     # without one would collide on the primary key. Tests that build a second
@@ -254,7 +238,7 @@ def test_account(db: Session, test_org: Organization) -> Account:
         # called "free" quietly granted more than the premium plan sells. The
         # surviving 'member' tier is seeded the same way, so what this account
         # can open is unchanged; only the name it goes by is.
-        tier_key="member",
+        role="manager",
         granted_by="grant",
     ))
     db.flush()

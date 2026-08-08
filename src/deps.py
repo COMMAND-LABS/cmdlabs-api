@@ -193,9 +193,10 @@ class OrgContext:
     """Who is asking, in which org, and what that org allows.
 
     `org_id` is the ONLY thing that decides which rows a request may see.
-    `tier_key` decides which modules it may open. Those two axes are kept
-    strictly separate: a tier never widens or narrows row visibility, so a
-    misconfigured tier is a wrong menu rather than a data leak.
+    `role` decides which modules it may open. Those two axes are kept strictly
+    separate: a role never widens or narrows row visibility, so a misconfigured
+    role is a wrong menu rather than a data leak. That separation is also the
+    limit of what a role can express — see config/roles_registry.
 
     `is_super_admin` bypasses MODULE gating only. It never bypasses org_id —
     platform super admins read an org's data by joining it, which leaves a
@@ -205,7 +206,9 @@ class OrgContext:
     """
     account_id: int
     org_id: int
-    tier_key: str
+    # 'manager' | 'community_member'. NEVER 'owner' — ownership is a column on
+    # organizations and is carried by is_owner below, derived per request.
+    role: str
     # Both default to FALSE, which is the safe direction: a context built
     # without them is less privileged, never more. get_org_context always
     # passes both; the defaults exist for the test helpers that assemble a
@@ -222,7 +225,7 @@ class OrgContext:
     grace_ends_at: datetime | None = None
     # The plan THIS ORG has — 'free' | 'premium'. Pinned by staff, or derived
     # from the owner's subscription. It gates the platform course catalog and
-    # nothing else; module access still comes from ceiling ∩ tier, and row
+    # nothing else; module access still comes from ceiling ∩ role, and row
     # access still comes from org_id alone.
     #
     # THE ORG'S PLAN, NOT THE CALLER'S. It used to be plan_for_account(account),
@@ -298,7 +301,7 @@ def _org_context_for(db: Session, account, account_id: int,
     return OrgContext(
         account_id=account_id,
         org_id=org.id,
-        tier_key=member.tier_key,
+        role=member.role,
         # DERIVED, not stored. An org names its owner in one column; a second
         # copy on the membership row was a cache with no invalidation, and it
         # drifted — orgs whose owner_account_id named somebody who held no
@@ -334,11 +337,27 @@ async def get_named_org_context(
     request by the same function. An id the caller is not a member of gets 403,
     exactly as a tampered cookie does.
 
-    NOT A WAY TO WRITE SOMEWHERE ELSE. Every route using this dependency should
-    be a READ. The read-only grace check (_refuse_writes_while_read_only) hangs
-    off the cookie context, so a mutating route mounted here would skip it —
-    and more importantly, "which org am I acting in" should stay a single
-    answer per request that the user chose deliberately with the switcher.
+    WRITES ARE PERMITTED, narrowly, and this used to say they were not. The
+    membership-management routes in routers/organizations/members.py are now
+    mounted twice — once on the cookie context, once here — so an owner of
+    several orgs can staff any of them without switching the dashboard into it
+    first. What changed is the ROUTE SET, not the gate: both mountings call the
+    same implementation, which re-derives `is_owner` from THIS org's owner
+    column via _org_context_for below.
+
+    The original objection was that _refuse_writes_while_read_only hangs off
+    the cookie context, so a write mounted here would skip it. That turned out
+    to be true of the cookie path as well: the check runs inside require_module,
+    and /api/organizations sits in ALWAYS_ALLOWED_PREFIXES, so org-configuration
+    writes have always been exempt (see that function's own note). Mounting
+    them here is therefore parity, not a new hole — but if that exemption is
+    ever closed, close it for BOTH mountings, since they are one implementation.
+
+    Still not a general-purpose write context. A route belongs here only when
+    the org is the SUBJECT of the request — membership administration — rather
+    than the scope the caller happens to be working in. Anything touching
+    customer records should keep taking the org from the cookie, so "which org
+    am I acting in" stays a single answer the user chose with the switcher.
     """
     account_id = account_id_from_claims(auth)
     account = ensure_account(db, account_id)
@@ -393,8 +412,8 @@ named_org_dependency = Annotated[OrgContext, Depends(get_named_org_context)]
 def require_module(module_key: str):
     """Dependency factory: refuse the request unless `ctx` may open this module.
 
-    This is what makes the tiers matrix an authorization boundary rather than a
-    menu filter. Without it an account whose tier excludes Deals still reaches
+    This is what makes a role an authorization boundary rather than a menu
+    filter. Without it an account whose role excludes Deals still reaches
     GET /api/deals by typing the URL — which is exactly the state
     cmdlabs-ui/src/config/roles.ts documents about the pre-org system in its
     own header comment.
@@ -416,11 +435,11 @@ def require_module(module_key: str):
 
         if not modules_service.can_open(db, ctx, module_key):
             logger.info(
-                "[MODULE] account %s (org %s, tier %s) denied %s %s — %s not enabled",
-                ctx.account_id, ctx.org_id, ctx.tier_key,
+                "[MODULE] account %s (org %s, role %s) denied %s %s — %s not enabled",
+                ctx.account_id, ctx.org_id, ctx.role,
                 request.method, request.url.path, module_key,
             )
-            # 404 rather than 403: a module the caller has no tier for should
+            # 404 rather than 403: a module the caller's role excludes should
             # look absent, not forbidden. Telling someone precisely which paid
             # features exist behind a wall is an invitation to probe them.
             raise HTTPException(

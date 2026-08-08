@@ -53,13 +53,13 @@ def other_org(db) -> Organization:
 async def test_falls_back_to_default_org_without_cookie(db, test_account, test_org):
     ctx = await _resolve(db, test_account.id)
     assert ctx.org_id == test_org.id
-    assert ctx.tier_key == "member"
+    assert ctx.role == "manager"
 
 
 async def test_cookie_selects_a_joined_org(db, test_account, test_org, other_org):
     db.add(OrganizationMember(
         org_id=other_org.id, account_id=test_account.id,
-        tier_key="premium", granted_by="grant",
+        role="manager", granted_by="grant",
     ))
     # Ownership is the ORG's column, so making this account the owner is now
     # said here rather than on the membership row. The membership is what lets
@@ -69,7 +69,7 @@ async def test_cookie_selects_a_joined_org(db, test_account, test_org, other_org
 
     ctx = await _resolve(db, test_account.id, {ORG_COOKIE_NAME: str(other_org.id)})
     assert ctx.org_id == other_org.id
-    assert ctx.tier_key == "premium"
+    assert ctx.role == "manager"
     assert ctx.is_owner is True
     # Org-level facts travel with the org, not the account.
     assert ctx.org_id == other_org.id
@@ -98,7 +98,7 @@ async def test_revoked_membership_is_refused_on_the_very_next_request(
     cookie rather than in the 7-day JWT."""
     member = OrganizationMember(
         org_id=other_org.id, account_id=test_account.id,
-        tier_key="premium", granted_by="grant",
+        role="manager", granted_by="grant",
     )
     db.add(member)
     db.flush()
@@ -125,7 +125,7 @@ async def test_api_key_path_ignores_the_cookie(db, test_account, test_org, other
     would let a key issued for one org be aimed at another."""
     db.add(OrganizationMember(
         org_id=other_org.id, account_id=test_account.id,
-        tier_key="premium", granted_by="grant",
+        role="manager", granted_by="grant",
     ))
     db.flush()
 
@@ -161,7 +161,7 @@ async def test_super_admin_does_not_bypass_org_membership(db, test_org, other_or
     db.flush()
     db.add(OrganizationMember(
         org_id=test_org.id, account_id=super_admin.id,
-        tier_key="owner", granted_by="grant",
+        role="manager", granted_by="grant",
     ))
     db.flush()
 
@@ -190,7 +190,7 @@ async def test_ownership_is_read_from_the_org_not_the_membership(
     """
     db.add(OrganizationMember(
         org_id=other_org.id, account_id=test_account.id,
-        tier_key="premium", granted_by="grant",
+        role="manager", granted_by="grant",
     ))
     other_org.owner_account_id = None
     db.flush()

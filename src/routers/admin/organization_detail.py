@@ -1,5 +1,5 @@
 """
-Platform-admin browser: an org's members, tiers and plan.
+Platform-admin browser: an org's members, roles and plan.
 
 ADMINISTER IS NOT READ, AND THIS FILE IS WHERE THAT LINE SITS
 ------------------------------------------------------------
@@ -28,11 +28,11 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 
+from src.config import roles_registry as role_registry
 from src.db.models import (
     Account,
     Organization,
     OrganizationMember,
-    OrganizationTier,
 )
 from src.deps import db_dependency, super_admin_dependency
 from src.rate_limit import limiter
@@ -44,19 +44,19 @@ router = APIRouter()
 class AdminMember(BaseModel):
     account_id: int
     email: str
-    tier_key: str
+    role: str
     is_owner: bool
     granted_by: str
-    # Which modules this member actually resolves to — ceiling ∩ tier, with the
+    # Which modules this member actually resolves to — ceiling ∩ role, with the
     # owner bypass applied. The single most asked support question is "why
-    # can't they see X", and answering it from a tier name alone requires
+    # can't they see X", and answering it from a role name alone requires
     # re-deriving the intersection by hand.
     effective_modules: List[str]
     created_at: Optional[datetime] = None
 
 
-class AdminTier(BaseModel):
-    tier_key: str
+class AdminRole(BaseModel):
+    role: str
     label: str
     modules: List[str]
     member_count: int
@@ -76,7 +76,7 @@ class OrganizationDetailResponse(BaseModel):
     owner_account_id: Optional[int] = None
     created_at: Optional[datetime] = None
     members: List[AdminMember]
-    tiers: List[AdminTier]
+    roles: List[AdminRole]
 
 
 
@@ -115,7 +115,7 @@ def _org_or_404(db, org_id: int) -> Organization:
 async def organization_detail(
     org_id: int, db: db_dependency, super_admin: super_admin_dependency, request: Request,
 ):
-    """One org: its members and its tiers.
+    """One org: its members and its roles.
 
     Assembled in one response rather than three endpoints because the question
     super admins actually have is "what does this org look like", and answering
@@ -129,11 +129,6 @@ async def organization_detail(
         entitlement = modules_service.org_entitlement(db, org_id)
         ceiling = entitlement.ceiling
 
-        tier_modules = {
-            t.tier_key: list(t.modules or [])
-            for t in db.query(OrganizationTier).filter(
-                OrganizationTier.org_id == org_id).all()
-        }
 
         # The org's one owner. Everything below asks "is this member that
         # account?" rather than reading a per-row flag, so this page cannot
@@ -155,27 +150,26 @@ async def organization_detail(
             # two queries each; the intersection itself is the same expression.
             if member.account_id == owner_id:
                 return ceiling
-            granted = set(tier_modules.get(member.tier_key, []))
-            return [k for k in ceiling if k in granted]
+            return role_registry.modules_for(member.role, ceiling)
 
         members = [
             AdminMember(
-                account_id=m.account_id, email=a.email, tier_key=m.tier_key,
+                account_id=m.account_id, email=a.email, role=m.role,
                 is_owner=(m.account_id == owner_id), granted_by=m.granted_by,
                 effective_modules=_effective(m), created_at=m.created_at,
             )
             for m, a in member_rows
         ]
-        tier_counts: dict = {}
+        role_counts: dict = {}
         for m, _ in member_rows:
-            tier_counts[m.tier_key] = tier_counts.get(m.tier_key, 0) + 1
-        tiers = [
-            AdminTier(tier_key=t.tier_key, label=t.label,
-                      modules=list(t.modules or []),
-                      member_count=tier_counts.get(t.tier_key, 0))
-            for t in db.query(OrganizationTier).filter(
-                OrganizationTier.org_id == org_id
-            ).order_by(OrganizationTier.id.asc()).all()
+            role_counts[m.role] = role_counts.get(m.role, 0) + 1
+        # Modules capped by THIS org's ceiling, so a super admin sees what the
+        # role opens here rather than what it would open on a richer plan.
+        roles = [
+            AdminRole(role=key, label=role_registry.label(key),
+                      modules=role_registry.modules_for(key, ceiling),
+                      member_count=role_counts.get(key, 0))
+            for key in role_registry.ROLE_KEYS
         ]
 
         return OrganizationDetailResponse(
@@ -186,7 +180,7 @@ async def organization_detail(
             modules=ceiling,
             pinned_plan=org.pinned_plan,
             owner_account_id=org.owner_account_id, created_at=org.created_at,
-            members=members, tiers=tiers,
+            members=members, roles=roles,
         )
     except HTTPException:
         raise

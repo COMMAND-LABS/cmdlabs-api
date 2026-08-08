@@ -19,11 +19,10 @@ orgs am I in" across orgs is the entire point, so the filter on
 it.
 
 So the rule for anything added below: it must be a fact about THE CALLER'S OWN
-MEMBERSHIP, never a fact about the org. `tier_key` and its label qualify — they
-are the caller's own row, and strictly less than /me/entitlements already tells
-them about the active org. The org's OTHER tiers, its member list, and
-OrganizationTier.modules do not: that is the owner's matrix, served by
-organizations/overview.py behind _require_owner and 404 to everyone else.
+MEMBERSHIP, never a fact about the org. `role` qualifies — it is the caller's
+own row, and strictly less than /me/entitlements already tells them about the
+active org. The org's MEMBER LIST does not: that is served by
+organizations/members.py, which requires naming the org you are asking about.
 
 Carries no tenant data — no contact, deal, or document, and no row belonging to
 another member.
@@ -35,7 +34,8 @@ from pydantic import BaseModel
 
 from sqlalchemy import func
 
-from src.db.models import Organization, OrganizationMember, OrganizationTier
+from src.config import roles_registry as roles
+from src.db.models import Organization, OrganizationMember
 from src.deps import db_dependency, org_dependency
 from src.rate_limit import limiter
 from src.utils.errors import handle_db_error
@@ -49,21 +49,17 @@ class MyOrganization(BaseModel):
     is_owner: bool
     is_personal: bool
     is_active: bool
-    # The caller's OWN tier in this org. Their membership row, nobody else's.
+    # The caller's OWN role in this org. Their membership row, nobody else's.
     #
-    # ORG-LOCAL, AND THE UI MUST NOT INVITE COMPARISON. A tier_key is a string
-    # scoped to one org (uq_org_tier_key) — 'member' in one org and 'member' in
-    # another are unrelated bundles that open different modules. Rendering a
-    # column of raw keys side by side would quietly suggest otherwise.
-    # Ownership is the field that IS comparable across orgs, because
-    # owner_account_id means the same thing everywhere.
-    tier_key: str
-    # The owner's display name for that tier. None when the membership names a
-    # tier with no row in organization_tiers — possible, since tier_key is a
-    # plain string rather than an FK, and the reason this is Optional rather
-    # than falling back to the raw key: a key is an identifier, and showing one
-    # where a label belongs is how internal vocabulary leaks into the product.
-    tier_label: Optional[str] = None
+    # NOW COMPARABLE ACROSS ORGS, which it deliberately was not before. This
+    # was `tier_key`, a string scoped to one org — 'member' here and 'member'
+    # there were unrelated bundles opening different modules, so the UI had to
+    # avoid presenting them as a comparable column. Roles are platform-wide
+    # constants, so 'manager' means the same thing everywhere and a column of
+    # them is honest.
+    role: str
+    # Display name for the role. Resolved from a constant rather than a row.
+    role_label: str
 
 
 class MyOrganizationsResponse(BaseModel):
@@ -92,24 +88,10 @@ async def my_organizations(db: db_dependency, org: org_dependency, request: Requ
               .group_by(OrganizationMember.org_id).all()
         )
 
-        # Labels for the tiers the caller actually holds — keyed by
-        # (org_id, tier_key), which is what uq_org_tier_key makes unique.
-        #
-        # Filtered to the caller's OWN (org, tier) pairs rather than fetching
-        # each org's tier table and picking from it. Same rendered output, but
-        # the org's other tiers never enter the process, so this cannot grow
-        # into a leak of the owner's matrix by someone later reusing the dict.
-        held = {(m.org_id, m.tier_key) for _, m in rows}
-        tier_labels: dict = {}
-        if held:
-            tier_labels = {
-                (t.org_id, t.tier_key): t.label
-                for t in db.query(OrganizationTier).filter(
-                    OrganizationTier.org_id.in_({oid for oid, _ in held}),
-                    OrganizationTier.tier_key.in_({key for _, key in held}),
-                ).all()
-                if (t.org_id, t.tier_key) in held
-            }
+        # No lookup for the label any more. It used to be a query against
+        # organization_tiers, carefully filtered to the caller's own (org, tier)
+        # pairs so the org's other tiers never entered the process. Roles are
+        # constants, so there is nothing to fetch and nothing to over-fetch.
 
         return MyOrganizationsResponse(
             active_org_id=org.org_id,
@@ -124,8 +106,8 @@ async def my_organizations(db: db_dependency, org: org_dependency, request: Requ
                     is_active=(o.id == org.org_id),
                     # From the membership row this query was already joining
                     # and discarding.
-                    tier_key=m.tier_key,
-                    tier_label=tier_labels.get((o.id, m.tier_key)),
+                    role=m.role,
+                    role_label=roles.label(m.role),
                 )
                 for o, m in rows
             ],

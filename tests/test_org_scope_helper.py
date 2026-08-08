@@ -25,7 +25,7 @@ def _ctx(tenant, *, account_id=None):
     return OrgContext(
         account_id=account_id or tenant.account_id,
         org_id=tenant.org_id,
-        tier_key="member",
+        role="manager",
         is_super_admin=False)
 
 

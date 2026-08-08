@@ -36,7 +36,7 @@ from sqlalchemy.orm import Session
 
 from src.config import plans_registry as plans
 from src.config.modules_registry import module_for_path
-from src.db.models import Organization, OrganizationTier
+from src.db.models import Organization
 from tests.org_isolation import client_for, make_tenant
 
 # The PLANS, read from the registry that defines them.
@@ -113,7 +113,7 @@ async def test_a_real_premium_member_can_use_chat_files(db: Session, _override_d
     that cannot fail.
     """
     tenant = make_tenant(db, slug="plan-premium-surface", account_id=9310,
-                         tier_key="member", is_owner=False)
+                         role="manager", is_owner=False)
     org = db.query(Organization).filter(Organization.id == tenant.org_id).one()
     # The org is on the premium PLAN — that is the ceiling. It used to set
     # org.granted_modules here, a column dropped in d8e9f0a1b2c4; assigning it
@@ -121,13 +121,10 @@ async def test_a_real_premium_member_can_use_chat_files(db: Session, _override_d
     # nothing while looking load-bearing.
     org.pinned_plan = plans.PLAN_PREMIUM
 
-    # And the member's tier is exactly what the premium plan sells, so the
+    # And the member is a MANAGER, whose modules track the whole plan — so the
     # intersection is the plan itself and the request under test is the only
-    # thing that can fail.
-    tier = (db.query(OrganizationTier)
-              .filter(OrganizationTier.org_id == tenant.org_id,
-                      OrganizationTier.tier_key == "member").one())
-    tier.modules = SHIPPED_PLANS[plans.PLAN_PREMIUM]
+    # thing that can fail. This used to narrow a tier row to the plan's module
+    # list by hand; a manager IS that, by definition.
     db.flush()
 
     async with client_for(tenant) as c:

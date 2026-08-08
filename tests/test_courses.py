@@ -15,7 +15,8 @@ calls instead, and these tests pin its behaviour.
 import pytest
 from sqlalchemy.orm import Session
 
-from src.db.models import Course, OrganizationTier
+from src.config import roles_registry as roles
+from src.db.models import Course, OrganizationMember
 from tests.org_isolation import client_for, make_tenant
 
 COURSES = "/api/courses"
@@ -23,7 +24,7 @@ COURSES = "/api/courses"
 
 @pytest.fixture()
 def acme(db: Session):
-    return make_tenant(db, slug="course-co", account_id=9801, tier_key="owner",
+    return make_tenant(db, slug="course-co", account_id=9801, role="manager",
                        is_owner=True)
 
 
@@ -31,7 +32,7 @@ def acme(db: Session):
 def student(db: Session, acme):
     """A plain member of the same org."""
     return make_tenant(db, slug="course-co", account_id=9802,
-                       tier_key="member", is_owner=False)
+                       role="manager", is_owner=False)
 
 
 def _course(db, tenant, key, visibility="org", title=None):
@@ -86,7 +87,7 @@ async def test_the_same_key_in_two_orgs_is_two_enablements(
 ):
     """One course in code, enabled independently. Neither org can see or
     affect the other's row."""
-    other = make_tenant(db, slug="course-two", account_id=9804, tier_key="owner",
+    other = make_tenant(db, slug="course-two", account_id=9804, role="manager",
                         is_owner=True)
     mine = _course(db, acme, "shared-key", title="Ours")
     theirs = _course(db, other, "shared-key", title="Theirs")
@@ -205,17 +206,31 @@ async def test_deleting_a_course_needs_no_cascade(db: Session, _override_db,
 # module gating
 # ---------------------------------------------------------------------------
 
-async def test_a_tier_without_the_courses_module_reaches_nothing(
-    db: Session, _override_db, acme, student
+async def test_a_role_without_the_courses_module_reaches_nothing(
+    db: Session, _override_db, acme, student, monkeypatch
 ):
-    """Banding free vs paid courseware is a TIER question, and this is the
-    lever — module keys are platform-wide, unlike tier keys."""
+    """The module gate applies to courses like anything else.
+
+    community_member DOES include `courses` — serving people published material
+    is most of what the role is for — so the allowlist is patched for this test
+    rather than the role being swapped. That keeps the subject the GATE, not the
+    current contents of a tuple: if somebody adds a module to COMMUNITY_MODULES
+    tomorrow, this still tests what it says it does.
+
+    monkeypatch rather than assignment, so the tuple is restored afterwards. A
+    module-level constant mutated in place would leak into every test that ran
+    after it, in file order, which is the worst kind of flake to chase.
+    """
     _course(db, acme, "bsop-intro")
-    tier = (db.query(OrganizationTier)
-              .filter(OrganizationTier.org_id == acme.org_id,
-                      OrganizationTier.tier_key == "member").one())
-    tier.modules = [m for m in tier.modules if m != "courses"]
+    member = (db.query(OrganizationMember)
+                .filter(OrganizationMember.org_id == acme.org_id,
+                        OrganizationMember.account_id == student.account_id).one())
+    member.role = roles.ROLE_COMMUNITY_MEMBER
     db.flush()
+
+    monkeypatch.setattr(
+        roles, "COMMUNITY_MODULES",
+        tuple(m for m in roles.COMMUNITY_MODULES if m != "courses"))
 
     async with client_for(student) as c:
         assert (await c.get(f"{COURSES}/bsop-intro")).status_code == 404

@@ -194,72 +194,46 @@ class Organization(Base):
     owner = relationship('Account', foreign_keys=[owner_account_id])
     members = relationship('OrganizationMember', back_populates='org',
                            cascade='all, delete-orphan')
-    tiers = relationship('OrganizationTier', back_populates='org',
-                         cascade='all, delete-orphan')
 
     def __repr__(self):
         return f'<Organization {self.id}: {self.name}>'
 
 
-class OrganizationTier(Base):
-    """
-    A named bundle of modules, defined per org. This is the org owner's matrix.
-
-    A tier is WHAT you get; a subscription is one way to GET it (see
-    OrganizationMember.granted_by). Keeping those separate is what allows an
-    owner to comp a client into a paid tier without a subscription, and what
-    stops a tier dropdown from becoming a way to hand out paid features by
-    accident — the tier names the bundle, billing names the entitlement.
-
-    Distinct from an access group by cardinality: a member holds exactly ONE
-    tier (what they paid for -> modules) but may belong to MANY access groups
-    (how they are organized -> which resources).
-    """
-    __tablename__ = 'organization_tiers'
-
-    id = Column(Integer, primary_key=True, index=True)
-    org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
-                    nullable=False, index=True)
-    tier_key = Column(String(64), nullable=False)
-    label = Column(String(255), nullable=False)
-    modules = Column(JSONB, nullable=False, server_default='[]')
-    # Set only when an org owner sells this tier through their own connected
-    # Stripe account. Unused until that ships.
-    stripe_price_id = Column(String(255), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
-
-    __table_args__ = (
-        UniqueConstraint('org_id', 'tier_key', name='uq_org_tier_key'),
-    )
-
-    org = relationship('Organization', back_populates='tiers')
-
-    def __repr__(self):
-        return f'<OrganizationTier org={self.org_id} {self.tier_key}>'
-
-
 class OrganizationMember(Base):
     """
-    An account's membership in an org, carrying the tier it holds there.
+    An account's membership in an org, carrying the ROLE it holds there.
 
-    The same account may be a member of several orgs at different tiers — you
-    can be premium inside an org that pays and free in your own.
+    The same account may be a member of several orgs in different roles — you
+    can manage the org that employs you and be a community member of another.
+
+    `role` is one of config/roles_registry.ROLE_KEYS: 'manager' for the core
+    team, 'community_member' for people the org serves. It replaced `tier_key`,
+    which named a row in organization_tiers — a per-org, owner-editable matrix
+    of arbitrary module sets. Three platform-wide roles cost an owner the
+    ability to define their own bundles and buy back an answer to "what can
+    this person do?" that means the same thing in every org.
 
     granted_by is the override that makes comping work:
       'subscription' - owned by the Stripe webhook; lapses when billing does.
       'grant'        - set by an owner; NEVER written by any webhook.
 
-    OWNERSHIP IS NOT HERE. It is organizations.owner_account_id, and nowhere
-    else. There used to be an is_owner column on this table too, which made
-    ownership a fact stored twice with nothing keeping the copies in step — and
-    they drifted: orgs whose owner_account_id named an account holding no
-    is_owner row, so the owner could not open the org they owned. deps.py
-    derives it now (`org.owner_account_id == account_id`) off a row it has
-    already joined, so the two cannot disagree because there is only one.
+    OWNERSHIP IS NOT HERE, AND IS NOT A ROLE VALUE. It is
+    organizations.owner_account_id, and nowhere else. There used to be an
+    is_owner column on this table too, which made ownership a fact stored twice
+    with nothing keeping the copies in step — and they drifted: orgs whose
+    owner_account_id named an account holding no is_owner row, so the owner
+    could not open the org they owned. deps.py derives it now
+    (`org.owner_account_id == account_id`) off a row it has already joined, so
+    the two cannot disagree because there is only one.
+
+    That history is exactly why 'owner' is NOT admitted by ck_org_member_role.
+    Adding it would recreate the drift in a new column: two places claiming to
+    know who owns the org, and a CHECK constraint that cannot compare them.
 
     Ownership remains a module BYPASS rather than a stored set of grants: an
-    owner always reaches every module the org's ceiling allows, so a bad save
-    in the tier matrix can never lock them out of the page that would undo it.
+    owner always reaches every module the org's ceiling allows, so their role is
+    inert — which is why no UI should show an owner's role as though it granted
+    them anything.
     """
     __tablename__ = 'organization_members'
 
@@ -268,7 +242,10 @@ class OrganizationMember(Base):
                     nullable=False, index=True)
     account_id = Column(Integer, ForeignKey('accounts.id', ondelete='CASCADE'),
                         nullable=False, index=True)
-    tier_key = Column(String(64), nullable=False)
+    # Kept in step with config/roles_registry.ROLE_KEYS. Defaulted to the
+    # SMALLER role so a row written without one grants the least, never the
+    # most.
+    role = Column(String(32), nullable=False, server_default='community_member')
     granted_by = Column(String(20), nullable=False, server_default='grant')
     created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
 
@@ -276,6 +253,10 @@ class OrganizationMember(Base):
         UniqueConstraint('org_id', 'account_id', name='uq_org_member'),
         CheckConstraint("granted_by IN ('subscription','grant')",
                         name='ck_org_member_granted_by'),
+        # No 'owner'. See the docstring — ownership is a column on
+        # organizations, and admitting it here would store it twice.
+        CheckConstraint("role IN ('manager','community_member')",
+                        name='ck_org_member_role'),
     )
 
     org = relationship('Organization', back_populates='members')
@@ -284,7 +265,7 @@ class OrganizationMember(Base):
 
     def __repr__(self):
         return (f'<OrganizationMember org={self.org_id} account={self.account_id} '
-                f'tier={self.tier_key}>')
+                f'role={self.role}>')
 
 
 class Logins(Base):
@@ -869,7 +850,11 @@ class AccessGrantEvent(Base):
         # freshly created test database.
         CheckConstraint(
             "event_type IN ('create','revoke','role_change',"
-            "'member.add','member.remove','member.tier_change',"
+            "'member.add','member.remove',"
+            # member.tier_change is RETAINED for rows already written under it,
+            # the same reason the space.* values below are. Roles replaced
+            # tiers; the log does not relabel what already happened.
+            "'member.tier_change','member.role_change',"
             "'org.create','org.suspend','org.restore','org.ceiling_change',"
             "'org.rename',"
             "'tier.modules_change',"

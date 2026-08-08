@@ -17,11 +17,11 @@ data; these run against the code that has to keep the property true afterwards.
 """
 from sqlalchemy.orm import Session
 
+from src.config import roles_registry as roles
 from src.db.models import (
     Account,
     Organization,
     OrganizationMember,
-    OrganizationTier,
 )
 from src.config import plans_registry as plans
 from src.services import modules
@@ -98,20 +98,20 @@ def test_signing_in_twice_does_not_make_a_second_workspace(db: Session):
         Organization.owner_account_id == acct.id).count() == 1
 
 
-def test_tiers_are_seeded_so_the_workspace_can_become_a_team(db: Session):
+def test_a_signup_joins_in_the_smallest_role(db: Session):
     """Converting to a team should be inviting somebody —
     not first discovering the tiers page is empty."""
     acct = _account(db, 8106)
     ensure_membership(db, acct)
     org = own_org_for(db, acct.id)
 
-    tiers = {t.tier_key: t for t in db.query(OrganizationTier).filter(
-        OrganizationTier.org_id == org.id).all()}
-    assert set(tiers) == {"owner", "member"}
-    assert tiers["owner"].modules == FREE_CEILING
-    assert tiers["member"].modules == [], (
-        "an invited member must get what the owner deliberately checks, "
-        "never a default nobody chose")
+    member = (db.query(OrganizationMember)
+                .filter(OrganizationMember.org_id == org.id,
+                        OrganizationMember.account_id == acct.id).one())
+    assert member.role == roles.DEFAULT_ROLE, (
+        "a signup joins in the SMALLEST role — the same principle the seeded "
+        "empty 'member' tier used to carry: never a default nobody chose")
+    assert roles.DEFAULT_ROLE == roles.ROLE_COMMUNITY_MEMBER
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +127,7 @@ def test_a_free_signup_sees_exactly_the_free_modules(db: Session):
     assert modules.ceiling_for(db, org.id) == FREE_CEILING
 
     from src.deps import OrgContext
-    ctx = OrgContext(account_id=acct.id, org_id=org.id, tier_key="owner", is_super_admin=False)
+    ctx = OrgContext(account_id=acct.id, org_id=org.id, role="manager", is_super_admin=False)
     # Owner bypass means the ceiling IS what they can open — the tier layer is
     # inert until this org has somebody in it who is not the owner.
     assert modules.effective_modules(db, ctx) == FREE_CEILING
@@ -217,7 +217,7 @@ def test_billing_only_follows_the_owner_s_subscription(db: Session):
     acct = _account(db, 8111)
     ensure_membership(db, acct)
     db.add(OrganizationMember(org_id=team.org_id, account_id=acct.id,
-                              tier_key="member", granted_by="grant"))
+                              role="manager", granted_by="grant"))
     db.flush()
 
     before = modules.ceiling_for(db, team.org_id)

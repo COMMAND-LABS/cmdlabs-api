@@ -21,7 +21,7 @@ router = APIRouter()
 
 class EntitlementsResponse(BaseModel):
     org_id: int
-    tier_key: str
+    role: str
     is_owner: bool
     is_super_admin: bool
     # True when this org has exactly one member — a workspace, not a team.
@@ -56,7 +56,7 @@ async def my_entitlements(db: db_dependency, org: org_dependency, request: Reque
     try:
         return EntitlementsResponse(
             org_id=org.org_id,
-            tier_key=org.tier_key,
+            role=org.role,
             is_owner=org.is_owner,
             is_super_admin=org.is_super_admin,
             is_personal=organizations.is_solo(db, org.org_id),

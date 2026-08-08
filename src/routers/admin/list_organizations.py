@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import func as sa_func
 
 from src.config import plans_registry as plans
-from src.db.models import Account, Organization, OrganizationMember, OrganizationTier
+from src.db.models import Account, Organization, OrganizationMember
 from src.deps import db_dependency, super_admin_dependency
 from src.rate_limit import limiter
 from src.utils.errors import handle_db_error
@@ -40,12 +40,6 @@ async def list_organizations(
             db.query(OrganizationMember.org_id, sa_func.count(OrganizationMember.id))
             .filter(OrganizationMember.org_id.in_(org_ids))
             .group_by(OrganizationMember.org_id)
-            .all()
-        )
-        tier_counts = dict(
-            db.query(OrganizationTier.org_id, sa_func.count(OrganizationTier.id))
-            .filter(OrganizationTier.org_id.in_(org_ids))
-            .group_by(OrganizationTier.org_id)
             .all()
         )
 
@@ -93,7 +87,6 @@ async def list_organizations(
                     owner_account_id=o.owner_account_id,
                     owner_email=owner_emails.get(o.owner_account_id),
                     member_count=member_counts.get(o.id, 0),
-                    tier_count=tier_counts.get(o.id, 0),
                     modules=plans.modules_for_plan(
                         o.pinned_plan or _plan_of(o)),
                     created_at=o.created_at,

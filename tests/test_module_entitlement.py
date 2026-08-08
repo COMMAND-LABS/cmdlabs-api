@@ -1,13 +1,20 @@
 """
-Module entitlement: ceiling ∩ tier, and the three admin actions that change it.
+Module entitlement: ceiling ∩ role, and the admin actions that change it.
 
-Two levels only. TIERS ARE NOT LEVELS — each is an arbitrary set of module
-keys, nothing requires one to be a superset of another, and two tiers may be
-entirely disjoint. The single relationship in the system is the intersection
-with the org's ceiling, which is a cap rather than a hierarchy.
+Two levels only, and the right-hand one is now a CONSTANT. It used to be
+organization_tiers — an arbitrary per-org set of module keys the owner edited,
+where nothing required one tier to be a superset of another and two could be
+entirely disjoint. A whole section of this file tested that matrix: setting a
+tier's modules, clamping a save to the ceiling, refusing the surface to
+non-owners, and not writing audit noise on an unchanged save. All of it went
+with the table.
 
-Also pins the three events that had constants but no callers until now:
-tier.modules_change, org.ceiling_change, and super_admin.join.
+What survives is the part that was never about tiers: the CAP. A role can only
+ever open what the org's plan allows, the owner bypasses the role layer, and a
+super admin bypasses both.
+
+Also pins the events that have constants but few callers: org.ceiling_change
+and super_admin.join.
 """
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -18,10 +25,12 @@ from src.db.models import (
     Account,
     Organization,
     OrganizationMember,
-    OrganizationTier,
 )
 from src.config import plans_registry as plans
 from src.config.modules_registry import MODULE_KEYS
+from src.config.roles_registry import (
+    COMMUNITY_MODULES, ROLE_COMMUNITY_MEMBER, ROLE_MANAGER,
+)
 from src.deps import OrgContext
 from src.main import app
 from src.services import audit, modules
@@ -29,7 +38,6 @@ from tests.conftest import ROOT_ORG_ID, make_token
 from tests.org_isolation import client_for, make_tenant
 
 ENTITLEMENTS = "/api/organizations/me/entitlements"
-TIERS = "/api/organizations/tiers"
 
 
 @pytest.fixture()
@@ -38,7 +46,7 @@ def super_admin(db: Session, test_org: Organization):
                 default_org_id=ROOT_ORG_ID)
     db.add(a); db.flush()
     db.add(OrganizationMember(org_id=ROOT_ORG_ID, account_id=a.id,
-                              tier_key="owner", granted_by="grant"))
+                              role="manager", granted_by="grant"))
     db.flush()
     return a
 
@@ -53,144 +61,127 @@ async def super_admin_client(_override_db, super_admin) -> AsyncClient:
 
 @pytest.fixture()
 def acme(db: Session):
-    """A client org on the premium plan, with two tiers."""
+    """A client org on the premium plan.
+
+    Nothing per-org to configure any more: roles are constants, so this is just
+    an org with a plan.
+    """
     t = make_tenant(db, slug="ent-acme", account_id=8801, data_scope="shared")
     org = db.query(Organization).filter(Organization.id == t.org_id).one()
     org.pinned_plan = plans.PLAN_PREMIUM
-
-    # make_tenant already created a fully-enabled 'member' tier; narrow it
-    # rather than inserting a second one (uq_org_tier_key).
-    member = (db.query(OrganizationTier)
-                .filter(OrganizationTier.org_id == t.org_id,
-                        OrganizationTier.tier_key == "member").one())
-    member.modules = ["home", "contacts"]
-
-    # Deliberately DISJOINT from 'member' — proves tiers are sets, not levels.
-    db.add(OrganizationTier(org_id=t.org_id, tier_key="analyst", label="Analyst",
-                            modules=["deals", "agents"]))
     db.flush()
     return t
 
 
-def _member_of(db, tenant, account_id, tier_key):
-    m = make_tenant(db, slug=tenant.org.name.lower().replace(" ", "-"), account_id=account_id,
-                    data_scope="shared", tier_key=tier_key, is_owner=False)
-    return m
+def _member_of(db, tenant, account_id, role):
+    return make_tenant(db, slug=tenant.org.name.lower().replace(" ", "-"),
+                       account_id=account_id, data_scope="shared",
+                       role=role, is_owner=False)
 
 
 # ---------------------------------------------------------------------------
 # resolution
 # ---------------------------------------------------------------------------
 
-async def test_member_sees_only_their_tiers_modules(db: Session, _override_db, acme):
-    member = _member_of(db, acme, 8802, "member")
+async def test_a_community_member_sees_only_the_allowlist(
+    db: Session, _override_db, acme
+):
+    """The narrow role, on a PREMIUM org.
+
+    The plan is irrelevant to what they get — that is the point of the role.
+    An org paying for the full surface still shows a community member three
+    screens.
+    """
+    member = _member_of(db, acme, 8802, ROLE_COMMUNITY_MEMBER)
     async with client_for(member) as c:
         body = (await c.get(ENTITLEMENTS)).json()
-    assert body["modules"] == ["home", "contacts"]
+
+    assert set(body["modules"]) == set(COMMUNITY_MODULES)
     assert body["ceiling"] is None, "a non-owner has no use for the ceiling"
 
 
-async def test_tiers_need_not_nest(db: Session, _override_db, acme):
-    """'analyst' is not a superset of 'member' — they share nothing.
+async def test_a_community_member_reaches_no_crm_module(
+    db: Session, _override_db, acme
+):
+    """THE ASSERTION THE ROLE EXISTS FOR.
 
-    Nothing in the model orders tiers, and this pins that: a tier is an
-    arbitrary bag of modules.
+    Named separately from the set-equality above because this is the property
+    somebody would break by "just adding one module" to COMMUNITY_MODULES. The
+    set test would be updated to match without anybody noticing what it meant;
+    this one says out loud what may not happen.
+
+    Note the ceiling in force is PREMIUM, so every one of these is bought and
+    available — the role is the only thing withholding them.
     """
-    analyst = _member_of(db, acme, 8803, "analyst")
-    async with client_for(analyst) as c:
-        body = (await c.get(ENTITLEMENTS)).json()
-    # Registry order, not the order they were stored in — the menu must be
-    # deterministic regardless of how a tier was edited.
-    assert body["modules"] == ["agents", "deals"]
-    assert "contacts" not in body["modules"]
-
-
-async def test_ceiling_caps_the_tier(db: Session, _override_db, acme):
-    """A tier naming a module outside the ceiling gets it silently dropped at
-    read time, without the tier row being rewritten."""
-    tier = (db.query(OrganizationTier)
-              .filter(OrganizationTier.org_id == acme.org_id,
-                      OrganizationTier.tier_key == "member").one())
-    # `organization` is a real registry key that NO plan sells, so it is
-    # outside every possible ceiling — which is exactly the case this tests.
-    tier.modules = ["home", "contacts", "organization"]
-    db.flush()
-
-    member = _member_of(db, acme, 8804, "member")
+    member = _member_of(db, acme, 8806, ROLE_COMMUNITY_MEMBER)
     async with client_for(member) as c:
         body = (await c.get(ENTITLEMENTS)).json()
-    assert "organization" not in body["modules"]
-    # The stored row is untouched — lowering a ceiling never rewrites tiers.
-    assert "organization" in db.query(OrganizationTier).filter(
-        OrganizationTier.id == tier.id).one().modules
+
+    for key in ("contacts", "contact_lists", "companies", "deals",
+                "credentials", "access", "analytics", "email_campaigns"):
+        assert key not in body["modules"], (
+            f"a community member must not reach {key}")
 
 
-async def test_owner_gets_the_whole_ceiling(db: Session, _override_db, acme):
-    """A bypass, not a stored grant: if an owner's tier could be edited down,
-    one bad save would lock them out of the screen that undoes it."""
+async def test_a_manager_tracks_the_whole_plan(db: Session, _override_db, acme):
+    """A manager is the ceiling, not a list.
+
+    Written as an equality against the plan rather than a fixed set of keys, so
+    that adding a module to PLAN_PREMIUM tomorrow keeps this passing WITHOUT an
+    edit — which is the behaviour being asserted. A snapshot here would pass
+    while the product silently stopped giving managers new modules, the exact
+    bug plans_registry records about frozen module lists.
+    """
+    manager = _member_of(db, acme, 8803, ROLE_MANAGER)
+    async with client_for(manager) as c:
+        body = (await c.get(ENTITLEMENTS)).json()
+
+    assert set(body["modules"]) == set(
+        plans.modules_for_plan(plans.PLAN_PREMIUM))
+
+
+async def test_the_ceiling_caps_a_manager(db: Session, _override_db):
+    """A role can never open what the org did not buy.
+
+    On a FREE org a manager gets the free plan, not the premium surface their
+    role would allow on a richer plan. The cap runs one way and this is it.
+    """
+    free_org = make_tenant(db, slug="ent-free", account_id=8807,
+                           data_scope="shared")
+    org = db.query(Organization).filter(Organization.id == free_org.org_id).one()
+    org.pinned_plan = plans.PLAN_FREE
+    db.flush()
+
+    manager = _member_of(db, free_org, 8808, ROLE_MANAGER)
+    async with client_for(manager) as c:
+        body = (await c.get(ENTITLEMENTS)).json()
+
+    assert set(body["modules"]) == set(plans.modules_for_plan(plans.PLAN_FREE))
+    assert "contacts" not in body["modules"], "not on the free plan"
+
+
+async def test_owner_gets_the_whole_ceiling_whatever_their_role(
+    db: Session, _override_db, acme
+):
+    """A bypass, not a stored grant.
+
+    The owner's membership row says community_member — every row does after the
+    roles migration — and they still get everything. If this ever stops being
+    true, an owner could be locked out of their own org by the value in a column
+    that is supposed to be inert for them.
+    """
+    member = (db.query(OrganizationMember)
+                .filter(OrganizationMember.org_id == acme.org_id,
+                        OrganizationMember.account_id == acme.account_id).one())
+    member.role = ROLE_COMMUNITY_MEMBER
+    db.flush()
+
     async with client_for(acme) as c:
         body = (await c.get(ENTITLEMENTS)).json()
+
     assert set(body["modules"]) == set(
         plans.modules_for_plan(plans.PLAN_PREMIUM))
     assert body["ceiling"] is not None
-
-
-# ---------------------------------------------------------------------------
-# tier editing + audit
-# ---------------------------------------------------------------------------
-
-async def test_owner_can_set_tier_modules_and_it_is_audited(
-    db: Session, _override_db, acme
-):
-    async with client_for(acme) as c:
-        resp = await c.put(f"{TIERS}/member/modules",
-                           json={"modules": ["home", "deals"]})
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["modules"] == ["home", "deals"]
-
-    ev = db.query(AccessGrantEvent).filter(
-        AccessGrantEvent.event_type == audit.TIER_MODULES_CHANGE).one()
-    assert ev.org_id == acme.org_id
-    assert ev.resource_label == "member"
-    assert ev.detail == "home,deals"      # what it BECAME, not just "changed"
-
-
-async def test_setting_a_tier_outside_the_ceiling_is_clamped(
-    db: Session, _override_db, acme
-):
-    # `organization` and `membership` are real registry keys that no plan
-    # sells, so they are outside every possible ceiling. An owner naming them
-    # gets them dropped rather than granted.
-    async with client_for(acme) as c:
-        resp = await c.put(f"{TIERS}/member/modules",
-                           json={"modules": ["home", "organization", "membership"]})
-    assert resp.status_code == 200
-    assert resp.json()["modules"] == ["home"], "an owner cannot exceed their ceiling"
-
-
-async def test_non_owner_cannot_reach_the_tiers_surface(db: Session, _override_db, acme):
-    """Read AND write, and 404 rather than 403 on both.
-
-    The read matters as much as the write: the page returns the org's whole
-    ceiling and every tier's module set, which is exactly what
-    /me/entitlements deliberately withholds from non-owners. Serving it here
-    would have made that restriction decorative.
-    """
-    member = _member_of(db, acme, 8805, "member")
-    async with client_for(member) as c:
-        write = await c.put(f"{TIERS}/member/modules", json={"modules": []})
-        read = await c.get(TIERS)
-    assert write.status_code == 404
-    assert read.status_code == 404
-
-
-async def test_unchanged_tier_writes_no_audit_noise(db: Session, _override_db, acme):
-    """Saving the matrix without changing anything must not add a row — a log
-    padded with no-ops is a log nobody reads."""
-    async with client_for(acme) as c:
-        await c.put(f"{TIERS}/member/modules", json={"modules": ["home", "contacts"]})
-    assert db.query(AccessGrantEvent).filter(
-        AccessGrantEvent.event_type == audit.TIER_MODULES_CHANGE).count() == 0
 
 
 # ---------------------------------------------------------------------------
@@ -218,8 +209,8 @@ async def test_super_admin_can_pin_a_plan_and_it_is_audited(
 async def test_lowering_a_ceiling_takes_effect_immediately(
     db: Session, _override_db, super_admin_client, acme
 ):
-    """No cascade, no tier rewrite — the intersection happens at read time."""
-    member = _member_of(db, acme, 8806, "member")
+    """No cascade, no rewrite anywhere — the intersection happens at read time."""
+    member = _member_of(db, acme, 8806, ROLE_MANAGER)
     async with client_for(member) as c:
         assert "contacts" in (await c.get(ENTITLEMENTS)).json()["modules"]
 
@@ -227,7 +218,8 @@ async def test_lowering_a_ceiling_takes_effect_immediately(
                            json={"plan": "free"})
 
     async with client_for(member) as c:
-        # The tier still names contacts; the free ceiling no longer allows it.
+        # The manager role still reaches for everything; the free ceiling no
+        # longer includes contacts, and the cap is applied per request.
         assert "contacts" not in (await c.get(ENTITLEMENTS)).json()["modules"]
 
 
@@ -303,7 +295,7 @@ def test_super_admin_are_never_the_last_to_open_a_new_module(db: Session, test_o
     db.add(narrow)
     db.flush()
 
-    super_admin = OrgContext(account_id=1, org_id=narrow.id, tier_key="owner", is_super_admin=True)
+    super_admin = OrgContext(account_id=1, org_id=narrow.id, role="manager", is_super_admin=True)
     assert modules.effective_modules(db, super_admin) == list(MODULE_KEYS)
 
 
@@ -314,7 +306,7 @@ def test_a_tenant_ceiling_is_still_exactly_its_plan(db: Session):
     special and every tenant has silently been given everything.
     """
     tenant = make_tenant(db, slug="ceiling-tenant", account_id=8890,
-                         tier_key="owner", is_owner=True)
+                         role="manager", is_owner=True)
     org = db.query(Organization).filter(Organization.id == tenant.org_id).one()
     org.pinned_plan = plans.PLAN_FREE
     db.flush()
@@ -324,28 +316,23 @@ def test_a_tenant_ceiling_is_still_exactly_its_plan(db: Session):
     assert len(modules.ceiling_for(db, tenant.org_id)) < len(MODULE_KEYS)
 
 
-def test_a_non_super_admin_member_of_the_platform_org_is_still_capped_by_their_tier(
+def test_a_non_super_admin_member_of_the_platform_org_is_still_capped_by_their_role(
     db: Session, test_org,
 ):
     """The safety argument for the rule above, asserted rather than assumed.
 
     Root still holds at least one account from when it was the public lobby.
-    Widening its ceiling must not widen them: they are not an owner, so their
-    modules are ceiling ∩ tier, and the tier is what holds.
+    Widening its ceiling must not widen them: they are not an owner and not a
+    super admin, so their modules are ceiling n role, and the role is what
+    holds.
     """
-    stray = make_tenant(db, slug="root", account_id=8891, tier_key="free",
-                        is_owner=False)
-    tier = (db.query(OrganizationTier)
-              .filter(OrganizationTier.org_id == test_org.id,
-                      OrganizationTier.tier_key == "free").first())
-    if tier is None:
-        tier = OrganizationTier(org_id=test_org.id, tier_key="free",
-                                label="Free", modules=["home", "settings"])
-        db.add(tier)
-    tier.modules = ["home", "settings"]
-    db.flush()
+    stray = make_tenant(db, slug="root", account_id=8891,
+                        role=ROLE_COMMUNITY_MEMBER, is_owner=False)
 
     ctx = OrgContext(account_id=stray.account_id, org_id=test_org.id,
-                     tier_key="free",
-                     is_super_admin=False)
-    assert modules.effective_modules(db, ctx) == ["home", "settings"]
+                     role=ROLE_COMMUNITY_MEMBER, is_super_admin=False)
+    resolved = modules.effective_modules(db, ctx)
+
+    assert set(resolved) <= set(COMMUNITY_MODULES)
+    assert "contacts" not in resolved, (
+        "a full ceiling on the platform org must not reach a community member")

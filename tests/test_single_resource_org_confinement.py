@@ -24,21 +24,21 @@ confinement passes through. A member who leaves an org keeps their own API key.
 """
 from sqlalchemy.orm import Session
 
-from src.db.models import Agent, Organization, OrganizationMember, OrganizationTier
+from src.db.models import Agent, Organization, OrganizationMember
 from src.services import access
 from src.services.agent_access import can_access_agent
 from tests.org_isolation import client_for, make_tenant
 
 
-def _join(db: Session, account_id: int, org: Organization, tier_key: str):
-    """Put an existing account into a second org, as super admins would."""
-    if not (db.query(OrganizationTier)
-              .filter(OrganizationTier.org_id == org.id,
-                      OrganizationTier.tier_key == tier_key).first()):
-        db.add(OrganizationTier(org_id=org.id, tier_key=tier_key,
-                                label=tier_key, modules=list(MODULE_KEYS)))
+def _join(db: Session, account_id: int, org: Organization,
+          role: str = "manager"):
+    """Put an existing account into a second org, as super admins would.
+
+    No per-org setup first: roles are constants, so the membership row is the
+    whole act of joining.
+    """
     db.add(OrganizationMember(org_id=org.id, account_id=account_id,
-                              tier_key=tier_key, granted_by="grant"))
+                              role=role, granted_by="grant"))
     db.flush()
 
 
@@ -50,7 +50,7 @@ async def test_owning_an_agent_elsewhere_does_not_reach_it_from_here(
     away = make_tenant(db, slug="conf-away", account_id=9502, data_scope="shared")
 
     # One account, two orgs — and an agent it OWNS, living in the other one.
-    _join(db, home.account_id, away.org, tier_key="member")
+    _join(db, home.account_id, away.org, role="manager")
     agent = Agent(org_id=away.org_id, account_id=home.account_id,
                   name="Elsewhere", config={})
     db.add(agent)
@@ -75,7 +75,7 @@ async def test_a_grant_recorded_in_another_org_does_not_count(
     """
     home = make_tenant(db, slug="conf-g-home", account_id=9503, data_scope="shared")
     away = make_tenant(db, slug="conf-g-away", account_id=9504, data_scope="shared")
-    _join(db, home.account_id, away.org, tier_key="member")
+    _join(db, home.account_id, away.org, role="manager")
 
     agent = Agent(org_id=away.org_id, account_id=away.account_id,
                   name="Theirs", config={})

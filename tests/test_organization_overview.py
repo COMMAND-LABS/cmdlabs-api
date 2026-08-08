@@ -24,7 +24,7 @@ name is an editable label.
 import pytest
 from sqlalchemy.orm import Session
 
-from src.db.models import Account, Organization, OrganizationTier
+from src.db.models import Account
 from tests.org_isolation import client_for, make_tenant
 
 def _overview(org_id: int) -> str:
@@ -32,16 +32,10 @@ def _overview(org_id: int) -> str:
 
 
 @pytest.fixture()
-
 def team(db: Session):
-    """A named org with an owner, a second member, and both tiers."""
+    """A named org with an owner."""
     owner = make_tenant(db, slug="overview-co", account_id=9701,
-                        tier_key="owner", is_owner=True)
-    if not db.query(OrganizationTier).filter(
-            OrganizationTier.org_id == owner.org_id,
-            OrganizationTier.tier_key == "member").first():
-        db.add(OrganizationTier(org_id=owner.org_id, tier_key="member",
-                                label="Member", modules=["home", "contacts"]))
+                        role="manager", is_owner=True)
     db.flush()
     return owner
 
@@ -50,16 +44,16 @@ def team(db: Session):
 # who may read it
 # ---------------------------------------------------------------------------
 
-async def test_a_member_gets_the_same_404_as_the_tiers_matrix(
+async def test_a_member_does_not_get_the_owners_console(
     db: Session, _override_db, team,
 ):
-    """Composing four owner-only surfaces must not create a fifth that leaks.
+    """Composing owner-only surfaces must not create one more that leaks.
 
     404 rather than 403 so the console does not confirm its own existence to
     somebody who cannot use it.
     """
     member = make_tenant(db, slug="overview-co", account_id=9702,
-                         tier_key="member", is_owner=False)
+                         role="manager", is_owner=False)
 
     async with client_for(member) as c:
         resp = await c.get(_overview(team.org_id))
@@ -75,7 +69,7 @@ async def test_platform_super_admin_do_not_get_the_owners_console(
     look, and it is deliberately configuration rather than the owner's view.
     """
     super_admin = make_tenant(db, slug="overview-co", account_id=9704,
-                        tier_key="member", is_owner=False)
+                        role="manager", is_owner=False)
     account = db.query(Account).filter(Account.id == super_admin.account_id).one()
     account.is_super_admin = True
     db.flush()

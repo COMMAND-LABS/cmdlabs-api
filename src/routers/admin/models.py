@@ -25,7 +25,6 @@ class OrganizationSummary(BaseModel):
     owner_account_id: Optional[int] = None
     owner_email: Optional[str] = None
     member_count: int
-    tier_count: int
     # What the plan in force opens. Derived, never stored.
     modules: List[str]
     created_at: Optional[datetime] = None

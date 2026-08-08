@@ -21,7 +21,10 @@ from src.config.modules_registry import (
     MODULE_KEYS,
     module_for_path,
 )
-from src.db.models import Account, Agent, Contact, Organization, OrganizationTier
+from src.config.roles_registry import ROLE_COMMUNITY_MEMBER
+from src.db.models import (
+    Account, Agent, Contact, Organization, OrganizationMember,
+)
 from src.main import _ROUTERS
 from tests.org_isolation import client_for, make_tenant
 
@@ -29,14 +32,21 @@ from tests.org_isolation import client_for, make_tenant
 @pytest.fixture()
 def acme(db: Session):
     return make_tenant(db, slug="enf-acme", account_id=9101, data_scope="shared",
-                       tier_key="member", is_owner=False)
+                       role="manager", is_owner=False)
 
 
-def _narrow_tier_to(db, tenant, modules):
-    tier = (db.query(OrganizationTier)
-              .filter(OrganizationTier.org_id == tenant.org_id,
-                      OrganizationTier.tier_key == "member").one())
-    tier.modules = modules
+def _narrow_to_community(db, tenant):
+    """Put this tenant's member in the narrow role.
+
+    Replaces _narrow_tier_to(db, tenant, modules), which edited a tier row to an
+    arbitrary module set. A role cannot be narrowed to an arbitrary set — that
+    is the point of them — so enforcement is now asserted against the smallest
+    role the platform has.
+    """
+    member = (db.query(OrganizationMember)
+                .filter(OrganizationMember.org_id == tenant.org_id,
+                        OrganizationMember.account_id == tenant.account_id).one())
+    member.role = ROLE_COMMUNITY_MEMBER
     db.flush()
 
 
@@ -87,21 +97,27 @@ def test_longest_prefix_wins():
 # ---------------------------------------------------------------------------
 
 async def test_excluded_module_is_refused(db: Session, _override_db, acme):
-    _narrow_tier_to(db, acme, ["contacts"])   # deals deliberately absent
+    """One module in the role's allowlist, one outside it.
+
+    Both are inside the ORG's ceiling — the org is on premium — so the role is
+    the only thing refusing the second. That is the property under test: the
+    gate is the role, not the plan.
+    """
+    _narrow_to_community(db, acme)
 
     async with client_for(acme) as c:
-        allowed = await c.get("/api/contacts/")
-        denied = await c.get("/api/deals/")
+        allowed = await c.get("/api/courses/")     # in COMMUNITY_MODULES
+        denied = await c.get("/api/deals/")        # deliberately not
 
     assert allowed.status_code == 200
     assert denied.status_code == 404, (
-        "a module outside the caller's tier must not be reachable by URL")
+        "a module outside the caller's role must not be reachable by URL")
 
 
 async def test_denial_is_404_not_403(db: Session, _override_db, acme):
     """404 so a paid feature does not advertise its own existence to someone
     who cannot use it."""
-    _narrow_tier_to(db, acme, ["contacts"])
+    _narrow_to_community(db, acme)
     async with client_for(acme) as c:
         resp = await c.get("/api/deals/")
     assert resp.status_code == 404
@@ -111,7 +127,7 @@ async def test_denial_is_404_not_403(db: Session, _override_db, acme):
 async def test_writes_are_refused_too(db: Session, _override_db, acme):
     """A gated read with an ungated write is still a hole — the caller cannot
     list deals but could create one."""
-    _narrow_tier_to(db, acme, ["contacts"])
+    _narrow_to_community(db, acme)
     async with client_for(acme) as c:
         resp = await c.post("/api/deals/", json={"title": "Sneaky"})
     assert resp.status_code == 404
@@ -133,11 +149,15 @@ async def test_narrowing_the_plan_revokes_immediately(
 
 
 async def test_owner_reaches_everything_in_the_ceiling(db: Session, _override_db):
-    """An owner bypasses their tier. If their own tier could gate them, one bad
-    save in the matrix would lock them out of the screen that undoes it."""
+    """An owner bypasses their role.
+
+    Given the SMALLEST role explicitly, which is also what the roles migration
+    left every row holding. If the bypass ever went away, every owner on the
+    platform would be locked out of their own org at once.
+    """
     owner = make_tenant(db, slug="enf-owner", account_id=9102,
-                        data_scope="shared", tier_key="member", is_owner=True)
-    _narrow_tier_to(db, owner, [])   # tier grants nothing at all
+                        data_scope="shared", role=ROLE_COMMUNITY_MEMBER,
+                        is_owner=True)
 
     async with client_for(owner) as c:
         assert (await c.get("/api/deals/")).status_code == 200
@@ -155,9 +175,9 @@ async def test_a_lapsed_org_can_read_but_not_write(db: Session, _override_db, ac
     this replaced — so a test that could still flip one would be testing a
     fiction.
 
-    Uses AGENTS because the org's plan here is derived from the owner's
-    billing, and the tier is narrowed to agents — so this asserts on a module
-    the viewer definitely has, rather than accidentally testing entitlement.
+    Uses AGENTS with a MANAGER, so the viewer definitely has the module and
+    this asserts on the read-only window rather than accidentally testing
+    entitlement.
     """
     org = db.query(Organization).filter(Organization.id == acme.org_id).one()
     owner = db.query(Account).filter(Account.id == acme.account_id).one()
@@ -165,7 +185,6 @@ async def test_a_lapsed_org_can_read_but_not_write(db: Session, _override_db, ac
     owner.subscription_lapsed_at = datetime.now(timezone.utc) - timedelta(days=1)
     org.owner_account_id = owner.id
     org.pinned_plan = None       # follow the owner's billing, which just lapsed
-    _narrow_tier_to(db, acme, ["agents"])
     db.flush()
 
     kept = Agent(org_id=acme.org_id, account_id=acme.account_id,

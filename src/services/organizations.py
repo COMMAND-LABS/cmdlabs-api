@@ -39,31 +39,28 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.config import plans_registry as plans
-from src.db.models import Account, Organization, OrganizationMember, OrganizationTier
+from src.config import roles_registry as roles
+from src.db.models import Account, Organization, OrganizationMember
 from src.services import audit
 
 logger = logging.getLogger(__name__)
 
-# The two tiers every org is seeded with. A tier is a named SET of modules the
-# owner hands out; it is not a level, and nothing orders these two.
-TIER_OWNER = "owner"
-TIER_MEMBER = "member"
-
-# TIER_ORG_OWNER = "org_owner" lived here and is gone, along with TIER_FREE and
-# TIER_PREMIUM before it. Three reasons, in order:
+# NOTHING IS SEEDED PER ORG ANY MORE. Every org used to get two
+# organization_tiers rows — 'owner' and 'member' — because a tier was a per-org,
+# owner-editable set of modules and an org with none had an empty matrix. Roles
+# are platform-wide constants (config/roles_registry), so there is no per-org
+# row to create, nothing to seed wrong, and no way for one org's vocabulary to
+# drift from another's.
 #
-#   - it named OWNERSHIP, which is organizations.owner_account_id and not a
-#     tier at all. An owner bypasses their tier outright
-#     (modules.effective_modules), so an "Org Owner" tier could never affect
-#     anybody who held it.
-#   - only ONE organization in production ever had a row for it — the platform
-#     org, seeded by the original 2024 migration. The admin join assigned it to
-#     super admins joining ANY org, so every such join wrote a tier_key naming
-#     a tier that did not exist there. Harmless only because super admins
-#     bypass tiers, which is safety by accident of a bypass rather than by
-#     construction.
-#   - `free` and `premium` were tier names borrowed from the PLAN axis, which
-#     is the one thing this vocabulary must not be confused with.
+# The tier names that came before are worth remembering as a list of mistakes
+# this vocabulary should not repeat:
+#
+#   - `org_owner` named OWNERSHIP, which is organizations.owner_account_id and
+#     never belonged on the module axis at all. It is why 'owner' is not a role
+#     value today.
+#   - `free` and `premium` borrowed the PLAN axis's vocabulary, which is the one
+#     thing this must not be confused with. A plan is what the org bought; a
+#     role is who a person is inside it.
 
 # Membership provenance. Unrelated to the org's PLAN, which is now a single
 # nullable column (Organization.pinned_plan) rather than a flag over a stored
@@ -185,14 +182,14 @@ def ensure_membership(db: Session, account: Account,
         return existing
 
     # Ownership is not written here — it is organizations.owner_account_id, and
-    # this row no longer carries a copy. The comparison survives only to pick a
-    # starting tier, which is a label an owner can change later and not a
-    # permission.
-    tier_key = TIER_OWNER if org.owner_account_id == account.id else TIER_MEMBER
+    # this row no longer carries a copy. The owner's role is INERT (they bypass
+    # it in modules.effective_modules), so it is set to the same default as
+    # anybody else rather than to a special value that would imply otherwise.
+    role = roles.DEFAULT_ROLE
     member = OrganizationMember(
         org_id=org.id,
         account_id=account.id,
-        tier_key=tier_key,
+        role=role,
         # Never 'subscription': a membership is not what billing acts on. For a
         # personal org billing moves the CEILING, and for a team org the member
         # is there because an owner put them there.
@@ -207,7 +204,7 @@ def ensure_membership(db: Session, account: Account,
     # previously unlogged.
     audit.record_membership(
         db, event_type=audit.MEMBER_ADD, org_id=org.id,
-        account_id=account.id, tier_key=tier_key,
+        account_id=account.id, role=role,
         actor_account_id=account.id,
     )
 
@@ -248,16 +245,6 @@ def _create_personal_org(db: Session, account: Account) -> Organization:
         # else is let in pin_plan() does it automatically — see there for why.
     )
     db.add(org)
-    db.flush()
-
-    # Seeded so that converting this workspace into a team is picking a slug
-    # and inviting somebody — not first discovering the tiers page is empty.
-    # `member` starts with nothing: an invited person gets what the owner
-    # deliberately checks in the matrix, never a default they did not choose.
-    db.add(OrganizationTier(org_id=org.id, tier_key=TIER_OWNER, label="Owner",
-                            modules=ceiling_for_account(account)))
-    db.add(OrganizationTier(org_id=org.id, tier_key=TIER_MEMBER, label="Member",
-                            modules=[]))
     db.flush()
 
     audit.record_org_change(

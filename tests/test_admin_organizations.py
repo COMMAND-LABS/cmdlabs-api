@@ -17,7 +17,7 @@ import pytest
 from src.config import plans_registry as plans
 from httpx import ASGITransport, AsyncClient
 
-from src.db.models import Account, Organization, OrganizationMember, OrganizationTier
+from src.db.models import Account, Organization, OrganizationMember
 from src.main import app
 from tests.conftest import make_token
 
@@ -32,7 +32,7 @@ def super_admin_account(db, test_org):
     db.flush()
     db.add(OrganizationMember(
         org_id=test_org.id, account_id=account.id,
-        tier_key="owner", granted_by="grant",
+        role="manager", granted_by="grant",
     ))
     db.flush()
     return account
@@ -68,10 +68,8 @@ def seeded_orgs(db, test_org, test_account):
     lapsed = Organization(name="Lapsed Co", owner_account_id=lapsed_owner.id)
     db.add_all([acme, lapsed])
     db.flush()
-    db.add(OrganizationTier(org_id=acme.id, tier_key="member", label="Member",
-                            modules=["contacts"]))
     db.add(OrganizationMember(org_id=acme.id, account_id=test_account.id,
-                              tier_key="member", granted_by="grant"))
+                              role="manager", granted_by="grant"))
     db.flush()
     return acme, lapsed
 
@@ -109,7 +107,6 @@ async def test_summary_reports_counts_and_plan(super_admin_client: AsyncClient, 
     row = next(o for o in resp.json()["organizations"] if o["name"] == "Acme")
 
     assert row["member_count"] == 1
-    assert row["tier_count"] == 1
     assert row["pinned_plan"] == "premium"
     assert row["modules"] == plans.modules_for_plan(plans.PLAN_PREMIUM), (
         "what a pinned plan opens is read from the registry, not stored")

@@ -15,7 +15,6 @@ from src.db.models import (
     Contact,
     Organization,
     OrganizationMember,
-    OrganizationTier,
 )
 from tests.conftest import ROOT_ORG_ID, make_token
 from tests.org_isolation import Tenant, client_for, make_tenant
@@ -27,14 +26,8 @@ MINE = "/api/organizations/mine"
 @pytest.fixture()
 def team(db: Session):
     """An owner with a named org and both tiers."""
-    t = make_tenant(db, slug="invite-co", account_id=9601, tier_key="owner",
+    t = make_tenant(db, slug="invite-co", account_id=9601, role="manager",
                     is_owner=True)
-    if not db.query(OrganizationTier).filter(
-            OrganizationTier.org_id == t.org_id,
-            OrganizationTier.tier_key == "member").first():
-        db.add(OrganizationTier(org_id=t.org_id, tier_key="member",
-                                label="Member", modules=["home", "contacts"]))
-        db.flush()
     return t
 
 
@@ -47,7 +40,7 @@ async def test_invite_creates_an_account_and_grants_access(
 ):
     async with client_for(team) as c:
         resp = await c.post(MEMBERS, json={"email": "New.Person@Acme.test",
-                                           "tier_key": "member"})
+                                           "role": "community_member"})
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["email"] == "new.person@acme.test", "normalized"
@@ -66,37 +59,45 @@ async def test_an_existing_account_keeps_its_own_default_org(
     other = make_tenant(db, slug="already-here", account_id=9604)
     async with client_for(team) as c:
         resp = await c.post(MEMBERS, json={"email": other.account.email,
-                                           "tier_key": "member"})
+                                           "role": "community_member"})
     assert resp.status_code == 201
     db.refresh(other.account)
     assert other.account.default_org_id == other.org_id
 
 
-async def test_invite_refuses_a_tier_from_another_org(
-    db: Session, _override_db, team
-):
+async def test_invite_refuses_an_unknown_role(db: Session, _override_db, team):
     """Otherwise the member resolves to no modules and it reads as a
-    permissions bug rather than a typo."""
+    permissions bug rather than a typo.
+
+    This used to say "refuses a tier from another org" — tier keys were per-org,
+    so naming a real tier belonging to somebody ELSE was the realistic mistake.
+    Roles are platform-wide, so the only way to get this wrong now is a typo,
+    which is a smaller failure mode and is what this pins.
+
+    422 rather than letting ck_org_member_role turn it into a 500: the database
+    would refuse it either way, and the caller deserves to be told which field
+    was wrong.
+    """
     async with client_for(team) as c:
         resp = await c.post(MEMBERS, json={"email": "z@y.test",
-                                           "tier_key": "premium"})
+                                           "role": "not_a_role"})
     assert resp.status_code == 422
 
 
 async def test_only_an_owner_can_invite(db: Session, _override_db, team):
     plain = make_tenant(db, slug="invite-co", account_id=9605,
-                        tier_key="member", is_owner=False)
+                        role="manager", is_owner=False)
     async with client_for(plain) as c:
         resp = await c.post(MEMBERS, json={"email": "n@y.test",
-                                           "tier_key": "member"})
+                                           "role": "community_member"})
     assert resp.status_code == 404, "the admin surface does not confirm it exists"
 
 
 async def test_inviting_twice_is_a_conflict(db: Session, _override_db, team):
     async with client_for(team) as c:
-        await c.post(MEMBERS, json={"email": "dup@y.test", "tier_key": "member"})
+        await c.post(MEMBERS, json={"email": "dup@y.test", "role": "community_member"})
         again = await c.post(MEMBERS, json={"email": "dup@y.test",
-                                            "tier_key": "member"})
+                                            "role": "community_member"})
     assert again.status_code == 409
 
 
@@ -110,7 +111,7 @@ async def test_removal_bites_on_the_very_next_request(
     """No token to revoke, no cache to invalidate — get_org_context re-checks
     membership every time."""
     colleague = make_tenant(db, slug="invite-co", account_id=9606,
-                            tier_key="member", is_owner=False)
+                            role="manager", is_owner=False)
     db.add(Contact(org_id=team.org_id, account_id=team.account_id,
                    first_name="A", last_name="B", email="c@invite.test"))
     db.flush()
@@ -147,7 +148,7 @@ async def test_a_removed_member_keeps_their_authored_rows(
     """Attribution outlives membership. Deleting a departing colleague's work
     would be an unrecoverable answer to a reversible problem."""
     colleague = make_tenant(db, slug="invite-co", account_id=9607,
-                            tier_key="member", is_owner=False)
+                            role="manager", is_owner=False)
     row = Contact(org_id=team.org_id, account_id=colleague.account_id,
                   first_name="Theirs", last_name="X", email="t@invite.test")
     db.add(row); db.flush()
@@ -183,7 +184,7 @@ async def test_the_switcher_reflects_a_new_membership(
 ):
     joiner = make_tenant(db, slug="joiner-home", account_id=9609)
     db.add(OrganizationMember(org_id=team.org_id, account_id=joiner.account_id,
-                              tier_key="member", granted_by="grant"))
+                              role="manager", granted_by="grant"))
     db.flush()
 
     async with client_for(joiner) as c:
@@ -201,7 +202,7 @@ def super_admin_client_and_org(db: Session):
                     default_org_id=ROOT_ORG_ID)
     db.add(super_admin); db.flush()
     db.add(OrganizationMember(org_id=ROOT_ORG_ID, account_id=super_admin.id,
-                              tier_key="owner", granted_by="grant"))
+                              role="manager", granted_by="grant"))
     db.flush()
     return super_admin
 
@@ -268,7 +269,7 @@ async def test_a_blank_name_is_refused(db: Session, _override_db, team):
 
 async def test_a_member_cannot_rename(db: Session, _override_db, team):
     plain = make_tenant(db, slug="invite-co", account_id=9611,
-                        tier_key="member", is_owner=False)
+                        role="manager", is_owner=False)
     async with client_for(plain) as c:
         resp = await c.put("/api/organizations/name", json={"name": "Hijack"})
     assert resp.status_code == 404
