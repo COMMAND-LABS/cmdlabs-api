@@ -33,7 +33,7 @@ async def create_agent(
         "tools": []
       }
     }
-    Supported model providers: openai, anthropic, google, ollama
+    Supported model providers: openai, anthropic, google, kimi, ollama
     """
     try:
         account_id = account_id_from_claims(jwt)

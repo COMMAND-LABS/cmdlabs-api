@@ -51,7 +51,7 @@
               "properties": {
                 "provider": {
                   "type": "string",
-                  "enum": ["openai", "anthropic", "google", "ollama"]
+                  "enum": ["openai", "anthropic", "google", "kimi", "ollama"]
                 },
                 "model": {
                   "type": "string",
