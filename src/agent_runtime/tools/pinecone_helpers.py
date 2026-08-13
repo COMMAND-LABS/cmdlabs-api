@@ -6,13 +6,12 @@ duplicating ~100 lines of identical setup and query code.
 """
 
 import logging
-import os
 from typing import Any
 
-import aiohttp
 from sqlalchemy.orm import Session
 
 from src.routers.credentials.encryption import get_credential_value
+from src.services.fetch_embedding import fetch_embedding
 from src.services.vector_store_credentials import resolve_index_pinecone_credential
 
 logger = logging.getLogger(__name__)
@@ -64,28 +63,17 @@ def load_pinecone_index(
 
 
 async def generate_embedding(query: str, auth_token: str | None = None) -> list[float] | None:
-    """Call the embeddings microservice and return the embedding vector, or ``None`` on failure."""
-    headers = {}
-    if auth_token:
-        headers["Authorization"] = f"Bearer {auth_token}"
+    """Fetch an embedding via the shared embeddings-service client.
 
-    print("EMBEDDINGS_API_URL")
-    print(f"{os.getenv('EMBEDDINGS_API_URL')}")
-
-    url = f"{os.getenv('EMBEDDINGS_API_URL')}/huggingface/embedding"
-
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(url, json={"input": query}, headers=headers) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    logger.error(f"[VECTOR SEARCH] Embeddings API error ({response.status}): {error_text}")
-                    return None
-                result = await response.json()
-                return result["embedding"]
-        except aiohttp.ClientError as exc:
-            logger.error(f"[VECTOR SEARCH] Error generating embedding: {exc}")
-            return None
+    Tool-friendly wrapper around ``services.fetch_embedding``: the service
+    raises on failure, but a tool wants ``None`` so the model gets an error
+    result instead of a crashed stream.
+    """
+    try:
+        return await fetch_embedding(auth_token, query)
+    except Exception as exc:
+        logger.error(f"[VECTOR SEARCH] Error generating embedding: {exc}")
+        return None
 
 
 async def query_pinecone(

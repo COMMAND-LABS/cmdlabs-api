@@ -14,32 +14,26 @@ caller was not sold.
 
     effective = the org's PLAN  ∩  the member's ROLE
 
-kept deliberately identical to cmdlabs-api/src/services/modules.py, including
-the owner bypass. Two services enforcing entitlement differently is worse than
-one enforcing it and one not: the gap is harder to see.
-
-The ceiling is DERIVED, never read from a column. It used to read
-organizations.granted_modules directly, and when that column became a pinned
-PLAN this file would have resolved every org to an empty set — every gated tool
-silently absent from every agent. It reads config/plans_registry, which is
-byte-synced from cmdlabs-api (check-schemas.sh) precisely so "what does premium
-include" cannot be answered twice.
+The derivation itself — ceiling, owner bypass, role intersection — is
+src/services/modules.py's, called with a minimal ctx rather than re-implemented.
+This file used to carry a deliberate copy of that logic back when the agent
+runtime was a separate service; since the merge both live in one repo, and two
+copies of "what does premium include" is exactly the drift the copy existed to
+prevent. What remains here is only what the request context cannot provide:
+resolving the membership row, because tools run outside the request and there
+is no OrgContext to reuse.
 
 This is the MODULE axis only. It decides which tools exist; org_scope's
 tenant_predicate still decides which rows those tools see. Neither substitutes
 for the other — a tool that is entitled but unscoped would still be a leak.
 """
 import logging
+from types import SimpleNamespace
 
 from sqlalchemy.orm import Session
 
-from src.config import plans_registry as plans
-from src.config import roles_registry as roles
-from src.db.models import (
-    Account,
-    Organization,
-    OrganizationMember,
-)
+from src.db.models import Organization, OrganizationMember
+from src.services import modules
 
 logger = logging.getLogger(__name__)
 
@@ -64,37 +58,21 @@ TOOL_MODULES = {
 }
 
 
-def _ceiling(db: Session, pinned_plan, owner_account_id) -> list[str]:
-    """The modules this org's PLAN opens. Mirrors modules.org_entitlement.
-
-    A pinned plan wins outright — that is the comp, and billing may never undo
-    it. Otherwise the plan is read from the owner's subscription, including the
-    grace window after a lapse (which keeps the paid modules and refuses writes
-    on the HTTP side; an agent tool is a read, so nothing here changes).
-    """
-    if pinned_plan is not None:
-        return plans.modules_for_plan(pinned_plan)
-    if owner_account_id is None:
-        return plans.modules_for_plan(plans.PLAN_FREE)
-
-    owner = (db.query(Account.subscription_status,
-                      Account.subscription_lapsed_at)
-               .filter(Account.id == owner_account_id).first())
-    if owner is None:
-        return plans.modules_for_plan(plans.PLAN_FREE)
-    return plans.modules_for_plan(plans.plan_for(owner[0], owner[1]))
-
-
 def effective_modules(db: Session, account_id: int, org_id: int) -> set[str]:
     """Module keys `account_id` may open in `org_id`.
 
     Returns an empty set when the account is not a member of the org — the
     caller then builds no gated tools at all, which is the right failure
     direction for a check that runs outside the request context.
+
+    Only the membership lookup lives here; the ceiling / owner-bypass / role
+    derivation is modules.effective_modules, shared with the HTTP surface.
+    is_owner is DERIVED from the org's owner column rather than a flag on the
+    membership row — one fact, one home, matching deps.py. The agent runtime
+    never acts as a super admin, so that bypass is pinned off.
     """
     row = (
-        db.query(Organization.pinned_plan, Organization.owner_account_id,
-                 OrganizationMember.role)
+        db.query(Organization.owner_account_id, OrganizationMember.role)
         .join(OrganizationMember, OrganizationMember.org_id == Organization.id)
         .filter(Organization.id == org_id,
                 OrganizationMember.account_id == account_id)
@@ -107,23 +85,14 @@ def effective_modules(db: Session, account_id: int, org_id: int) -> set[str]:
         )
         return set()
 
-    pinned_plan, owner_account_id, role = row
-    ceiling = set(_ceiling(db, pinned_plan, owner_account_id))
-
-    # An owner reaches their org's whole ceiling regardless of their own role,
-    # matching cmdlabs-api. Platform super admins likewise bypass the role but
-    # not the ceiling of the org they are acting in.
-    #
-    # DERIVED from the org's owner column, matching cmdlabs-api deps.py. This
-    # used to read a per-membership is_owner flag, which was a second copy of
-    # the same fact; owner_account_id is already selected above for the
-    # ceiling, so asking it costs nothing and cannot disagree.
-    if owner_account_id is not None and owner_account_id == account_id:
-        return ceiling
-
-    # No second query: a role is a constant, so what it opens is decided in
-    # process. This used to fetch organization_tiers.modules per tool build.
-    return set(roles.modules_for(role, sorted(ceiling)))
+    owner_account_id, role = row
+    ctx = SimpleNamespace(
+        org_id=org_id,
+        role=role,
+        is_owner=owner_account_id is not None and owner_account_id == account_id,
+        is_super_admin=False,
+    )
+    return set(modules.effective_modules(db, ctx))
 
 
 def allowed_tool_configs(tool_configs: list, granted: set[str]) -> list:

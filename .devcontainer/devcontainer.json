@@ -19,6 +19,9 @@
       }
     }
   },
+  "containerEnv": {
+    "IS_SANDBOX": "1"
+  },
   "forwardPorts": [4000, 5678],
   "postCreateCommand": "uv sync",
   "remoteUser": "root"

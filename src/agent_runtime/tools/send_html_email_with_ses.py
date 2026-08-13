@@ -6,7 +6,6 @@ Fallback: raw HTML when no suitable template exists.
 
 import json
 import logging
-import re
 from typing import Any
 
 from langchain_core.tools import StructuredTool
@@ -14,16 +13,21 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
 from src.db.models import EmailTemplate
+from src.utils.template_variables import TEMPLATE_PATTERN
 from src.agent_runtime.tools.exceptions import CredentialError
 from src.agent_runtime.tools.hitl_email_base import queue_tool_approval, verify_credential
+from src.agent_runtime.tools.sessions import resolve_session_factory
 
 logger = logging.getLogger(__name__)
 
 
 def _render(template: str, variables: dict[str, str]) -> str:
-    """Replace {{ token }} placeholders — tolerates optional spaces around the name."""
-    return re.sub(
-        r'\{\{\s*(\w+)\s*\}\}',
+    """Replace {{ token }} placeholders — tolerates optional spaces around the name.
+
+    Same placeholder syntax as system-prompt variables (TEMPLATE_PATTERN), but
+    substitutes the template's own tokens rather than a fixed whitelist.
+    """
+    return TEMPLATE_PATTERN.sub(
         lambda m: variables.get(m.group(1), m.group(0)),
         template,
     )
@@ -81,6 +85,7 @@ async def create_send_html_email_with_ses_tool(
 
     agent_id: int | None = kwargs.get("agent_id")
     chat_session_id: int | None = kwargs.get("chat_session_id_pk")
+    session_factory = resolve_session_factory(kwargs)
 
     # Build a live catalogue of templates for the LLM description
     catalogue = _build_template_catalogue(db, credential_account_id)
@@ -98,8 +103,6 @@ async def create_send_html_email_with_ses_tool(
         "Only use `html_body` when no suitable template exists.  Omit `template_id`.\n"
         "The HTML must be a self-contained, inline-CSS, table-layout document ≤600 px wide."
     )
-
-    from src.db.database import SessionLocal
 
     logger.info(
         f"[SEND HTML EMAIL TOOL] ready — "
@@ -119,7 +122,7 @@ async def create_send_html_email_with_ses_tool(
 
         # ── Template mode ──────────────────────────────────────────────────────
         if template_id is not None:
-            tool_db: Session = SessionLocal()
+            tool_db: Session = session_factory()
             try:
                 tmpl = tool_db.query(EmailTemplate).filter(
                     EmailTemplate.id == template_id,
@@ -172,6 +175,7 @@ async def create_send_html_email_with_ses_tool(
             account_id=credential_account_id,
             agent_id=agent_id,
             chat_session_id=chat_session_id,
+            session_factory=session_factory,
             tool_type="sendHtmlEmailWithSes",
             payload={
                 "credential_id": credential_id,

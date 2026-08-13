@@ -9,6 +9,7 @@ builds the HITL sentinel response.
 
 import json
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -20,6 +21,10 @@ from src.db.models import PendingToolApproval
 from src.routers.credentials.encryption import decrypt_credential_data
 from src.services.credential_access import load_credential_for_use
 from src.agent_runtime.tools.exceptions import CredentialError
+from src.agent_runtime.tools.sessions import (
+    default_session_factory,
+    resolve_session_factory,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +41,7 @@ async def queue_tool_approval(
     payload: dict[str, Any],
     preview: dict[str, Any],
     message: str,
+    session_factory: Callable[[], Session] = default_session_factory,
 ) -> str:
     """Insert a ``PendingToolApproval`` row and return the HITL sentinel JSON.
 
@@ -43,11 +49,9 @@ async def queue_tool_approval(
     (``{"success": False, ...}``) rather than raising, so a queuing problem
     surfaces to the agent as a tool result instead of a crash.
     """
-    from src.db.database import SessionLocal
-
     expires_at = datetime.now(UTC) + timedelta(minutes=APPROVAL_TTL_MINUTES)
 
-    approval_db: Session = SessionLocal()
+    approval_db: Session = session_factory()
     try:
         approval = PendingToolApproval(
             account_id=account_id,
@@ -145,6 +149,7 @@ async def create_hitl_plain_email_tool(
 
     agent_id: int | None = kwargs.get("agent_id")
     chat_session_id: int | None = kwargs.get("chat_session_id_pk")
+    session_factory = resolve_session_factory(kwargs)
 
     async def send_email_impl(to_email: str, subject: str, body: str) -> str:
         """Queue an email for human approval before sending."""
@@ -152,6 +157,7 @@ async def create_hitl_plain_email_tool(
             account_id=credential_account_id,
             agent_id=agent_id,
             chat_session_id=chat_session_id,
+            session_factory=session_factory,
             tool_type=tool_type,
             payload={
                 "credential_id": credential_id,

@@ -22,7 +22,6 @@ symmetrically — e.g. update_contact_event(event_id, ...) would still
 even an event_id argument could not escape the bound contact.
 """
 
-from collections.abc import Callable
 from typing import Any
 
 from langchain_core.tools import StructuredTool
@@ -32,16 +31,7 @@ from src.db.models import Contact, ContactEvent
 from src.services.org_scope import tenant_predicate
 
 from .db_read import serialize_value
-
-
-def _default_session_factory():
-    # Imported lazily so importing this module never triggers DB engine setup.
-    from src.db.database import SessionLocal
-    return SessionLocal()
-
-
-def _resolve_session_factory(kwargs: dict[str, Any]) -> Callable[[], Any]:
-    return kwargs.get("session_factory") or _default_session_factory
+from .sessions import resolve_session_factory
 
 
 def _serialize_contact(c: Contact) -> dict[str, Any]:
@@ -125,7 +115,7 @@ async def create_contact_read_tool(
             "org_scope is required to build CRM tools — without it the tool "
             "would read across tenants."
         )
-    session_factory = _resolve_session_factory(kwargs)
+    session_factory = resolve_session_factory(kwargs)
 
     async def get_contact() -> dict[str, Any]:
         if contact_id is None:
@@ -170,7 +160,7 @@ async def create_contact_events_read_tool(
             "org_scope is required to build CRM tools — without it the tool "
             "would read across tenants."
         )
-    session_factory = _resolve_session_factory(kwargs)
+    session_factory = resolve_session_factory(kwargs)
 
     async def list_contact_events(
         event_type: str | None = None, limit: int = 50
@@ -222,7 +212,7 @@ async def create_contact_event_write_tool(
             "org_scope is required to build CRM tools — without it the tool "
             "would read across tenants."
         )
-    session_factory = _resolve_session_factory(kwargs)
+    session_factory = resolve_session_factory(kwargs)
 
     async def add_contact_event(
         event_type: str, title: str, description: str | None = None
