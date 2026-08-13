@@ -1,5 +1,5 @@
 [project]
-name = "kalygo3-ai-api"
+name = "cmdlabs-api"
 version = "0.1.0"
 description = "COMMAND LABS API"
 requires-python = ">=3.12"
