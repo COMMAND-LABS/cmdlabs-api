@@ -16,7 +16,6 @@ from src.deps import db_dependency, bcrypt_context, jwt_dependency
 from src.clients.stripe_client import create_stripe_customer
 
 from src.services.organizations import ensure_membership
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
@@ -95,8 +94,6 @@ async def validate_token(request: Request, authorization: str = Header(...)):
         return {'access_token': authorization, 'token_type': 'bearer'}
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has expired")
-    except Exception as e:
-        raise handle_db_error(e, "[OPERATION]")
 
 @router.get('/me', response_model=CurrentUserResponse)
 async def get_current_user_info(current_user: jwt_dependency, request: Request):

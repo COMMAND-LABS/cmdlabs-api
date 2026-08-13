@@ -4,7 +4,7 @@ List access grants for a knowledge base (index owner only). Reads AccessGrant.
 from fastapi import APIRouter, Request
 from typing import List
 from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
-from src.services.org_scope import AGENT, VECTOR_STORE, resource_predicate, scoped_resources
+from src.services.org_scope import resource_predicate
 from src.db.models import VectorStore, AccessGrant
 from src.services import access
 from src.services.access_admin import grant_label

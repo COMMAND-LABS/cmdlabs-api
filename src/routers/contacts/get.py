@@ -1,9 +1,9 @@
 """
 Get single contact endpoint (includes full event timeline).
 """
-from fastapi import APIRouter, HTTPException, status, Request
+from fastapi import APIRouter, Request
 from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
-from src.services.org_scope import tenant_predicate
+from src.services.org_scope import get_scoped_or_404
 from src.db.models import Contact
 
 from .models import ContactResponse
@@ -23,12 +23,4 @@ async def get_contact(
     account_id = account_id_from_claims(auth)
     account = ensure_account(db, account_id)
 
-    contact = db.query(Contact).filter(
-        Contact.id == contact_id,
-        tenant_predicate(Contact, org),
-    ).first()
-
-    if not contact:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
-
-    return contact
+    return get_scoped_or_404(db, Contact, contact_id, org)

@@ -5,7 +5,7 @@ from typing import List
 from fastapi import APIRouter, HTTPException, status, Request
 from sqlalchemy.exc import IntegrityError
 from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims
-from src.services.org_scope import tenant_predicate
+from src.services.org_scope import get_scoped_or_404, tenant_predicate
 from src.db.models import ContactList, ContactListMember, Contact
 
 from src.routers.contact_lists.models import (
@@ -29,13 +29,7 @@ async def list_members(
     """List all contacts in a given contact list."""
     account_id = account_id_from_claims(auth)
 
-    contact_list = db.query(ContactList).filter(
-        ContactList.id == list_id,
-        tenant_predicate(ContactList, org),
-    ).first()
-
-    if not contact_list:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact list not found")
+    contact_list = get_scoped_or_404(db, ContactList, list_id, org)
 
     members = (
         db.query(ContactListMember)
@@ -58,21 +52,9 @@ async def add_member(
     try:
         account_id = account_id_from_claims(auth)
 
-        contact_list = db.query(ContactList).filter(
-            ContactList.id == list_id,
-            tenant_predicate(ContactList, org),
-        ).first()
+        contact_list = get_scoped_or_404(db, ContactList, list_id, org)
 
-        if not contact_list:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact list not found")
-
-        contact = db.query(Contact).filter(
-            Contact.id == request_body.contact_id,
-            tenant_predicate(Contact, org),
-        ).first()
-
-        if not contact:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+        contact = get_scoped_or_404(db, Contact, request_body.contact_id, org)
 
         member = ContactListMember(
             org_id=org.org_id,
@@ -105,13 +87,7 @@ async def bulk_add_members(
     """Add multiple contacts to a list in one call, skipping duplicates."""
     account_id = account_id_from_claims(auth)
 
-    contact_list = db.query(ContactList).filter(
-        ContactList.id == list_id,
-        tenant_predicate(ContactList, org),
-    ).first()
-
-    if not contact_list:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact list not found")
+    contact_list = get_scoped_or_404(db, ContactList, list_id, org)
 
     existing_ids = {
         m.contact_id
@@ -154,13 +130,7 @@ async def remove_member(
     """Remove a contact from a contact list."""
     account_id = account_id_from_claims(auth)
 
-    contact_list = db.query(ContactList).filter(
-        ContactList.id == list_id,
-        tenant_predicate(ContactList, org),
-    ).first()
-
-    if not contact_list:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact list not found")
+    contact_list = get_scoped_or_404(db, ContactList, list_id, org)
 
     member = db.query(ContactListMember).filter(
         ContactListMember.contact_list_id == list_id,

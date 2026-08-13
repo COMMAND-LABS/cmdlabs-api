@@ -2,7 +2,7 @@
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, status, Request, Query
 from src.deps import org_dependency, db_dependency, auth_dependency
-from src.services.org_scope import tenant_predicate
+from src.services.org_scope import get_scoped_or_404
 from src.db.models import EmailCampaign, EmailTemplate, ContactList
 
 from .models import (
@@ -79,12 +79,7 @@ async def create_email_campaign(
             raise HTTPException(status_code=404, detail="Email template not found")
 
     if body.contact_list_id is not None:
-        cl = db.query(ContactList).filter(
-            ContactList.id == body.contact_list_id,
-            tenant_predicate(ContactList, org),
-        ).first()
-        if not cl:
-            raise HTTPException(status_code=404, detail="Contact list not found")
+        get_scoped_or_404(db, ContactList, body.contact_list_id, org)
 
     campaign = EmailCampaign(
         account_id=account_id,
@@ -127,12 +122,7 @@ async def update_email_campaign(
             raise HTTPException(status_code=404, detail="Email template not found")
 
     if body.contact_list_id is not None:
-        cl = db.query(ContactList).filter(
-            ContactList.id == body.contact_list_id,
-            tenant_predicate(ContactList, org),
-        ).first()
-        if not cl:
-            raise HTTPException(status_code=404, detail="Contact list not found")
+        get_scoped_or_404(db, ContactList, body.contact_list_id, org)
 
     if body.name is not None:
         campaign.name = body.name

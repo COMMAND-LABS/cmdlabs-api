@@ -7,7 +7,6 @@ from src.db.service_name import ServiceName
 from src.routers.credentials.encryption import get_credential_value
 from src.services.credential_access import resolve_default_credential
 from src.services.vector_store_credentials import resolve_index_pinecone_credential
-from src.utils.errors import handle_db_error
 
 
 def get_or_create_vector_store(db, owner_account_id: int, index_name: str,
@@ -49,10 +48,7 @@ def _pinecone_key_from_credential(credential) -> str:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Pinecone API key not found. Please add your Pinecone API key in credentials."
         )
-    try:
-        return get_credential_value(credential, "api_key")
-    except Exception as e:
-        raise handle_db_error(e, "[DECRYPT PINECONE API KEY]")
+    return get_credential_value(credential, "api_key")
 
 
 def get_pinecone_api_key(db, account_id: int) -> str:

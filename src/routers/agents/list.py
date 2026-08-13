@@ -6,9 +6,8 @@ with them via access groups.
 """
 from fastapi import APIRouter, Request
 from typing import List
-from sqlalchemy import or_
 from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims, ensure_account
-from src.services.org_scope import AGENT, VECTOR_STORE, resource_predicate, scoped_resources
+from src.services.org_scope import AGENT, scoped_resources
 from src.db.models import Agent
 from src.services.agent_access import get_accessible_agent_ids
 from .models import AgentResponse

@@ -73,10 +73,4 @@ async def list_companies(
             )
         )
 
-    return CompanyListResponse(
-        companies=results,
-        total=total,
-        limit=limit,
-        offset=offset,
-        has_more=(offset + limit) < total,
-    )
+    return CompanyListResponse.of(results, total=total, limit=limit, offset=offset)

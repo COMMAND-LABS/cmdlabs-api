@@ -2,6 +2,8 @@
 Pydantic models for the contacts router.
 """
 from pydantic import BaseModel, ConfigDict
+
+from src.routers.pagination import Page
 from typing import Optional, List
 from datetime import date, datetime
 
@@ -24,20 +26,20 @@ class CreateContactRequest(BaseModel):
     x_url: Optional[str] = None
 
 
-class UpdateContactRequest(BaseModel):
+class UpdateContactRequest(CreateContactRequest):
+    """A PATCH-shaped Create: same twelve fields, none of them required.
+
+    Derived rather than restated so the two cannot drift. Adding a column meant
+    adding it here as well, by hand, in the right place — and a field present on
+    create but missing on update is silently un-editable rather than an error.
+
+    ONLY the required/optional axis may be overridden below. If a field ever
+    needs a genuinely different type or constraint on update, that is a sign
+    the two requests are not the same shape and this should go back to being
+    written out in full.
+    """
     first_name: Optional[str] = None
-    middle_name: Optional[str] = None
-    last_name: Optional[str] = None
     email: Optional[str] = None
-    alt_email_1: Optional[str] = None
-    alt_email_2: Optional[str] = None
-    phone: Optional[str] = None
-    source: Optional[str] = None
-    # Social media profile URLs
-    linkedin_url: Optional[str] = None
-    instagram_url: Optional[str] = None
-    youtube_url: Optional[str] = None
-    x_url: Optional[str] = None
 
 
 class ContactEventResponse(BaseModel):
@@ -99,18 +101,9 @@ class ContactSummaryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class ContactListResponse(BaseModel):
-    """Paginated envelope for the contacts list.
-
-    Mirrors the established pagination contract used by the ingestion-logs
-    endpoint ({items, total, limit, offset, has_more}) so the frontend
-    pattern is consistent across the app.
-    """
+class ContactListResponse(Page):
+    """Paginated envelope for the contacts list."""
     contacts: List[ContactSummaryResponse]
-    total: int
-    limit: int
-    offset: int
-    has_more: bool
 
 
 # ── Event models ──────────────────────────────────────────────────────────────

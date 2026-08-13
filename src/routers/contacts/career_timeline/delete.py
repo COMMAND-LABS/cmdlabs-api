@@ -2,9 +2,9 @@
 Delete a career timeline entry.
 """
 import logging
-from fastapi import APIRouter, HTTPException, status, Request
+from fastapi import APIRouter, status, Request
 from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
-from src.services.org_scope import tenant_predicate
+from src.services.org_scope import get_scoped_or_404
 from src.db.models import Contact, CareerTimeline
 
 from src.services.crm_vector_service import delete_vector
@@ -26,22 +26,10 @@ async def delete_career_timeline_entry(
     account_id = account_id_from_claims(auth)
     account = ensure_account(db, account_id)
 
-    contact = db.query(Contact).filter(
-        Contact.id == contact_id,
-        tenant_predicate(Contact, org),
-    ).first()
-
-    if not contact:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
-
-    entry = db.query(CareerTimeline).filter(
-        CareerTimeline.id == entry_id,
-        CareerTimeline.contact_id == contact_id,
-        tenant_predicate(CareerTimeline, org),
-    ).first()
-
-    if not entry:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Career timeline entry not found")
+    get_scoped_or_404(db, Contact, contact_id, org)
+    entry = get_scoped_or_404(db, CareerTimeline, entry_id, org,
+                              CareerTimeline.contact_id == contact_id,
+                              label="Career timeline entry")
 
     db.delete(entry)
     db.commit()

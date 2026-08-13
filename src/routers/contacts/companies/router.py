@@ -9,7 +9,7 @@ from typing import List
 from fastapi import APIRouter, HTTPException, status, Request
 from sqlalchemy.exc import IntegrityError
 from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims
-from src.services.org_scope import tenant_predicate
+from src.services.org_scope import get_scoped_or_404, tenant_predicate
 from src.db.models import Company, CompanyContact, Contact
 
 from .models import AddCompanyToContactRequest, ContactCompanyResponse
@@ -62,13 +62,7 @@ async def list_contact_companies(
     """List all companies a given contact is associated with."""
     account_id = account_id_from_claims(auth)
 
-    contact = db.query(Contact).filter(
-        Contact.id == contact_id,
-        tenant_predicate(Contact, org),
-    ).first()
-
-    if not contact:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+    get_scoped_or_404(db, Contact, contact_id, org)
 
     memberships = (
         db.query(CompanyContact)
@@ -92,21 +86,8 @@ async def add_contact_company(
     try:
         account_id = account_id_from_claims(auth)
 
-        contact = db.query(Contact).filter(
-            Contact.id == contact_id,
-            tenant_predicate(Contact, org),
-        ).first()
-
-        if not contact:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
-
-        company = db.query(Company).filter(
-            Company.id == request_body.company_id,
-            tenant_predicate(Company, org),
-        ).first()
-
-        if not company:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
+        get_scoped_or_404(db, Contact, contact_id, org)
+        get_scoped_or_404(db, Company, request_body.company_id, org)
 
         membership = CompanyContact(
             org_id=org.org_id,
@@ -140,13 +121,7 @@ async def remove_contact_company(
     """Disassociate a contact from a company."""
     account_id = account_id_from_claims(auth)
 
-    contact = db.query(Contact).filter(
-        Contact.id == contact_id,
-        tenant_predicate(Contact, org),
-    ).first()
-
-    if not contact:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+    get_scoped_or_404(db, Contact, contact_id, org)
 
     membership = db.query(CompanyContact).filter(
         CompanyContact.contact_id == contact_id,

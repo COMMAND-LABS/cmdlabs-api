@@ -24,14 +24,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import StructuredTool
 
 from src.db.database import SessionLocal
-from src.db.models import (
-    Account,
-    Agent,
-    ChatMessage,
-    ChatSession,
-    Organization,
-    OrganizationMember,
-)
+from src.db.models import Account, Agent, ChatMessage, ChatSession, OrganizationMember
 from src.db.retry import db_retry_once
 from src.services.agent_access import load_agent_with_access_check
 from src.services.org_scope import OrgScope

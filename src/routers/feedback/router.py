@@ -6,7 +6,6 @@ from pydantic import BaseModel, Field
 from src.db.feedback import Feedback
 from src.deps import db_dependency
 from src.rate_limit import limiter
-from src.utils.errors import handle_db_error
 
 from .admin_notification import send_feedback_notification_to_admin
 
@@ -38,19 +37,14 @@ async def submit_feedback(
     differentiates submissions from multiple branded front-ends.
     """
     email = body.email.strip() if body.email and body.email.strip() else None
-    try:
-        feedback = Feedback(
-            client=body.client,
-            category=body.category,
-            email=email,
-            message=body.message,
-        )
-        db.add(feedback)
-        db.commit()
-        db.refresh(feedback)
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[SUBMIT FEEDBACK]")
+    feedback = Feedback(
+        client=body.client,
+        category=body.category,
+        email=email,
+        message=body.message,
+    )
+    db.add(feedback)
+    db.commit()
 
     # Notify the admin out-of-band so a slow/failed email never blocks the user.
     background_tasks.add_task(

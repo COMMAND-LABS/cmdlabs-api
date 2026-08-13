@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, UUID, JSON, DateTime, Date, func, Double, Float, Numeric, Enum, Text, Boolean, UniqueConstraint, CheckConstraint, Index, text
+from sqlalchemy import Column, Integer, String, ForeignKey, UUID, JSON, DateTime, Date, func, Float, Numeric, Enum, Text, Boolean, UniqueConstraint, CheckConstraint, Index, text
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import ENUM as PG_ENUM, JSONB
@@ -380,13 +380,6 @@ class Logins(Base):
     def __repr__(self):
         return f'<Login {self.created_at}>'
     
-class ChatHistory(Base):
-    __tablename__ = 'chat_history'
-    id = Column(Integer, primary_key=True, index=True)
-    session_id = Column(UUID, nullable=False)
-    message = Column(JSON, nullable=False)
-    created_at = Column(DateTime(timezone=True), default=func.now())
-
 class ChatSession(Base):
     __tablename__ = 'chat_sessions'
     id = Column(Integer, primary_key=True, index=True)
@@ -1272,9 +1265,7 @@ class CareerTimeline(Base):
 # — the cash number. Collapsing them would make a signed-but-unpaid deal
 # indistinguishable from a banked one, which is the whole reason for the three
 # additions.
-#
-# MIRRORED into cmdlabs-agent-api via ./sync-schemas.sh — this file is one of
-# the synced ones, so editing it here means running that before pushing.
+
 DEAL_STAGES = (
     'lead', 'qualified', 'proposal', 'negotiation', 'won',
     'in_delivery', 'invoiced', 'paid',

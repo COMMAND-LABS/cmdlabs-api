@@ -7,11 +7,22 @@ the database rather than through HTTP, so a failure points at the predicate
 instead of at whichever route happened to surface it.
 """
 import pytest
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from src.db.models import Account, Contact, Organization, OrganizationMember, VectorStore
+from src.db.models import (
+    Account,
+    Agent,
+    Contact,
+    ContactList,
+    Organization,
+    OrganizationMember,
+    VectorStore,
+)
 from src.services.org_scope import (
     created_by_column,
+    get_resource_or_404,
+    get_scoped_or_404,
     resource_predicate,
     scoped,
     tenant_predicate,
@@ -176,3 +187,88 @@ def test_predicate_composes_with_further_filters(db: Session):
               .filter(Contact.email == "keep@compose.test")
               .all())
     assert rows == [keep]
+
+
+# ---------------------------------------------------------------------------
+# get_scoped_or_404 — the fetch-by-id form ~50 routes now use
+# ---------------------------------------------------------------------------
+
+def test_get_scoped_or_404_returns_a_row_in_my_org(db: Session):
+    t = make_tenant(db, slug="fetch-mine", account_id=6014, data_scope="shared")
+    mine = _contact(t.org_id, t.account_id, "mine@fetch.test")
+    db.add(mine); db.flush()
+
+    assert get_scoped_or_404(db, Contact, mine.id, _ctx(t)) is mine
+
+
+def test_get_scoped_or_404_hides_another_orgs_row_behind_404(db: Session):
+    """THE reason this helper exists. A real id from another tenant must be
+    indistinguishable from one that does not exist — not 403, which would
+    confirm the row is real and owned by somebody else."""
+    a = make_tenant(db, slug="fetch-a", account_id=6015, data_scope="shared")
+    b = make_tenant(db, slug="fetch-b", account_id=6016, data_scope="shared")
+    theirs = _contact(b.org_id, b.account_id, "theirs@fetch.test")
+    db.add(theirs); db.flush()
+
+    with pytest.raises(HTTPException) as exc:
+        get_scoped_or_404(db, Contact, theirs.id, _ctx(a))
+    assert exc.value.status_code == 404
+
+    with pytest.raises(HTTPException) as missing:
+        get_scoped_or_404(db, Contact, 99_999_999, _ctx(a))
+    assert missing.value.detail == exc.value.detail, (
+        "a real id from another org and a nonexistent id must answer identically"
+    )
+
+
+def test_get_scoped_or_404_extra_clauses_only_narrow(db: Session):
+    """`*extra` is for nested reads (event within contact). It must not be able
+    to widen — a non-matching extra clause still 404s rather than falling back
+    to the un-narrowed row."""
+    t = make_tenant(db, slug="fetch-narrow", account_id=6017, data_scope="shared")
+    c = _contact(t.org_id, t.account_id, "narrow@fetch.test")
+    db.add(c); db.flush()
+
+    assert get_scoped_or_404(db, Contact, c.id, _ctx(t),
+                             Contact.email == "narrow@fetch.test") is c
+
+    with pytest.raises(HTTPException) as exc:
+        get_scoped_or_404(db, Contact, c.id, _ctx(t),
+                          Contact.email == "nope@fetch.test")
+    assert exc.value.status_code == 404
+
+
+def test_get_scoped_or_404_default_label_matches_the_old_messages(db: Session):
+    """The 404 detail is part of the API surface. These are the strings the
+    hand-written blocks produced before they were replaced."""
+    t = make_tenant(db, slug="fetch-label", account_id=6018, data_scope="shared")
+
+    with pytest.raises(HTTPException) as exc:
+        get_scoped_or_404(db, Contact, 99_999_999, _ctx(t))
+    assert exc.value.detail == "Contact not found"
+
+    with pytest.raises(HTTPException) as exc:
+        get_scoped_or_404(db, ContactList, 99_999_999, _ctx(t))
+    assert exc.value.detail == "Contact list not found"
+
+    with pytest.raises(HTTPException) as exc:
+        get_scoped_or_404(db, Contact, 99_999_999, _ctx(t), label="Event")
+    assert exc.value.detail == "Event not found"
+
+
+def test_get_resource_or_404_honours_visibility(db: Session):
+    """The resource form is narrower than the tenant form, and stays that way:
+    a colleague's private agent is not reachable just by being in the org."""
+    mine = make_tenant(db, slug="fetch-res", account_id=6019)
+    colleague = make_tenant(db, slug="fetch-res", account_id=6020)
+
+    private = Agent(org_id=mine.org_id, account_id=colleague.account_id,
+                    name="theirs", config={}, visibility="private")
+    shared = Agent(org_id=mine.org_id, account_id=colleague.account_id,
+                   name="ours", config={}, visibility="org")
+    db.add_all([private, shared]); db.flush()
+
+    assert get_resource_or_404(db, Agent, shared.id, _ctx(mine)) is shared
+    with pytest.raises(HTTPException) as exc:
+        get_resource_or_404(db, Agent, private.id, _ctx(mine))
+    assert exc.value.status_code == 404

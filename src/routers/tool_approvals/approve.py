@@ -16,7 +16,7 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 from src.deps import db_dependency, auth_dependency
-from src.db.models import PendingToolApproval, EmailEvent, EmailTemplate
+from src.db.models import PendingToolApproval, EmailEvent
 from src.services.credential_access import load_credential_for_use
 from src.routers.credentials.encryption import decrypt_credential_data
 from .models import ApproveToolApprovalResponse

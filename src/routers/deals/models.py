@@ -2,6 +2,8 @@
 Pydantic models for the deals router.
 """
 from pydantic import BaseModel, ConfigDict
+
+from src.routers.pagination import Page
 from typing import Optional, List
 from datetime import date, datetime
 
@@ -19,15 +21,9 @@ class CreateDealRequest(BaseModel):
     contact_id: Optional[int] = None
 
 
-class UpdateDealRequest(BaseModel):
+class UpdateDealRequest(CreateDealRequest):
+    """Same fields as create, none required. See UpdateContactRequest."""
     title: Optional[str] = None
-    description: Optional[str] = None
-    amount: Optional[float] = None
-    currency: Optional[str] = None
-    stage: Optional[str] = None
-    expected_close_date: Optional[date] = None
-    closed_at: Optional[datetime] = None
-    contact_id: Optional[int] = None
 
 
 class DealResponse(BaseModel):
@@ -48,15 +44,6 @@ class DealResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class DealListResponse(BaseModel):
-    """Paginated envelope for the deals list.
-
-    Mirrors the contacts list contract
-    ({items, total, limit, offset, has_more}) so the frontend pagination
-    pattern stays consistent across the app.
-    """
+class DealListResponse(Page):
+    """Paginated envelope for the deals list."""
     deals: List[DealResponse]
-    total: int
-    limit: int
-    offset: int
-    has_more: bool

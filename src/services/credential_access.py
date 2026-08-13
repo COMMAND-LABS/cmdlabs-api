@@ -10,9 +10,6 @@ USE, not VIEW: a recipient may use a shared credential (the server decrypts it o
 their behalf) but the plaintext is never returned — the /full endpoints stay
 owner-only.
 
-CANONICAL FILE. Mirrored byte-for-byte into kalygo3-agent-api
-(src/services/credential_access.py) via the repo-root sync scripts. Edit the ai-api
-copy, then run ./sync-schemas.sh.
 """
 from sqlalchemy.orm import Session
 

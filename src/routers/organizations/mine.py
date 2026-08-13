@@ -27,7 +27,7 @@ organizations/members.py, which requires naming the org you are asking about.
 Carries no tenant data — no contact, deal, or document, and no row belonging to
 another member.
 """
-from typing import List, Optional
+from typing import List
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel

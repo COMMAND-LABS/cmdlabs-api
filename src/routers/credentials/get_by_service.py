@@ -1,16 +1,12 @@
 """
 Get credential by service name endpoint (legacy).
 """
-import logging
-from fastapi import APIRouter, HTTPException, status, Request
+from fastapi import APIRouter, Request
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
-from src.db.models import Credential
 from src.db.service_name import ServiceName
-from .encryption import get_credential_value
+from ._shared import invalid_data_as_400, legacy_detail_response, owned_credential_or_404
 from .models import CredentialDetailResponse
 from src.rate_limit import limiter
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -29,37 +25,9 @@ async def get_credential_by_service(
     LEGACY ENDPOINT: Returns api_key field for backward compatibility.
     For full credential data, use GET /service/{service_name}/full
     """
-    try:
-        account_id = account_id_from_claims(jwt)
-        account = ensure_account(db, account_id)
+    account_id = account_id_from_claims(jwt)
+    ensure_account(db, account_id)
 
-        credential = db.query(Credential).filter(
-            Credential.account_id == account_id,
-            Credential.credential_type == service_name
-        ).first()
-
-        if not credential:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Credential for service '{service_name.value}' not found"
-            )
-
-        decrypted_key = get_credential_value(credential, "api_key")
-
-        return CredentialDetailResponse(
-            id=credential.id,
-            credential_type=credential.credential_type,
-            auth_type=credential.auth_type or "api_key",
-            credential_name=credential.credential_name,
-            api_key=decrypted_key,
-            created_at=credential.created_at.isoformat(),
-            updated_at=credential.updated_at.isoformat(),
-            credential_metadata=credential.credential_metadata
-        )
-
-    except ValueError as e:
-        logger.error('[CREDENTIALS] ValueError retrieving credential by service: %s', e)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail='Invalid credential data.',
-        )
+    credential = owned_credential_or_404(db, account_id, service_name=service_name)
+    with invalid_data_as_400(db, 'retrieving credential by service'):
+        return legacy_detail_response(credential)

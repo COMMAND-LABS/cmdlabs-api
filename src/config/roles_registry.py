@@ -57,7 +57,6 @@ to define or sell their own bundles, and gain an answer to "what can this
 person do?" that is the same in every org and cannot be edited into a
 self-upgrade.
 
-CANONICAL FILE. Mirrored into cmdlabs-agent-api via ./sync-schemas.sh.
 """
 
 # Stored on organization_members.role. Stable identifiers, never display names:

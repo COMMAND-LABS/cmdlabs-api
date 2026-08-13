@@ -3,7 +3,7 @@ Create deal endpoint.
 """
 from fastapi import APIRouter, HTTPException, status, Request
 from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
-from src.services.org_scope import tenant_predicate
+from src.services.org_scope import get_scoped_or_404
 from src.db.models import Deal, Contact, DEAL_STAGES
 
 from .models import CreateDealRequest, DealResponse
@@ -39,12 +39,7 @@ async def create_deal(
 
     # Optional contact link must belong to this account.
     if request_body.contact_id is not None:
-        contact = db.query(Contact).filter(
-            Contact.id == request_body.contact_id,
-            tenant_predicate(Contact, org),
-        ).first()
-        if not contact:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+        contact = get_scoped_or_404(db, Contact, request_body.contact_id, org)
 
     currency = (request_body.currency or 'USD').strip().upper() or 'USD'
 

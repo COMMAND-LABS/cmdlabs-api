@@ -12,7 +12,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 
 from src.deps import org_dependency, db_dependency, auth_dependency
-from src.services.org_scope import tenant_predicate
+from src.services.org_scope import get_scoped_or_404
 from src.db.models import Contact, EmailCampaign, EmailTemplate
 from src.rate_limit import limiter
 from src.services.email_dispatch import (
@@ -59,12 +59,7 @@ async def send_email(
     # ── Resolve recipient ────────────────────────────────────────────────────
     contact = None
     if body.recipient.contact_id is not None:
-        contact = db.query(Contact).filter(
-            Contact.id == body.recipient.contact_id,
-            tenant_predicate(Contact, org),
-        ).first()
-        if not contact:
-            raise HTTPException(status_code=404, detail="Contact not found")
+        contact = get_scoped_or_404(db, Contact, body.recipient.contact_id, org)
         to_email = contact.email
     else:
         to_email = body.recipient.email

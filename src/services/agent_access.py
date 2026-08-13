@@ -5,10 +5,6 @@ Access is now stored as AccessGrant rows and resolved by services/access.py. Thi
 module keeps the original agent-centric helpers so existing call sites are
 unchanged; each delegates to access.py with resource_type='agent', role='use'.
 
-CANONICAL FILE. This module is mirrored byte-for-byte into kalygo3-agent-api
-(src/services/agent_access.py). The ai-api copy is canonical; keep them in sync via
-the repo-root scripts (./sync-schemas.sh).
-
 Access rule: an account can access an agent if it OWNS it, or holds an
 AccessGrant on it inside the org it is acting in.
 

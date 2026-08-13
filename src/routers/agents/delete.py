@@ -1,13 +1,12 @@
 """
 Delete agent endpoint.
 """
-from fastapi import APIRouter, HTTPException, status, Request
+from fastapi import APIRouter, status, Request
 from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims, ensure_account
-from src.services.org_scope import AGENT, VECTOR_STORE, resource_predicate, scoped_resources
+from src.services.org_scope import get_resource_or_404
 from src.db.models import Agent
 from src.services import access
 from src.services.access_admin import revoke_resource_grants_logged
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 router = APIRouter()
@@ -25,34 +24,19 @@ async def delete_agent(
     Delete an agent by ID.
     Only allows deleting agents belonging to the authenticated user.
     """
-    try:
-        account_id = account_id_from_claims(jwt)
-        account = ensure_account(db, account_id)
+    account_id = account_id_from_claims(jwt)
+    account = ensure_account(db, account_id)
         
-        # Query agent by ID and account_id to ensure it belongs to the user
-        agent = db.query(Agent).filter(
-            Agent.id == agent_id,
-            resource_predicate(Agent, org)
-        ).first()
-        
-        if not agent:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Agent not found"
-            )
-        
-        # Remove sharing grants on this agent (polymorphic grants have no FK
-        # cascade), logging a revoke event for each before the agent is gone.
-        revoke_resource_grants_logged(
-            db, resource_type=access.AGENT, resource_id=agent_id, actor_account_id=account_id
-        )
+    agent = get_resource_or_404(db, Agent, agent_id, org)
 
-        # Delete the agent
-        db.delete(agent)
-        db.commit()
+    # Remove sharing grants on this agent (polymorphic grants have no FK
+    # cascade), logging a revoke event for each before the agent is gone.
+    revoke_resource_grants_logged(
+        db, resource_type=access.AGENT, resource_id=agent_id, actor_account_id=account_id
+    )
 
-        return None
-        
-    except ValueError as e:
-        db.rollback()
-        raise handle_db_error(e, "[DELETE AGENT VALUE ERROR]")
+    # Delete the agent
+    db.delete(agent)
+    db.commit()
+
+    return None

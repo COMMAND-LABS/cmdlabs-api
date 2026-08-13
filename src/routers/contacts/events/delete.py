@@ -2,9 +2,9 @@
 Delete a contact event endpoint.
 """
 import logging
-from fastapi import APIRouter, HTTPException, status, Request
+from fastapi import APIRouter, status, Request
 from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
-from src.services.org_scope import tenant_predicate
+from src.services.org_scope import get_scoped_or_404
 from src.db.models import Contact, ContactEvent
 from src.services.crm_vector_service import delete_vector
 from src.rate_limit import limiter
@@ -25,22 +25,10 @@ async def delete_contact_event(
     account_id = account_id_from_claims(auth)
     account = ensure_account(db, account_id)
 
-    contact = db.query(Contact).filter(
-        Contact.id == contact_id,
-        tenant_predicate(Contact, org),
-    ).first()
-
-    if not contact:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
-
-    event = db.query(ContactEvent).filter(
-        ContactEvent.id == event_id,
-        ContactEvent.contact_id == contact_id,
-    tenant_predicate(ContactEvent, org),
-    ).first()
-
-    if not event:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+    get_scoped_or_404(db, Contact, contact_id, org)
+    event = get_scoped_or_404(db, ContactEvent, event_id, org,
+                              ContactEvent.contact_id == contact_id,
+                              label="Event")
 
     db.delete(event)
     db.commit()

@@ -4,7 +4,7 @@ Update a contact event endpoint.
 import logging
 from fastapi import APIRouter, HTTPException, status, Request
 from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
-from src.services.org_scope import tenant_predicate
+from src.services.org_scope import get_scoped_or_404
 from src.db.models import Contact, ContactEvent
 
 from ..models import UpdateContactEventRequest, ContactEventResponse
@@ -28,22 +28,10 @@ async def update_contact_event(
     account_id = account_id_from_claims(auth)
     account = ensure_account(db, account_id)
 
-    contact = db.query(Contact).filter(
-        Contact.id == contact_id,
-        tenant_predicate(Contact, org),
-    ).first()
-
-    if not contact:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
-
-    event = db.query(ContactEvent).filter(
-        ContactEvent.id == event_id,
-        ContactEvent.contact_id == contact_id,
-    tenant_predicate(ContactEvent, org),
-    ).first()
-
-    if not event:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+    contact = get_scoped_or_404(db, Contact, contact_id, org)
+    event = get_scoped_or_404(db, ContactEvent, event_id, org,
+                              ContactEvent.contact_id == contact_id,
+                              label="Event")
 
     if request_body.event_type is not None:
         if not request_body.event_type.strip():

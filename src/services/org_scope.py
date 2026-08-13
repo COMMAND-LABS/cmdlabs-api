@@ -9,6 +9,13 @@ error, no log line, and no symptom until someone notices.
 Hence: do not inline `X.org_id == ctx.org_id` at a call site. Use these
 helpers, so there is exactly one place to review and one place to fix.
 
+Fetching ONE row by id — by far the most common scoped read:
+
+    from src.services.org_scope import get_scoped_or_404
+    contact = get_scoped_or_404(db, Contact, contact_id, ctx)
+
+Listing:
+
     from src.services.org_scope import scoped
     query = scoped(db, Contact, ctx)              # instead of db.query(Contact)
 
@@ -16,10 +23,11 @@ or, when adding to a query you already have:
 
     query = query.filter(tenant_predicate(Contact, ctx))
 
-CANONICAL FILE. Mirrored into cmdlabs-agent-api via ./sync-schemas.sh.
 """
+import re
 from dataclasses import dataclass
 
+from fastapi import HTTPException, status
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
@@ -97,6 +105,86 @@ def tenant_predicate(model, ctx):
 def scoped(db: Session, model, ctx):
     """`db.query(model)` with the tenancy predicate already applied."""
     return db.query(model).filter(tenant_predicate(model, ctx))
+
+
+def _default_label(model) -> str:
+    """'ContactList' -> 'Contact list'. The noun a 404 message starts with.
+
+    Only the first word is capitalized, which is what the hand-written messages
+    already said at most call sites. Where a route said something else ("Event
+    not found" for a ContactEvent), it passes `label` explicitly rather than
+    letting this guess — the message is part of the API surface and should not
+    shift because a model was renamed.
+    """
+    words = re.findall(r'[A-Z][a-z0-9]*', model.__name__) or [model.__name__]
+    return ' '.join([words[0]] + [w.lower() for w in words[1:]])
+
+
+def get_scoped_or_404(db: Session, model, obj_id, ctx, *extra, label=None):
+    """Fetch ONE row of `model` by id inside `ctx`'s tenant, or raise 404.
+
+    THE LOOKUP, not just the predicate. tenant_predicate above gives one place
+    to review the tenancy EXPRESSION, but until this existed every route still
+    assembled the query around it by hand — ~50 near-identical copies of
+
+        row = db.query(M).filter(M.id == x, tenant_predicate(M, ctx)).first()
+        if not row:
+            raise HTTPException(404, "M not found")
+
+    and the failure mode of getting one wrong is the one this module's header
+    warns about: no error, no log line, just another tenant's row rendering as
+    if it were yours. Making the whole fetch a single call means a scoped
+    read-by-id cannot be written without its scope.
+
+    404 rather than 403 when the row exists in another org, deliberately and
+    for free: the predicate makes it indistinguishable from absent, so this
+    never confirms that an id belongs to somebody else.
+
+    `*extra` adds further clauses for a nested read — a contact event is looked
+    up by its own id AND its parent contact's:
+
+        get_scoped_or_404(db, ContactEvent, event_id, ctx,
+                          ContactEvent.contact_id == contact_id, label="Event")
+
+    Extra clauses can only NARROW. There is no argument that removes the
+    tenancy clause, which is the whole point of routing these reads through
+    here rather than leaving them as hand-assembled queries.
+    """
+    row = db.query(model).filter(
+        model.id == obj_id,
+        tenant_predicate(model, ctx),
+        *extra,
+    ).first()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"{label or _default_label(model)} not found",
+        )
+    return row
+
+
+def get_resource_or_404(db: Session, model, obj_id, ctx, *, label=None):
+    """The same fetch for a RESOURCE table, honouring `visibility`.
+
+    Separate from get_scoped_or_404 for exactly the reason resource_predicate
+    is separate from tenant_predicate: these two must never become one function
+    with a flag, or a CRM table acquires a sharing arm the day somebody passes
+    the wrong argument.
+
+    Note this arm does NOT consult explicit grants — it is resource_predicate
+    alone, which is what the agent routes using it already did. A route that
+    also honours grants wants scoped_resources() with granted_ids.
+    """
+    row = db.query(model).filter(
+        model.id == obj_id,
+        resource_predicate(model, ctx),
+    ).first()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"{label or _default_label(model)} not found",
+        )
+    return row
 
 
 def resource_predicate(model, ctx):

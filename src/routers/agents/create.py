@@ -7,7 +7,6 @@ from src.db.models import Agent
 from src.schemas import validate_against_schema
 from jsonschema import ValidationError as JsonSchemaValidationError
 from .models import CreateAgentRequest, AgentResponse
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 router = APIRouter()
@@ -35,52 +34,47 @@ async def create_agent(
     }
     Supported model providers: openai, anthropic, google, kimi, ollama
     """
+    account_id = account_id_from_claims(jwt)
+    account = ensure_account(db, account_id)
+
+    agent_name = request_body.name.strip()
+    if not agent_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Agent name cannot be empty"
+        )
+
+    config_version = request_body.config.get("version")
+    if config_version != 4:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only config version 4 is supported."
+        )
+
     try:
-        account_id = account_id_from_claims(jwt)
-        account = ensure_account(db, account_id)
-
-        agent_name = request_body.name.strip()
-        if not agent_name:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Agent name cannot be empty"
-            )
-
-        config_version = request_body.config.get("version")
-        if config_version != 4:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only config version 4 is supported."
-            )
-
-        try:
-            validate_against_schema(request_body.config, "agent_config", 4)
-        except JsonSchemaValidationError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Agent config failed validation (schema 'agent_config' v4).",
-            )
-        except FileNotFoundError as e:
-            import logging as _log
-            _log.getLogger(__name__).warning("[CREATE AGENT] Config schema file not found: %s", e)
-
-        agent = Agent(
-            org_id=org.org_id,
-            account_id=account_id,
-            name=agent_name,
-            config=request_body.config
+        validate_against_schema(request_body.config, "agent_config", 4)
+    except JsonSchemaValidationError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Agent config failed validation (schema 'agent_config' v4).",
         )
+    except FileNotFoundError as e:
+        import logging as _log
+        _log.getLogger(__name__).warning("[CREATE AGENT] Config schema file not found: %s", e)
 
-        db.add(agent)
-        db.commit()
-        db.refresh(agent)
+    agent = Agent(
+        org_id=org.org_id,
+        account_id=account_id,
+        name=agent_name,
+        config=request_body.config
+    )
 
-        return AgentResponse(
-            id=agent.id,
-            name=agent.name,
-            config=agent.config
-        )
+    db.add(agent)
+    db.commit()
+    db.refresh(agent)
 
-    except ValueError as e:
-        db.rollback()
-        raise handle_db_error(e, "[CREATE AGENT VALUE ERROR]")
+    return AgentResponse(
+        id=agent.id,
+        name=agent.name,
+        config=agent.config
+    )

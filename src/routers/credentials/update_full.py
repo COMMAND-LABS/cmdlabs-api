@@ -1,15 +1,12 @@
 """
 Update credential with full flexible data endpoint.
 """
-import logging
-from fastapi import APIRouter, HTTPException, status, Request
+from fastapi import APIRouter, Request
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
-from src.db.models import Credential
+from ._shared import invalid_data_as_400, metadata_response, owned_credential_or_404
 from .encryption import encrypt_credential_data
 from .models import UpdateFlexibleCredentialRequest, CredentialResponse
 from src.rate_limit import limiter
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -24,24 +21,12 @@ async def update_credential_full(
     request: Request
 ):
     """Update a credential with full flexible data structure."""
-    try:
-        account_id = account_id_from_claims(jwt)
-        account = ensure_account(db, account_id)
+    account_id = account_id_from_claims(jwt)
+    ensure_account(db, account_id)
 
-        credential = db.query(Credential).filter(
-            Credential.id == credential_id,
-            Credential.account_id == account_id
-        ).first()
-
-        if not credential:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Credential not found"
-            )
-
-        encrypted_data = encrypt_credential_data(request_body.credential_data)
-
-        credential.encrypted_data = encrypted_data
+    credential = owned_credential_or_404(db, account_id, credential_id=credential_id)
+    with invalid_data_as_400(db, 'updating flexible credential'):
+        credential.encrypted_data = encrypt_credential_data(request_body.credential_data)
         if request_body.credential_name is not None:
             credential.credential_name = request_body.credential_name
         if request_body.metadata is not None:
@@ -50,20 +35,4 @@ async def update_credential_full(
         db.commit()
         db.refresh(credential)
 
-        return CredentialResponse(
-            id=credential.id,
-            credential_type=credential.credential_type,
-            auth_type=credential.auth_type,
-            credential_name=credential.credential_name,
-            created_at=credential.created_at.isoformat(),
-            updated_at=credential.updated_at.isoformat(),
-            credential_metadata=credential.credential_metadata
-        )
-
-    except ValueError as e:
-        db.rollback()
-        logger.error('[CREDENTIALS] ValueError updating flexible credential: %s', e)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail='Invalid credential data.',
-        )
+        return metadata_response(credential)

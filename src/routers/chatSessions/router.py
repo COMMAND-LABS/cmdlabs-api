@@ -3,13 +3,12 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, status, Request, Query
 from pydantic import BaseModel, ConfigDict, Field
 from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
-from src.services.org_scope import tenant_predicate
+from src.services.org_scope import get_scoped_or_404
 from src.db.models import ChatSession, ChatMessage, Contact
 from src.services.agent_access import can_access_agent
 import uuid
 from datetime import datetime
 
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
@@ -102,15 +101,7 @@ async def create_session(
     # contact binding a trustworthy scope (404, not 403, to avoid leaking
     # the existence of other accounts' contact ids).
     if sessionData.contactId is not None:
-        owned_contact = db.query(Contact).filter(
-            Contact.id == sessionData.contactId,
-            tenant_predicate(Contact, org),
-        ).first()
-        if not owned_contact:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Contact not found"
-            )
+        get_scoped_or_404(db, Contact, sessionData.contactId, org)
 
     # Generate a new UUID for the session
     session_uuid = str(uuid.uuid4())
@@ -160,42 +151,39 @@ async def get_sessions(
     Returns a paginated envelope ({sessions, total, limit, offset, has_more});
     ``total`` counts the filtered set before pagination.
     """
-    try:
-        query = db.query(ChatSession).filter(ChatSession.account_id == jwt['id'])
+    query = db.query(ChatSession).filter(ChatSession.account_id == jwt['id'])
 
-        # Optionally filter by agent_id
-        if agent_id is not None:
-            query = query.filter(ChatSession.agent_id == agent_id)
+    # Optionally filter by agent_id
+    if agent_id is not None:
+        query = query.filter(ChatSession.agent_id == agent_id)
 
-        # Contact-bound sessions are hidden unless explicitly requested.
-        if contact_id is not None:
-            query = query.filter(ChatSession.contact_id == contact_id)
-        else:
-            query = query.filter(ChatSession.contact_id.is_(None))
+    # Contact-bound sessions are hidden unless explicitly requested.
+    if contact_id is not None:
+        query = query.filter(ChatSession.contact_id == contact_id)
+    else:
+        query = query.filter(ChatSession.contact_id.is_(None))
 
-        # Total before pagination, then the requested slice.
-        total = query.count()
-        rows = query.order_by(ChatSession.created_at.desc()).offset(offset).limit(limit).all()
+    # Total before pagination, then the requested slice.
+    total = query.count()
+    rows = query.order_by(ChatSession.created_at.desc()).offset(offset).limit(limit).all()
 
-        sessions = [{
-            "id": s.id,
-            "sessionId": s.session_id,
-            "agentId": s.agent_id,
-            "accountId": s.account_id,
-            "createdAt": s.created_at,
-            "title": s.title,
-            "contactId": s.contact_id
-        } for s in rows]
+    sessions = [{
+        "id": s.id,
+        "sessionId": s.session_id,
+        "agentId": s.agent_id,
+        "accountId": s.account_id,
+        "createdAt": s.created_at,
+        "title": s.title,
+        "contactId": s.contact_id
+    } for s in rows]
 
-        return {
-            "sessions": sessions,
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-            "has_more": (offset + limit) < total,
-        }
-    except Exception as e:
-        raise handle_db_error(e, "[OPERATION]")
+    return {
+        "sessions": sessions,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": (offset + limit) < total,
+    }
 
 @router.get("/sessions/{session_id}", response_model=ChatSessionWithMessagesResponse)
 @limiter.limit("30/minute")

@@ -7,10 +7,6 @@ credential is used — no drift if the owner later changes account defaults. Whe
 binding is null (e.g. a backfilled pre-existing index, or one whose bound
 credential was deleted), we fall back to the owner's default for that type.
 
-CANONICAL FILE. Mirrored byte-for-byte into kalygo3-agent-api
-(src/services/vector_store_credentials.py) via the repo-root sync scripts. Edit
-the ai-api copy, then run ./sync-schemas.sh. Do not edit the two copies
-independently.
 """
 from sqlalchemy.orm import Session
 

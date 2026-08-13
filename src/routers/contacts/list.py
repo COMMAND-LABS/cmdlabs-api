@@ -60,10 +60,4 @@ async def list_contacts(
         .all()
     )
 
-    return ContactListResponse(
-        contacts=contacts,
-        total=total,
-        limit=limit,
-        offset=offset,
-        has_more=(offset + limit) < total,
-    )
+    return ContactListResponse.of(contacts, total=total, limit=limit, offset=offset)

@@ -20,15 +20,10 @@ its own table again rather than as an exemption here. An AccessGrant that could
 opt out of the org filter would make this table a documented way around
 org_id.
 
-CANONICAL FILE. Mirrored byte-for-byte into kalygo3-agent-api
-(src/services/access.py) via the repo-root sync scripts. Edit the ai-api copy,
-then run ./sync-schemas.sh. Do not edit the two copies independently.
-
 Roles: 'read' < 'write' (vector stores); 'use' (agents, credentials). The resource
 OWNER implicitly satisfies any required role.
 """
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
 
 from src.db.models import (
     AccessGrant,

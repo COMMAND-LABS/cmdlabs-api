@@ -9,6 +9,7 @@ from datetime import datetime
 from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims, ensure_account
 from src.db.models import VectorDbIngestionLog, OperationType, OperationStatus
 from src.services.vector_store_access import authorize_vector_store
+from src.routers.pagination import Page
 from src.rate_limit import limiter
 
 router = APIRouter()
@@ -34,13 +35,9 @@ class IngestionLogResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-class IngestionLogsListResponse(BaseModel):
+class IngestionLogsListResponse(Page):
     """Response model for paginated ingestion logs list."""
     logs: List[IngestionLogResponse]
-    total: int
-    limit: int
-    offset: int
-    has_more: bool
 
 @router.get("/ingestion-logs", response_model=IngestionLogsListResponse)
 @limiter.limit("30/minute")
@@ -176,13 +173,8 @@ async def list_ingestion_logs(
             )
         )
         
-    return IngestionLogsListResponse(
-        logs=log_responses,
-        total=total,
-        limit=limit,
-        offset=offset,
-        has_more=(offset + limit) < total
-    )
+    return IngestionLogsListResponse.of(
+        log_responses, total=total, limit=limit, offset=offset)
 
 @router.get("/ingestion-logs/{log_id}", response_model=IngestionLogResponse)
 @limiter.limit("30/minute")

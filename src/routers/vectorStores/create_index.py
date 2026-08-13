@@ -5,7 +5,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException, status, Request
 from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims, ensure_account
-from src.services.org_scope import AGENT, VECTOR_STORE, resource_predicate, scoped_resources
+from src.services.org_scope import resource_predicate
 from pinecone import Pinecone
 
 from .helpers import _pinecone_key_from_credential

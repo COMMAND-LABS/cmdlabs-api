@@ -65,10 +65,4 @@ async def list_deals(
         .all()
     )
 
-    return DealListResponse(
-        deals=deals,
-        total=total,
-        limit=limit,
-        offset=offset,
-        has_more=(offset + limit) < total,
-    )
+    return DealListResponse.of(deals, total=total, limit=limit, offset=offset)

@@ -6,7 +6,6 @@ from typing import List
 from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
 from .models import SharedVectorStore
 from src.services.vector_store_access import list_shared_vector_stores
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 router = APIRouter()
@@ -21,9 +20,6 @@ async def list_shared(
     request: Request,
 ):
     """Knowledge bases shared with the caller, with the caller's write capability."""
-    try:
-        account_id = account_id_from_claims(jwt)
-        shared = list_shared_vector_stores(db, account_id, org_id=org.org_id)
-        return [SharedVectorStore(**s) for s in shared]
-    except Exception as e:
-        raise handle_db_error(e, "[LIST SHARED VS]")
+    account_id = account_id_from_claims(jwt)
+    shared = list_shared_vector_stores(db, account_id, org_id=org.org_id)
+    return [SharedVectorStore(**s) for s in shared]

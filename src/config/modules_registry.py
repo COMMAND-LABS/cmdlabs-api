@@ -71,7 +71,11 @@ MODULES = (
     # standalone agent-api.)
     Module("knowledge_bases", "Knowledge Bases",
            ("/api/vector-stores", "/api/similarity-search", "/api/pdf-to-faq")),
-    Module("access", "Access", ("/api/access-groups", "/api/access")),
+    # "/api/access-groups" was listed here until access groups became spaces
+    # and spaces were removed (49d455b). Nothing has mounted that prefix since,
+    # so it gated nothing; a prefix that matches no route is indistinguishable
+    # from a correct one, which is exactly why it survived so long.
+    Module("access", "Access", ("/api/access",)),
     Module("credentials", "Credentials", ("/api/credentials",)),
     Module("email_templates", "Email Templates", ("/api/email-templates",)),
     Module("email_campaigns", "Email Campaigns",

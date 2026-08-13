@@ -6,7 +6,7 @@ a group of people was putting the agent in a space instead; spaces are gone.
 """
 from fastapi import APIRouter, HTTPException, status, Request
 from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
-from src.services.org_scope import AGENT, VECTOR_STORE, resource_predicate, scoped_resources
+from src.services.org_scope import get_resource_or_404
 from src.db.models import Agent, AccessGrant
 from src.services import access
 from src.services.access_admin import resolve_grantee, upsert_grant, record_access_event
@@ -28,12 +28,7 @@ async def create_grant(
     """Let one other person in this org use this agent. Agent owner only."""
     account_id = account_id_from_claims(jwt)
 
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        resource_predicate(Agent, org),
-    ).first()
-    if not agent:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    agent = get_resource_or_404(db, Agent, agent_id, org)
 
     principal_type, principal_id, label = resolve_grantee(
         db,

@@ -14,7 +14,7 @@ from sqlalchemy import tuple_
 
 from datetime import datetime
 from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims, ensure_account
-from src.services.org_scope import AGENT, VECTOR_STORE, resource_predicate, scoped_resources
+from src.services.org_scope import resource_predicate
 from src.db.models import Agent, VectorStore, Credential, AccessGrant, AccessGrantEvent
 from src.services import access
 from src.services.access_admin import grant_label

@@ -1,15 +1,12 @@
 """
 Update credential endpoint (legacy).
 """
-import logging
-from fastapi import APIRouter, HTTPException, status, Request
+from fastapi import APIRouter, Request
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
-from src.db.models import Credential
+from ._shared import invalid_data_as_400, metadata_response, owned_credential_or_404
 from .encryption import encrypt_credential_data
 from .models import UpdateCredentialRequest, CredentialResponse
 from src.rate_limit import limiter
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -29,42 +26,14 @@ async def update_credential(
     LEGACY ENDPOINT: For simple API key updates.
     For flexible credentials, use PUT /{id}/full
     """
-    try:
-        account_id = account_id_from_claims(jwt)
-        account = ensure_account(db, account_id)
+    account_id = account_id_from_claims(jwt)
+    ensure_account(db, account_id)
 
-        credential = db.query(Credential).filter(
-            Credential.id == credential_id,
-            Credential.account_id == account_id
-        ).first()
-
-        if not credential:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Credential not found"
-            )
-
-        encrypted_data = encrypt_credential_data({"api_key": request_body.api_key})
-
-        credential.encrypted_data = encrypted_data
+    credential = owned_credential_or_404(db, account_id, credential_id=credential_id)
+    with invalid_data_as_400(db, 'updating credential'):
+        credential.encrypted_data = encrypt_credential_data({"api_key": request_body.api_key})
         credential.auth_type = "api_key"
         db.commit()
         db.refresh(credential)
 
-        return CredentialResponse(
-            id=credential.id,
-            credential_type=credential.credential_type,
-            auth_type=credential.auth_type,
-            credential_name=credential.credential_name,
-            created_at=credential.created_at.isoformat(),
-            updated_at=credential.updated_at.isoformat(),
-            credential_metadata=credential.credential_metadata
-        )
-
-    except ValueError as e:
-        db.rollback()
-        logger.error('[CREDENTIALS] ValueError updating credential: %s', e)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail='Invalid credential data.',
-        )
+        return metadata_response(credential)

@@ -2,9 +2,9 @@
 List contact events endpoint.
 """
 from typing import List
-from fastapi import APIRouter, HTTPException, status, Request
+from fastapi import APIRouter, Request
 from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
-from src.services.org_scope import tenant_predicate
+from src.services.org_scope import get_scoped_or_404, tenant_predicate
 from src.db.models import Contact, ContactEvent
 
 from ..models import ContactEventResponse
@@ -25,13 +25,7 @@ async def list_contact_events(
     account_id = account_id_from_claims(auth)
     account = ensure_account(db, account_id)
 
-    contact = db.query(Contact).filter(
-        Contact.id == contact_id,
-        tenant_predicate(Contact, org),
-    ).first()
-
-    if not contact:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+    get_scoped_or_404(db, Contact, contact_id, org)
 
     events = (
         db.query(ContactEvent)

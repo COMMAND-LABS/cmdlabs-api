@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from typing import List
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from src.deps import db_dependency, auth_dependency
 from src.db.models import PendingToolApproval
 from .models import PendingToolApprovalResponse

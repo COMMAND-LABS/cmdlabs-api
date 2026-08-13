@@ -1,15 +1,11 @@
 """
 Get credential with full decrypted data endpoint.
 """
-import logging
-from fastapi import APIRouter, HTTPException, status, Request
+from fastapi import APIRouter, Request
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
-from src.db.models import Credential
-from .encryption import decrypt_credential_data
+from ._shared import flexible_detail_response, invalid_data_as_400, owned_credential_or_404
 from .models import FlexibleCredentialDetailResponse
 from src.rate_limit import limiter
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -23,37 +19,9 @@ async def get_credential_full(
     request: Request
 ):
     """Get a specific credential with full decrypted data structure."""
-    try:
-        account_id = account_id_from_claims(jwt)
-        account = ensure_account(db, account_id)
+    account_id = account_id_from_claims(jwt)
+    ensure_account(db, account_id)
 
-        credential = db.query(Credential).filter(
-            Credential.id == credential_id,
-            Credential.account_id == account_id
-        ).first()
-
-        if not credential:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Credential not found"
-            )
-
-        credential_data = decrypt_credential_data(credential.encrypted_data)
-
-        return FlexibleCredentialDetailResponse(
-            id=credential.id,
-            credential_type=credential.credential_type,
-            auth_type=credential.auth_type,
-            credential_name=credential.credential_name,
-            credential_data=credential_data,
-            created_at=credential.created_at.isoformat(),
-            updated_at=credential.updated_at.isoformat(),
-            credential_metadata=credential.credential_metadata
-        )
-
-    except ValueError as e:
-        logger.error('[CREDENTIALS] ValueError retrieving full credential: %s', e)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail='Invalid credential data.',
-        )
+    credential = owned_credential_or_404(db, account_id, credential_id=credential_id)
+    with invalid_data_as_400(db, 'retrieving full credential'):
+        return flexible_detail_response(credential)

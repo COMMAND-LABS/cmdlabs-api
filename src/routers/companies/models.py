@@ -6,6 +6,7 @@ from typing import Optional, List
 from datetime import datetime
 
 from src.routers.contacts.models import ContactSummaryResponse
+from src.routers.pagination import Page
 
 
 class CreateCompanyRequest(BaseModel):
@@ -17,13 +18,9 @@ class CreateCompanyRequest(BaseModel):
     linkedin_url: Optional[str] = None
 
 
-class UpdateCompanyRequest(BaseModel):
+class UpdateCompanyRequest(CreateCompanyRequest):
+    """Same fields as create, none required. See UpdateContactRequest."""
     name: Optional[str] = None
-    domain: Optional[str] = None
-    website: Optional[str] = None
-    industry: Optional[str] = None
-    description: Optional[str] = None
-    linkedin_url: Optional[str] = None
 
 
 class CompanyContactResponse(BaseModel):
@@ -73,18 +70,9 @@ class CompanyResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class CompanyListResponse(BaseModel):
-    """Paginated envelope for the companies list.
-
-    Mirrors the contacts list contract
-    ({companies, total, limit, offset, has_more}) so the frontend
-    pagination pattern stays consistent across the app.
-    """
+class CompanyListResponse(Page):
+    """Paginated envelope for the companies list."""
     companies: List[CompanySummaryResponse]
-    total: int
-    limit: int
-    offset: int
-    has_more: bool
 
 
 class AddContactToCompanyRequest(BaseModel):

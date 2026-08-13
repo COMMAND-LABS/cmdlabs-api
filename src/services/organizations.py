@@ -30,8 +30,6 @@ personal org the CEILING is the whole entitlement — it is what billing raises
 and lowers. Tiers only start meaning anything once an org contains somebody who
 is not its owner.
 
-CANONICAL FILE. Keep in sync with cmdlabs-agent-api via ./sync-schemas.sh if
-that service ever needs to create memberships (it currently only reads them).
 """
 import logging
 

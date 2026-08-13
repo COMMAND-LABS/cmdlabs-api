@@ -41,7 +41,7 @@ import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from src.db.models import Account, OrganizationInvitation, OrganizationMember

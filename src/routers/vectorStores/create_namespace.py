@@ -10,7 +10,6 @@ from pinecone import Pinecone
 from .helpers import get_pinecone_api_key_for_index
 from .models import CreateNamespaceRequest, NamespaceResponse
 from src.services.vector_store_access import authorize_vector_store
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
@@ -82,37 +81,32 @@ async def create_namespace(
         
     # Create the namespace by upserting a dummy vector
     # Pinecone namespaces are created automatically on first upsert
-    try:
-        # Get index dimension from stats
-        dimension = index_stats.get("dimension")
-        if not dimension:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Could not determine index dimension"
-            )
-            
-        logger.info("Creating namespace '%s' in index '%s' (dimension: %d)", namespace_name, index_name, dimension)
-            
-        # Create a dummy vector to initialize the namespace
-        # Note: Pinecone requires at least one non-zero value in dense vectors
-        dummy_id = f"__init_{namespace_name}__"
-        dummy_vector = [1.0] + [0.0] * (dimension - 1)  # First element is 1.0, rest are 0.0
-            
-        # Upsert the dummy vector to create the namespace
-        logger.debug("Upserting dummy vector to initialize namespace")
-        index.upsert(
-            vectors=[(dummy_id, dummy_vector)],
-            namespace=namespace_name
+    # Get index dimension from stats
+    dimension = index_stats.get("dimension")
+    if not dimension:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not determine index dimension"
         )
             
-        logger.info("Successfully created namespace '%s'", namespace_name)
+    logger.info("Creating namespace '%s' in index '%s' (dimension: %d)", namespace_name, index_name, dimension)
             
-        # Return success response
-        return NamespaceResponse(
-            namespace=namespace_name,
-            vector_count=0
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[CREATE NAMESPACE]")
+    # Create a dummy vector to initialize the namespace
+    # Note: Pinecone requires at least one non-zero value in dense vectors
+    dummy_id = f"__init_{namespace_name}__"
+    dummy_vector = [1.0] + [0.0] * (dimension - 1)  # First element is 1.0, rest are 0.0
+            
+    # Upsert the dummy vector to create the namespace
+    logger.debug("Upserting dummy vector to initialize namespace")
+    index.upsert(
+        vectors=[(dummy_id, dummy_vector)],
+        namespace=namespace_name
+    )
+            
+    logger.info("Successfully created namespace '%s'", namespace_name)
+            
+    # Return success response
+    return NamespaceResponse(
+        namespace=namespace_name,
+        vector_count=0
+    )

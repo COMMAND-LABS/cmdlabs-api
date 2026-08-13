@@ -1,15 +1,13 @@
 """
 Create flexible credential endpoint.
 """
-import logging
-from fastapi import APIRouter, HTTPException, status, Request
+from fastapi import APIRouter, status, Request
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
 from src.db.models import Credential
+from ._shared import invalid_data_as_400, metadata_response
 from .encryption import encrypt_credential_data
 from .models import CreateFlexibleCredentialRequest, CredentialResponse
 from src.rate_limit import limiter
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -42,39 +40,20 @@ async def create_flexible_credential(
         "metadata": {"notes": "Main production key"}
     }
     """
-    try:
-        account_id = account_id_from_claims(jwt)
-        account = ensure_account(db, account_id)
+    account_id = account_id_from_claims(jwt)
+    ensure_account(db, account_id)
 
-        encrypted_data = encrypt_credential_data(request_body.credential_data)
-
+    with invalid_data_as_400(db, 'creating flexible credential'):
         credential = Credential(
             account_id=account_id,
             credential_type=request_body.credential_type,
             auth_type=request_body.auth_type,
             credential_name=request_body.credential_name,
-            encrypted_data=encrypted_data,
-            credential_metadata=request_body.metadata
+            encrypted_data=encrypt_credential_data(request_body.credential_data),
+            credential_metadata=request_body.metadata,
         )
-
         db.add(credential)
         db.commit()
         db.refresh(credential)
 
-        return CredentialResponse(
-            id=credential.id,
-            credential_type=credential.credential_type,
-            auth_type=credential.auth_type,
-            credential_name=credential.credential_name,
-            created_at=credential.created_at.isoformat(),
-            updated_at=credential.updated_at.isoformat(),
-            credential_metadata=credential.credential_metadata
-        )
-
-    except ValueError as e:
-        db.rollback()
-        logger.error('[CREDENTIALS] ValueError creating flexible credential: %s', e)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail='Invalid credential data.',
-        )
+        return metadata_response(credential)
