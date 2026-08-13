@@ -5,7 +5,6 @@ from fastapi import APIRouter, HTTPException, status, Request
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
 from src.db.models import Account
 from .models import UpdateAccountRequest, AccountResponse
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 router = APIRouter()
@@ -27,60 +26,53 @@ async def update_account(
     
     Note: Password changes should use the /auth/reset-password flow.
     """
-    try:
-        account_id = account_id_from_claims(jwt)
-        account = ensure_account(db, account_id)
+    account_id = account_id_from_claims(jwt)
+    account = ensure_account(db, account_id)
         
-        # Check if at least one field is being updated
-        if request_body.email is None and request_body.newsletter_subscribed is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="At least one field (email or newsletter_subscribed) must be provided for update"
-            )
-        
-        # Update email if provided
-        if request_body.email is not None:
-            email = request_body.email.strip().lower()
-            if not email:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Email cannot be empty"
-                )
-            
-            # Check if email is already taken by another account
-            existing_account = db.query(Account).filter(
-                Account.email == email,
-                Account.id != account_id
-            ).first()
-            
-            if existing_account:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Email address is already in use"
-                )
-            
-            account.email = email
-        
-        # Update newsletter_subscribed if provided
-        if request_body.newsletter_subscribed is not None:
-            account.newsletter_subscribed = request_body.newsletter_subscribed
-        
-        # Commit the changes
-        db.commit()
-        db.refresh(account)
-        
-        return AccountResponse(
-            id=account.id,
-            email=account.email,
-            newsletter_subscribed=account.newsletter_subscribed,
-            stripe_customer_id=account.stripe_customer_id,
-            is_super_admin=account.is_super_admin,
-            subscription_status=account.subscription_status,
-            subscription_active=account.has_active_subscription
+    # Check if at least one field is being updated
+    if request_body.email is None and request_body.newsletter_subscribed is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one field (email or newsletter_subscribed) must be provided for update"
         )
         
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[ERROR UPDATING ACCOUNT]")
+    # Update email if provided
+    if request_body.email is not None:
+        email = request_body.email.strip().lower()
+        if not email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email cannot be empty"
+            )
+            
+        # Check if email is already taken by another account
+        existing_account = db.query(Account).filter(
+            Account.email == email,
+            Account.id != account_id
+        ).first()
+            
+        if existing_account:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Email address is already in use"
+            )
+            
+        account.email = email
+        
+    # Update newsletter_subscribed if provided
+    if request_body.newsletter_subscribed is not None:
+        account.newsletter_subscribed = request_body.newsletter_subscribed
+        
+    # Commit the changes
+    db.commit()
+    db.refresh(account)
+        
+    return AccountResponse(
+        id=account.id,
+        email=account.email,
+        newsletter_subscribed=account.newsletter_subscribed,
+        stripe_customer_id=account.stripe_customer_id,
+        is_super_admin=account.is_super_admin,
+        subscription_status=account.subscription_status,
+        subscription_active=account.has_active_subscription
+    )

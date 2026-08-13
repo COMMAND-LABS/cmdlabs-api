@@ -1,13 +1,12 @@
 """
 List contacts endpoint.
 """
-from fastapi import APIRouter, HTTPException, status, Request, Query
+from fastapi import APIRouter, Request, Query
 from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
 from src.services.org_scope import tenant_predicate
 from src.db.models import Contact
 
 from .models import ContactListResponse
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 router = APIRouter()
@@ -32,45 +31,39 @@ async def list_contacts(
     a paginated envelope
     ({contacts, total, limit, offset, has_more}).
     """
-    try:
-        account_id = account_id_from_claims(auth)
-        account = ensure_account(db, account_id)
+    account_id = account_id_from_claims(auth)
+    account = ensure_account(db, account_id)
 
-        query = db.query(Contact).filter(tenant_predicate(Contact, org))
+    query = db.query(Contact).filter(tenant_predicate(Contact, org))
 
-        if status_filter:
-            query = query.filter(Contact.status == status_filter)
+    if status_filter:
+        query = query.filter(Contact.status == status_filter)
 
-        if search:
-            term = f"%{search.lower()}%"
-            from sqlalchemy import func as sqlfunc
-            query = query.filter(
-                sqlfunc.lower(Contact.first_name).like(term)
-                | sqlfunc.lower(Contact.middle_name).like(term)
-                | sqlfunc.lower(Contact.last_name).like(term)
-                | sqlfunc.lower(Contact.email).like(term)
-                | sqlfunc.lower(Contact.alt_email_1).like(term)
-                | sqlfunc.lower(Contact.alt_email_2).like(term)
-            )
-
-        # Total before pagination, then the requested slice.
-        total = query.count()
-        contacts = (
-            query.order_by(Contact.updated_at.desc())
-            .offset(offset)
-            .limit(limit)
-            .all()
+    if search:
+        term = f"%{search.lower()}%"
+        from sqlalchemy import func as sqlfunc
+        query = query.filter(
+            sqlfunc.lower(Contact.first_name).like(term)
+            | sqlfunc.lower(Contact.middle_name).like(term)
+            | sqlfunc.lower(Contact.last_name).like(term)
+            | sqlfunc.lower(Contact.email).like(term)
+            | sqlfunc.lower(Contact.alt_email_1).like(term)
+            | sqlfunc.lower(Contact.alt_email_2).like(term)
         )
 
-        return ContactListResponse(
-            contacts=contacts,
-            total=total,
-            limit=limit,
-            offset=offset,
-            has_more=(offset + limit) < total,
-        )
+    # Total before pagination, then the requested slice.
+    total = query.count()
+    contacts = (
+        query.order_by(Contact.updated_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[LIST CONTACTS]")
+    return ContactListResponse(
+        contacts=contacts,
+        total=total,
+        limit=limit,
+        offset=offset,
+        has_more=(offset + limit) < total,
+    )

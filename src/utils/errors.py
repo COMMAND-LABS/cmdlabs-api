@@ -1,12 +1,22 @@
 """
 Centralised database / request error handling.
 
-Usage in routers:
-    from src.utils.errors import handle_db_error
+DO NOT wrap a whole endpoint in `try/except Exception: raise
+handle_db_error(...)`. That tail used to sit at the bottom of ~150 endpoints
+and it is redundant now: main.py registers app-level handlers producing the
+same responses, get_db rolls back, and a router that simply lets the exception
+go gets the identical status code with none of the indentation.
 
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[CREATE CONTACT]")
+What is left for this function is the narrow case: a block that must catch
+something SPECIFIC (a ValueError to turn into a 400, a Stripe failure) and
+wants the same safe mapping for whatever else shows up alongside it.
+
+    try:
+        plan = parse_plan(body.plan)          # raises ValueError
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Unknown plan")
+    except StripeError as e:
+        raise handle_db_error(e, "[CHECKOUT]")
 """
 import logging
 from fastapi import HTTPException, status

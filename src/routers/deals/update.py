@@ -7,7 +7,6 @@ from src.services.org_scope import tenant_predicate
 from src.db.models import Deal, Contact, DEAL_STAGES
 
 from .models import UpdateDealRequest, DealResponse
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 router = APIRouter()
@@ -23,73 +22,66 @@ async def update_deal(
     org: org_dependency,
     request: Request,
 ):
-    try:
-        account_id = account_id_from_claims(auth)
-        account = ensure_account(db, account_id)
+    account_id = account_id_from_claims(auth)
+    account = ensure_account(db, account_id)
 
-        deal = db.query(Deal).filter(
-            Deal.id == deal_id,
-            tenant_predicate(Deal, org),
-        ).first()
+    deal = db.query(Deal).filter(
+        Deal.id == deal_id,
+        tenant_predicate(Deal, org),
+    ).first()
 
-        if not deal:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+    if not deal:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
 
-        if request_body.title is not None:
-            if not request_body.title.strip():
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Deal title cannot be empty")
-            deal.title = request_body.title.strip()
+    if request_body.title is not None:
+        if not request_body.title.strip():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Deal title cannot be empty")
+        deal.title = request_body.title.strip()
 
-        if request_body.description is not None:
-            deal.description = request_body.description.strip() or None
+    if request_body.description is not None:
+        deal.description = request_body.description.strip() or None
 
-        if request_body.amount is not None:
-            if request_body.amount < 0:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Amount cannot be negative")
-            deal.amount = request_body.amount
+    if request_body.amount is not None:
+        if request_body.amount < 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Amount cannot be negative")
+        deal.amount = request_body.amount
 
-        if request_body.currency is not None:
-            deal.currency = request_body.currency.strip().upper() or 'USD'
+    if request_body.currency is not None:
+        deal.currency = request_body.currency.strip().upper() or 'USD'
 
-        if request_body.stage is not None:
-            stage = request_body.stage.strip().lower()
-            if stage not in DEAL_STAGES:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Invalid stage '{stage}'. Must be one of: {', '.join(DEAL_STAGES)}",
-                )
-            deal.stage = stage
+    if request_body.stage is not None:
+        stage = request_body.stage.strip().lower()
+        if stage not in DEAL_STAGES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid stage '{stage}'. Must be one of: {', '.join(DEAL_STAGES)}",
+            )
+        deal.stage = stage
 
-        if request_body.expected_close_date is not None:
-            deal.expected_close_date = request_body.expected_close_date
+    if request_body.expected_close_date is not None:
+        deal.expected_close_date = request_body.expected_close_date
 
-        if request_body.closed_at is not None:
-            deal.closed_at = request_body.closed_at
+    if request_body.closed_at is not None:
+        deal.closed_at = request_body.closed_at
 
-        # Contact (re)link / unlink. We use model_fields_set so the three
-        # cases are distinguishable:
-        #   - field omitted        -> leave the link unchanged
-        #   - contact_id: null     -> unlink (account-level deal)
-        #   - contact_id: <int>    -> link to that contact (validated)
-        if 'contact_id' in request_body.model_fields_set:
-            if request_body.contact_id is None:
-                deal.contact_id = None
-            else:
-                contact = db.query(Contact).filter(
-                    Contact.id == request_body.contact_id,
-                    tenant_predicate(Contact, org),
-                ).first()
-                if not contact:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
-                deal.contact_id = request_body.contact_id
+    # Contact (re)link / unlink. We use model_fields_set so the three
+    # cases are distinguishable:
+    #   - field omitted        -> leave the link unchanged
+    #   - contact_id: null     -> unlink (account-level deal)
+    #   - contact_id: <int>    -> link to that contact (validated)
+    if 'contact_id' in request_body.model_fields_set:
+        if request_body.contact_id is None:
+            deal.contact_id = None
+        else:
+            contact = db.query(Contact).filter(
+                Contact.id == request_body.contact_id,
+                tenant_predicate(Contact, org),
+            ).first()
+            if not contact:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+            deal.contact_id = request_body.contact_id
 
-        db.commit()
-        db.refresh(deal)
+    db.commit()
+    db.refresh(deal)
 
-        return deal
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[UPDATE DEAL]")
+    return deal

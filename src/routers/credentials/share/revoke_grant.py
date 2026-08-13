@@ -10,7 +10,6 @@ from src.db.models import Credential, AccessGrant
 from src.services import access
 from src.services.access_admin import record_access_event
 from src.services.credential_access import prune_unusable_defaults_for_account
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 router = APIRouter()
@@ -26,47 +25,41 @@ async def revoke_credential_grant(
     request: Request,
 ):
     """Remove a share. Credential owner only."""
-    try:
-        account_id = account_id_from_claims(jwt)
+    account_id = account_id_from_claims(jwt)
 
-        credential = db.query(Credential).filter(
-            Credential.id == credential_id,
-            Credential.account_id == account_id,
-        ).first()
-        if not credential:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credential not found")
+    credential = db.query(Credential).filter(
+        Credential.id == credential_id,
+        Credential.account_id == account_id,
+    ).first()
+    if not credential:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credential not found")
 
-        grant = db.query(AccessGrant).filter(
-            AccessGrant.id == grant_id,
-            AccessGrant.resource_type == access.CREDENTIAL,
-            AccessGrant.resource_id == credential_id,
-        ).first()
-        if not grant:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grant not found")
+    grant = db.query(AccessGrant).filter(
+        AccessGrant.id == grant_id,
+        AccessGrant.resource_type == access.CREDENTIAL,
+        AccessGrant.resource_id == credential_id,
+    ).first()
+    if not grant:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grant not found")
 
-        # The account losing this access path → prune its orphaned defaults
-        # after the delete. One account, because a grant names one person.
-        affected = [grant.principal_id]
+    # The account losing this access path → prune its orphaned defaults
+    # after the delete. One account, because a grant names one person.
+    affected = [grant.principal_id]
 
-        record_access_event(
-            db,
-            event_type="revoke",
-            actor_account_id=account_id,
-            resource_type=access.CREDENTIAL,
-            resource_id=credential_id,
-            principal_type=grant.principal_type,
-            principal_id=grant.principal_id,
-            role=grant.role,
-        )
-        db.delete(grant)
-        db.flush()
-        for acct_id in affected:
-            prune_unusable_defaults_for_account(db, acct_id)
+    record_access_event(
+        db,
+        event_type="revoke",
+        actor_account_id=account_id,
+        resource_type=access.CREDENTIAL,
+        resource_id=credential_id,
+        principal_type=grant.principal_type,
+        principal_id=grant.principal_id,
+        role=grant.role,
+    )
+    db.delete(grant)
+    db.flush()
+    for acct_id in affected:
+        prune_unusable_defaults_for_account(db, acct_id)
 
-        db.commit()
-        return None
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[REVOKE CREDENTIAL GRANT]")
+    db.commit()
+    return None

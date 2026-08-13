@@ -14,7 +14,6 @@ from src.services.crm_vector_service import extract_token
 from src.core.clients import pc
 
 from .models import UpdatePromptRequest, PromptResponse
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
@@ -39,79 +38,72 @@ async def update_prompt(
     If content, name, or description changed the vector in Pinecone is
     re-embedded and upserted so search stays in sync.
     """
-    try:
-        account_id = account_id_from_claims(jwt)
-        account = ensure_account(db, account_id)
+    account_id = account_id_from_claims(jwt)
+    account = ensure_account(db, account_id)
         
-        prompt = db.query(Prompt).filter(
-            Prompt.id == prompt_id,
-            Prompt.account_id == account_id
-        ).first()
+    prompt = db.query(Prompt).filter(
+        Prompt.id == prompt_id,
+        Prompt.account_id == account_id
+    ).first()
         
-        if not prompt:
+    if not prompt:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Prompt not found"
+        )
+        
+    needs_reembed = False
+
+    if request_body.name is not None:
+        if not request_body.name.strip():
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Prompt not found"
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Prompt name cannot be empty"
             )
+        prompt.name = request_body.name.strip()
+        needs_reembed = True
         
-        needs_reembed = False
+    if request_body.description is not None:
+        prompt.description = request_body.description.strip() if request_body.description else None
+        needs_reembed = True
+        
+    if request_body.content is not None:
+        if not request_body.content.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Prompt content cannot be empty"
+            )
+        prompt.content = request_body.content
+        needs_reembed = True
+        
+    db.commit()
+    db.refresh(prompt)
 
-        if request_body.name is not None:
-            if not request_body.name.strip():
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Prompt name cannot be empty"
+    # ── Re-embed + upsert to Pinecone ────────────────────────────
+    if needs_reembed:
+        try:
+            token = extract_token(request)
+            embedding = await fetch_embedding(token, prompt.content)
+
+            if embedding and PINECONE_INDEX:
+                index = pc.Index(PINECONE_INDEX)
+                index.upsert(
+                    vectors=[(
+                        f"prompt_{prompt.id}",
+                        embedding,
+                        {
+                            "prompt_id": prompt.id,
+                            "account_id": account_id,
+                            "name": prompt.name,
+                            "description": prompt.description or "",
+                            "content": prompt.content,
+                            "type": "prompt",
+                        },
+                    )],
+                    namespace=PROMPTS_NAMESPACE,
                 )
-            prompt.name = request_body.name.strip()
-            needs_reembed = True
+                logger.info("[UPDATE PROMPT] Re-embedded prompt %s into Pinecone", prompt.id)
+        except Exception as embed_err:
+            logger.warning("[UPDATE PROMPT] Re-embedding failed: %s", embed_err)
         
-        if request_body.description is not None:
-            prompt.description = request_body.description.strip() if request_body.description else None
-            needs_reembed = True
-        
-        if request_body.content is not None:
-            if not request_body.content.strip():
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Prompt content cannot be empty"
-                )
-            prompt.content = request_body.content
-            needs_reembed = True
-        
-        db.commit()
-        db.refresh(prompt)
-
-        # ── Re-embed + upsert to Pinecone ────────────────────────────
-        if needs_reembed:
-            try:
-                token = extract_token(request)
-                embedding = await fetch_embedding(token, prompt.content)
-
-                if embedding and PINECONE_INDEX:
-                    index = pc.Index(PINECONE_INDEX)
-                    index.upsert(
-                        vectors=[(
-                            f"prompt_{prompt.id}",
-                            embedding,
-                            {
-                                "prompt_id": prompt.id,
-                                "account_id": account_id,
-                                "name": prompt.name,
-                                "description": prompt.description or "",
-                                "content": prompt.content,
-                                "type": "prompt",
-                            },
-                        )],
-                        namespace=PROMPTS_NAMESPACE,
-                    )
-                    logger.info("[UPDATE PROMPT] Re-embedded prompt %s into Pinecone", prompt.id)
-            except Exception as embed_err:
-                logger.warning("[UPDATE PROMPT] Re-embedding failed: %s", embed_err)
-        
-        return prompt
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[UPDATE PROMPT]")
+    return prompt

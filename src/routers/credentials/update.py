@@ -7,7 +7,6 @@ from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensu
 from src.db.models import Credential
 from .encryption import encrypt_credential_data
 from .models import UpdateCredentialRequest, CredentialResponse
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
@@ -62,8 +61,6 @@ async def update_credential(
             credential_metadata=credential.credential_metadata
         )
 
-    except HTTPException:
-        raise
     except ValueError as e:
         db.rollback()
         logger.error('[CREDENTIALS] ValueError updating credential: %s', e)
@@ -71,6 +68,3 @@ async def update_credential(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail='Invalid credential data.',
         )
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[ERROR UPDATING CREDENTIAL]")

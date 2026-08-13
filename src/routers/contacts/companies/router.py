@@ -14,7 +14,6 @@ from src.db.models import Company, CompanyContact, Contact
 
 from .models import AddCompanyToContactRequest, ContactCompanyResponse
 from src.routers.companies.models import CompanySummaryResponse
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 router = APIRouter()
@@ -61,28 +60,22 @@ async def list_contact_companies(
     request: Request,
 ):
     """List all companies a given contact is associated with."""
-    try:
-        account_id = account_id_from_claims(auth)
+    account_id = account_id_from_claims(auth)
 
-        contact = db.query(Contact).filter(
-            Contact.id == contact_id,
-            tenant_predicate(Contact, org),
-        ).first()
+    contact = db.query(Contact).filter(
+        Contact.id == contact_id,
+        tenant_predicate(Contact, org),
+    ).first()
 
-        if not contact:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+    if not contact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
 
-        memberships = (
-            db.query(CompanyContact)
-            .filter(CompanyContact.contact_id == contact_id, tenant_predicate(CompanyContact, org))
-            .all()
-        )
-        return [_to_response(m, db) for m in memberships]
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[LIST CONTACT COMPANIES]")
+    memberships = (
+        db.query(CompanyContact)
+        .filter(CompanyContact.contact_id == contact_id, tenant_predicate(CompanyContact, org))
+        .all()
+    )
+    return [_to_response(m, db) for m in memberships]
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=ContactCompanyResponse)
@@ -134,13 +127,6 @@ async def add_contact_company(
             status_code=status.HTTP_409_CONFLICT,
             detail="Contact is already associated with this company",
         )
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[ADD CONTACT COMPANY]")
-
-
 @router.delete("/{company_id}", status_code=status.HTTP_204_NO_CONTENT)
 @limiter.limit("60/minute")
 async def remove_contact_company(
@@ -152,33 +138,26 @@ async def remove_contact_company(
     request: Request,
 ):
     """Disassociate a contact from a company."""
-    try:
-        account_id = account_id_from_claims(auth)
+    account_id = account_id_from_claims(auth)
 
-        contact = db.query(Contact).filter(
-            Contact.id == contact_id,
-            tenant_predicate(Contact, org),
-        ).first()
+    contact = db.query(Contact).filter(
+        Contact.id == contact_id,
+        tenant_predicate(Contact, org),
+    ).first()
 
-        if not contact:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+    if not contact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
 
-        membership = db.query(CompanyContact).filter(
-            CompanyContact.contact_id == contact_id,
-            tenant_predicate(CompanyContact, org),
-            CompanyContact.company_id == company_id,
-        ).first()
+    membership = db.query(CompanyContact).filter(
+        CompanyContact.contact_id == contact_id,
+        tenant_predicate(CompanyContact, org),
+        CompanyContact.company_id == company_id,
+    ).first()
 
-        if not membership:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact is not associated with this company")
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact is not associated with this company")
 
-        db.delete(membership)
-        db.commit()
+    db.delete(membership)
+    db.commit()
 
-        return None
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[REMOVE CONTACT COMPANY]")
+    return None

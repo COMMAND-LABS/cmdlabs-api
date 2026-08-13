@@ -7,7 +7,6 @@ from src.services.org_scope import tenant_predicate
 from src.db.models import Company
 
 from .models import CompanyResponse, CompanyContactResponse
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 router = APIRouter()
@@ -21,38 +20,32 @@ async def get_company(
     org: org_dependency,
     request: Request,
 ):
-    try:
-        account_id = account_id_from_claims(auth)
-        account = ensure_account(db, account_id)
+    account_id = account_id_from_claims(auth)
+    account = ensure_account(db, account_id)
 
-        company = db.query(Company).filter(
-            Company.id == company_id,
-            tenant_predicate(Company, org),
-        ).first()
+    company = db.query(Company).filter(
+        Company.id == company_id,
+        tenant_predicate(Company, org),
+    ).first()
 
-        if not company:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
+    if not company:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
 
-        # The ORM relationship is `contact_memberships` (CompanyContact join
-        # rows); map it onto the response's `contacts` field explicitly.
-        return CompanyResponse(
-            id=company.id,
-            account_id=company.account_id,
-            name=company.name,
-            domain=company.domain,
-            website=company.website,
-            industry=company.industry,
-            description=company.description,
-            linkedin_url=company.linkedin_url,
-            created_at=company.created_at,
-            updated_at=company.updated_at,
-            contacts=[
-                CompanyContactResponse.model_validate(m)
-                for m in company.contact_memberships
-            ],
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[GET COMPANY]")
+    # The ORM relationship is `contact_memberships` (CompanyContact join
+    # rows); map it onto the response's `contacts` field explicitly.
+    return CompanyResponse(
+        id=company.id,
+        account_id=company.account_id,
+        name=company.name,
+        domain=company.domain,
+        website=company.website,
+        industry=company.industry,
+        description=company.description,
+        linkedin_url=company.linkedin_url,
+        created_at=company.created_at,
+        updated_at=company.updated_at,
+        contacts=[
+            CompanyContactResponse.model_validate(m)
+            for m in company.contact_memberships
+        ],
+    )

@@ -7,7 +7,6 @@ from src.services.org_scope import tenant_predicate
 from src.db.models import Deal
 
 from .models import DealResponse
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 router = APIRouter()
@@ -22,21 +21,15 @@ async def get_deal(
     org: org_dependency,
     request: Request,
 ):
-    try:
-        account_id = account_id_from_claims(auth)
-        account = ensure_account(db, account_id)
+    account_id = account_id_from_claims(auth)
+    account = ensure_account(db, account_id)
 
-        deal = db.query(Deal).filter(
-            Deal.id == deal_id,
-            tenant_predicate(Deal, org),
-        ).first()
+    deal = db.query(Deal).filter(
+        Deal.id == deal_id,
+        tenant_predicate(Deal, org),
+    ).first()
 
-        if not deal:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+    if not deal:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
 
-        return deal
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[GET DEAL]")
+    return deal

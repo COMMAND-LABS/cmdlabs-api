@@ -51,9 +51,5 @@ async def get_agent(
             is_owner=(agent.account_id == account_id),
         )
         
-    except HTTPException:
-        raise
     except ValueError as e:
         raise handle_db_error(e, "[GET AGENT VALUE ERROR]")
-    except Exception as e:
-        raise handle_db_error(e, "[ERROR RETRIEVING AGENT]")

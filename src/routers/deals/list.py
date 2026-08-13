@@ -1,14 +1,13 @@
 """
 List deals endpoint (account-scoped, server-side paginated).
 """
-from fastapi import APIRouter, HTTPException, status, Request, Query
+from fastapi import APIRouter, Request, Query
 from sqlalchemy.orm import joinedload
 from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
 from src.services.org_scope import tenant_predicate
 from src.db.models import Deal
 
 from .models import DealListResponse
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 router = APIRouter()
@@ -34,48 +33,42 @@ async def list_deals(
     title/description. Returns a paginated envelope
     ({deals, total, limit, offset, has_more}).
     """
-    try:
-        account_id = account_id_from_claims(auth)
-        account = ensure_account(db, account_id)
+    account_id = account_id_from_claims(auth)
+    account = ensure_account(db, account_id)
 
-        # Eager-load the contact so DealResponse.contact_name doesn't N+1.
-        query = (
-            db.query(Deal)
-            .options(joinedload(Deal.contact))
-            .filter(tenant_predicate(Deal, org))
+    # Eager-load the contact so DealResponse.contact_name doesn't N+1.
+    query = (
+        db.query(Deal)
+        .options(joinedload(Deal.contact))
+        .filter(tenant_predicate(Deal, org))
+    )
+
+    if contact_id is not None:
+        query = query.filter(Deal.contact_id == contact_id)
+
+    if stage:
+        query = query.filter(Deal.stage == stage.strip().lower())
+
+    if search:
+        term = f"%{search.lower()}%"
+        from sqlalchemy import func as sqlfunc
+        query = query.filter(
+            sqlfunc.lower(Deal.title).like(term)
+            | sqlfunc.lower(Deal.description).like(term)
         )
 
-        if contact_id is not None:
-            query = query.filter(Deal.contact_id == contact_id)
+    total = query.count()
+    deals = (
+        query.order_by(Deal.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
 
-        if stage:
-            query = query.filter(Deal.stage == stage.strip().lower())
-
-        if search:
-            term = f"%{search.lower()}%"
-            from sqlalchemy import func as sqlfunc
-            query = query.filter(
-                sqlfunc.lower(Deal.title).like(term)
-                | sqlfunc.lower(Deal.description).like(term)
-            )
-
-        total = query.count()
-        deals = (
-            query.order_by(Deal.created_at.desc())
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
-
-        return DealListResponse(
-            deals=deals,
-            total=total,
-            limit=limit,
-            offset=offset,
-            has_more=(offset + limit) < total,
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[LIST DEALS]")
+    return DealListResponse(
+        deals=deals,
+        total=total,
+        limit=limit,
+        offset=offset,
+        has_more=(offset + limit) < total,
+    )

@@ -64,7 +64,6 @@ from src.deps import (
 )
 from src.rate_limit import limiter
 from src.services import invitations, organizations
-from src.utils.errors import handle_db_error
 
 logger = logging.getLogger(__name__)
 
@@ -150,17 +149,12 @@ async def my_invitations(
     be added below that is a fact about the ORG rather than about the
     invitation they were sent.
     """
-    try:
-        account_id = account_id_from_claims(auth)
-        account = ensure_account(db, account_id)
-        rows = invitations.pending_for_email(db, account.email)
-        return MyInvitationsResponse(
-            invitations=[_view(db, i) for i in rows],
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[MY INVITATIONS]")
+    account_id = account_id_from_claims(auth)
+    account = ensure_account(db, account_id)
+    rows = invitations.pending_for_email(db, account.email)
+    return MyInvitationsResponse(
+        invitations=[_view(db, i) for i in rows],
+    )
 
 
 @router.get("/invitations/{token}", response_model=InvitationView)
@@ -172,16 +166,11 @@ async def read_invitation(token: str, db: db_dependency, request: Request):
     A page that could not tell "already accepted" from "never existed" would
     send people to support for the most ordinary outcome there is.
     """
-    try:
-        invitation = invitations.find_by_token(db, token)
-        if invitation is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                detail="This invitation link is not valid.")
-        return _view(db, invitation)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[READ INVITATION]")
+    invitation = invitations.find_by_token(db, token)
+    if invitation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="This invitation link is not valid.")
+    return _view(db, invitation)
 
 
 def _answerable(db: Session, invitation_id: int, auth: dict):
@@ -239,25 +228,19 @@ async def accept_invitation(
     THE ONLY PLACE A MEMBERSHIP IS CREATED FROM AN INVITE. Inviting writes no
     membership row; this does. See services/invitations.accept.
     """
-    try:
-        invitation, account = _answerable(db, invitation_id, auth)
-        org_id = invitation.org_id
-        member = invitations.accept(db, invitation, account)
-        role = member.role
-        db.commit()
+    invitation, account = _answerable(db, invitation_id, auth)
+    org_id = invitation.org_id
+    member = invitations.accept(db, invitation, account)
+    role = member.role
+    db.commit()
 
-        org_name = (db.query(Organization.name)
-                      .filter(Organization.id == org_id).scalar())
-        logger.info("[ORG] account %s accepted their invitation to org %s as %s",
-                    account.id, org_id, role)
-        return AcceptResponse(org_id=org_id,
-                              org_name=org_name or "an organization",
-                              role=role)
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[ACCEPT INVITATION]")
+    org_name = (db.query(Organization.name)
+                  .filter(Organization.id == org_id).scalar())
+    logger.info("[ORG] account %s accepted their invitation to org %s as %s",
+                account.id, org_id, role)
+    return AcceptResponse(org_id=org_id,
+                          org_name=org_name or "an organization",
+                          role=role)
 
 
 @router.post("/invitations/{invitation_id}/decline",
@@ -280,17 +263,11 @@ async def decline_invitation(
     pending state, and asking it to act while this invitation is still live
     would have it correctly decline to create anything.
     """
-    try:
-        invitation, account = _answerable(db, invitation_id, auth)
-        org_id = invitation.org_id
-        invitations.decline(db, invitation, account)
-        db.commit()
+    invitation, account = _answerable(db, invitation_id, auth)
+    org_id = invitation.org_id
+    invitations.decline(db, invitation, account)
+    db.commit()
 
-        organizations.ensure_membership(db, account)
-        logger.info("[ORG] account %s declined their invitation to org %s",
-                    account.id, org_id)
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[DECLINE INVITATION]")
+    organizations.ensure_membership(db, account)
+    logger.info("[ORG] account %s declined their invitation to org %s",
+                account.id, org_id)

@@ -1,10 +1,9 @@
 """
 Get account details endpoint.
 """
-from fastapi import APIRouter, HTTPException, status, Request
+from fastapi import APIRouter, Request
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
 from .models import AccountResponse
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 router = APIRouter()
@@ -20,21 +19,15 @@ async def get_account(
     Get the authenticated user's account details.
     Returns account info excluding sensitive fields (password, reset_token).
     """
-    try:
-        account_id = account_id_from_claims(jwt)
-        account = ensure_account(db, account_id)
+    account_id = account_id_from_claims(jwt)
+    account = ensure_account(db, account_id)
         
-        return AccountResponse(
-            id=account.id,
-            email=account.email,
-            newsletter_subscribed=account.newsletter_subscribed,
-            stripe_customer_id=account.stripe_customer_id,
-            is_super_admin=account.is_super_admin,
-            subscription_status=account.subscription_status,
-            subscription_active=account.has_active_subscription
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[ERROR RETRIEVING ACCOUNT]")
+    return AccountResponse(
+        id=account.id,
+        email=account.email,
+        newsletter_subscribed=account.newsletter_subscribed,
+        stripe_customer_id=account.stripe_customer_id,
+        is_super_admin=account.is_super_admin,
+        subscription_status=account.subscription_status,
+        subscription_active=account.has_active_subscription
+    )

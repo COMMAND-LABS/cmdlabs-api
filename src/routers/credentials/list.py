@@ -7,7 +7,7 @@ with them (directly or via an access group). Each item carries ``is_owner``,
 UI can split them into "My Credentials" / "Shared with me" sections.
 """
 from typing import List
-from fastapi import APIRouter, HTTPException, status, Request
+from fastapi import APIRouter, Request
 from sqlalchemy import or_
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
 from src.db.models import (
@@ -19,7 +19,6 @@ from src.db.models import (
 from src.services import access
 from src.services.credential_access import get_accessible_credential_ids
 from .models import CredentialResponse
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 router = APIRouter()
@@ -36,66 +35,60 @@ async def list_credentials(
     List all credentials the authenticated user can access (owned + shared).
     Returns metadata only (no decrypted secrets, even for shared credentials).
     """
-    try:
-        account_id = account_id_from_claims(jwt)
-        ensure_account(db, account_id)
+    account_id = account_id_from_claims(jwt)
+    ensure_account(db, account_id)
 
-        # IDs shared with the caller (excludes owned).
-        shared_ids = get_accessible_credential_ids(db, account_id)
+    # IDs shared with the caller (excludes owned).
+    shared_ids = get_accessible_credential_ids(db, account_id)
 
-        if shared_ids:
-            credentials = (
-                db.query(Credential)
-                .filter(
-                    or_(
-                        Credential.account_id == account_id,
-                        Credential.id.in_(shared_ids),
-                    )
+    if shared_ids:
+        credentials = (
+            db.query(Credential)
+            .filter(
+                or_(
+                    Credential.account_id == account_id,
+                    Credential.id.in_(shared_ids),
                 )
-                .order_by(Credential.id.desc())
-                .all()
             )
-        else:
-            credentials = (
-                db.query(Credential)
-                .filter(Credential.account_id == account_id)
-                .order_by(Credential.id.desc())
-                .all()
-            )
-
-        # The caller's default credential ids (one per type) for is_default tagging.
-        default_ids = {
-            r[0]
-            for r in db.query(CredentialDefault.credential_id)
-            .filter(CredentialDefault.account_id == account_id)
+            .order_by(Credential.id.desc())
             .all()
-        }
+        )
+    else:
+        credentials = (
+            db.query(Credential)
+            .filter(Credential.account_id == account_id)
+            .order_by(Credential.id.desc())
+            .all()
+        )
 
-        # Build shared_label for credentials NOT owned by the caller. Prefer a
-        # direct-share label ("Shared by <owner email>"); fall back to the group
-        # name(s) the caller reached it through.
-        shared_labels = _build_shared_labels(db, account_id, shared_ids) if shared_ids else {}
+    # The caller's default credential ids (one per type) for is_default tagging.
+    default_ids = {
+        r[0]
+        for r in db.query(CredentialDefault.credential_id)
+        .filter(CredentialDefault.account_id == account_id)
+        .all()
+    }
 
-        return [
-            CredentialResponse(
-                id=cred.id,
-                credential_type=cred.credential_type,
-                auth_type=cred.auth_type or "api_key",
-                credential_name=cred.credential_name,
-                created_at=cred.created_at.isoformat(),
-                updated_at=cred.updated_at.isoformat(),
-                credential_metadata=cred.credential_metadata,
-                is_owner=(cred.account_id == account_id),
-                is_default=(cred.id in default_ids),
-                shared_label=(None if cred.account_id == account_id else shared_labels.get(cred.id)),
-            )
-            for cred in credentials
-        ]
+    # Build shared_label for credentials NOT owned by the caller. Prefer a
+    # direct-share label ("Shared by <owner email>"); fall back to the group
+    # name(s) the caller reached it through.
+    shared_labels = _build_shared_labels(db, account_id, shared_ids) if shared_ids else {}
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[ERROR LISTING CREDENTIALS]")
+    return [
+        CredentialResponse(
+            id=cred.id,
+            credential_type=cred.credential_type,
+            auth_type=cred.auth_type or "api_key",
+            credential_name=cred.credential_name,
+            created_at=cred.created_at.isoformat(),
+            updated_at=cred.updated_at.isoformat(),
+            credential_metadata=cred.credential_metadata,
+            is_owner=(cred.account_id == account_id),
+            is_default=(cred.id in default_ids),
+            shared_label=(None if cred.account_id == account_id else shared_labels.get(cred.id)),
+        )
+        for cred in credentials
+    ]
 
 
 def _build_shared_labels(db, account_id: int, shared_ids: set) -> dict:

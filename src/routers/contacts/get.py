@@ -7,7 +7,6 @@ from src.services.org_scope import tenant_predicate
 from src.db.models import Contact
 
 from .models import ContactResponse
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 router = APIRouter()
@@ -21,21 +20,15 @@ async def get_contact(
     org: org_dependency,
     request: Request,
 ):
-    try:
-        account_id = account_id_from_claims(auth)
-        account = ensure_account(db, account_id)
+    account_id = account_id_from_claims(auth)
+    account = ensure_account(db, account_id)
 
-        contact = db.query(Contact).filter(
-            Contact.id == contact_id,
-            tenant_predicate(Contact, org),
-        ).first()
+    contact = db.query(Contact).filter(
+        Contact.id == contact_id,
+        tenant_predicate(Contact, org),
+    ).first()
 
-        if not contact:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+    if not contact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
 
-        return contact
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[GET CONTACT]")
+    return contact

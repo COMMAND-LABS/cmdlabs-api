@@ -86,65 +86,57 @@ async def create_session(
     request: Request
 ):
     """Create a new chat session"""
-    try:
-        account_id = account_id_from_claims(jwt)
+    account_id = account_id_from_claims(jwt)
 
-        # Verify the caller can access the requested agent
-        if sessionData.agentId and not can_access_agent(
-            db, account_id, sessionData.agentId, org_id=org.org_id
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You don't have access to this agent"
-            )
-
-        # Contact ownership gate: a session may only be bound to a contact the
-        # caller's account owns. This is the layer-2 control that makes the
-        # contact binding a trustworthy scope (404, not 403, to avoid leaking
-        # the existence of other accounts' contact ids).
-        if sessionData.contactId is not None:
-            owned_contact = db.query(Contact).filter(
-                Contact.id == sessionData.contactId,
-                tenant_predicate(Contact, org),
-            ).first()
-            if not owned_contact:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Contact not found"
-                )
-
-        # Generate a new UUID for the session
-        session_uuid = str(uuid.uuid4())
-
-        # Create the session
-        new_session = ChatSession(
-            session_id=session_uuid,
-            agent_id=sessionData.agentId,
-            account_id=jwt['id'],
-            title=sessionData.title,
-            contact_id=sessionData.contactId
+    # Verify the caller can access the requested agent
+    if sessionData.agentId and not can_access_agent(
+        db, account_id, sessionData.agentId, org_id=org.org_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have access to this agent"
         )
 
-        db.add(new_session)
-        db.commit()
-        db.refresh(new_session)
+    # Contact ownership gate: a session may only be bound to a contact the
+    # caller's account owns. This is the layer-2 control that makes the
+    # contact binding a trustworthy scope (404, not 403, to avoid leaking
+    # the existence of other accounts' contact ids).
+    if sessionData.contactId is not None:
+        owned_contact = db.query(Contact).filter(
+            Contact.id == sessionData.contactId,
+            tenant_predicate(Contact, org),
+        ).first()
+        if not owned_contact:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Contact not found"
+            )
 
-        return {
-            "id": new_session.id,
-            "sessionId": new_session.session_id,
-            "agentId": new_session.agent_id,
-            "accountId": new_session.account_id,
-            "createdAt": new_session.created_at,
-            "title": new_session.title,
-            "contactId": new_session.contact_id
-        }
-    except HTTPException:
-        # Intentional 4xx (agent-access 403, contact-ownership 404) must not be
-        # remapped to 500 by the generic DB error handler.
-        raise
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[OPERATION]")
+    # Generate a new UUID for the session
+    session_uuid = str(uuid.uuid4())
+
+    # Create the session
+    new_session = ChatSession(
+        session_id=session_uuid,
+        agent_id=sessionData.agentId,
+        account_id=jwt['id'],
+        title=sessionData.title,
+        contact_id=sessionData.contactId
+    )
+
+    db.add(new_session)
+    db.commit()
+    db.refresh(new_session)
+
+    return {
+        "id": new_session.id,
+        "sessionId": new_session.session_id,
+        "agentId": new_session.agent_id,
+        "accountId": new_session.account_id,
+        "createdAt": new_session.created_at,
+        "title": new_session.title,
+        "contactId": new_session.contact_id
+    }
 
 @router.get("/sessions", response_model=ChatSessionListResponse)
 @limiter.limit("30/minute")
@@ -273,11 +265,6 @@ async def get_session(
         return response_data
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid session ID format")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[OPERATION]")
-
 @router.patch("/sessions/{session_id}", response_model=ChatSessionResponse)
 @limiter.limit("30/minute")
 async def update_session(
@@ -299,45 +286,39 @@ async def update_session(
     is a title-only UPDATE and the sessions list invites several in a row.
     """
     try:
-        try:
-            session_uuid = uuid.UUID(session_id)
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid session ID format"
-            )
+        session_uuid = uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid session ID format"
+        )
 
-        session = db.query(ChatSession).filter(
-            ChatSession.session_id == session_uuid,
-            ChatSession.account_id == jwt['id']
-        ).first()
+    session = db.query(ChatSession).filter(
+        ChatSession.session_id == session_uuid,
+        ChatSession.account_id == jwt['id']
+    ).first()
 
-        if not session:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Session not found"
-            )
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found"
+        )
 
-        title = payload.title.strip() if payload.title is not None else None
-        session.title = title or None
+    title = payload.title.strip() if payload.title is not None else None
+    session.title = title or None
 
-        db.commit()
-        db.refresh(session)
+    db.commit()
+    db.refresh(session)
 
-        return {
-            "id": session.id,
-            "sessionId": session.session_id,
-            "agentId": session.agent_id,
-            "accountId": session.account_id,
-            "createdAt": session.created_at,
-            "title": session.title,
-            "contactId": session.contact_id
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[UPDATE SESSION]")
+    return {
+        "id": session.id,
+        "sessionId": session.session_id,
+        "agentId": session.agent_id,
+        "accountId": session.account_id,
+        "createdAt": session.created_at,
+        "title": session.title,
+        "contactId": session.contact_id
+    }
 
 @router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
 @limiter.limit("10/minute")
@@ -367,12 +348,6 @@ async def delete_session(
         return None
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid session ID format")
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[OPERATION]")
-
 @router.delete("/sessions/{session_id}/messages", status_code=status.HTTP_204_NO_CONTENT)
 @limiter.limit("10/minute")
 async def clear_session_messages(
@@ -384,36 +359,30 @@ async def clear_session_messages(
 ):
     """Clear all messages from a session without deleting the session itself"""
     try:
-        try:
-            session_uuid = uuid.UUID(session_id)
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, 
-                detail="Invalid session ID format"
-            )
+        session_uuid = uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Invalid session ID format"
+        )
         
-        session = db.query(ChatSession).filter(
-            ChatSession.session_id == session_uuid,
-            ChatSession.account_id == jwt['id']
-        ).first()
+    session = db.query(ChatSession).filter(
+        ChatSession.session_id == session_uuid,
+        ChatSession.account_id == jwt['id']
+    ).first()
         
-        if not session:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, 
-                detail="Session not found"
-            )
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="Session not found"
+        )
         
-        deleted_count = db.query(ChatMessage).filter(
-            ChatMessage.chat_session_id == session.id
-        ).delete()
+    deleted_count = db.query(ChatMessage).filter(
+        ChatMessage.chat_session_id == session.id
+    ).delete()
         
-        db.commit()
+    db.commit()
         
-        logger.info("[CLEAR MESSAGES] Deleted %d messages from session %s", deleted_count, session_id)
+    logger.info("[CLEAR MESSAGES] Deleted %d messages from session %s", deleted_count, session_id)
         
-        return None
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[CLEAR MESSAGES]")
+    return None

@@ -81,11 +81,6 @@ async def create_agent(
             config=agent.config
         )
 
-    except HTTPException:
-        raise
     except ValueError as e:
         db.rollback()
         raise handle_db_error(e, "[CREATE AGENT VALUE ERROR]")
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[ERROR CREATING AGENT]")

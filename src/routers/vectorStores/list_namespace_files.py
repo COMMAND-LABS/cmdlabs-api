@@ -29,7 +29,6 @@ from src.db.models import VectorDbIngestionLog
 from src.deps import org_dependency, account_id_from_claims, db_dependency, ensure_account, jwt_dependency
 from src.services.vector_store_access import authorize_vector_store
 from src.rate_limit import limiter
-from src.utils.errors import handle_db_error
 from .helpers import get_pinecone_api_key_for_index
 from .models import NamespaceFile, NamespaceFilesResponse
 
@@ -325,83 +324,77 @@ async def list_namespace_files(
     owner_account_id: int | None = None,
 ):
     """List the files in a namespace with per-file vector counts."""
+    caller_account_id = account_id_from_claims(jwt)
+    # Resolve the KB owner (self, or the owner of a shared KB). Read access.
+    account_id = authorize_vector_store(db, caller_account_id, index_name, owner_account_id, require_write=False, org_id=org.org_id)
+    ensure_account(db, account_id)
+    api_key = get_pinecone_api_key_for_index(db, account_id, index_name)
+    pc = Pinecone(api_key=api_key)
+
     try:
-        caller_account_id = account_id_from_claims(jwt)
-        # Resolve the KB owner (self, or the owner of a shared KB). Read access.
-        account_id = authorize_vector_store(db, caller_account_id, index_name, owner_account_id, require_write=False, org_id=org.org_id)
-        ensure_account(db, account_id)
-        api_key = get_pinecone_api_key_for_index(db, account_id, index_name)
-        pc = Pinecone(api_key=api_key)
+        index = pc.Index(index_name)
+        stats = index.describe_index_stats()
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="An unexpected error occurred. Please try again.",
+        )
 
-        try:
-            index = pc.Index(index_name)
-            stats = index.describe_index_stats()
-        except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="An unexpected error occurred. Please try again.",
-            )
+    ns_info = (stats.get("namespaces", {}) or {}).get(namespace)
+    total = ns_info.get("vector_count", 0) if ns_info else 0
 
-        ns_info = (stats.get("namespaces", {}) or {}).get(namespace)
-        total = ns_info.get("vector_count", 0) if ns_info else 0
+    cache_key = (account_id, index_name, namespace, total)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
 
-        cache_key = (account_id, index_name, namespace, total)
-        cached = _cache_get(cache_key)
-        if cached is not None:
-            return cached
+    if total == 0:
+        resp = NamespaceFilesResponse(
+            index_name=index_name,
+            namespace=namespace,
+            total_vectors=0,
+            scanned_vectors=0,
+            truncated=False,
+            source="pinecone",
+            files=[],
+        )
+        _cache_put(cache_key, resp)
+        return resp
 
-        if total == 0:
-            resp = NamespaceFilesResponse(
-                index_name=index_name,
-                namespace=namespace,
-                total_vectors=0,
-                scanned_vectors=0,
-                truncated=False,
-                source="pinecone",
-                files=[],
-            )
-            _cache_put(cache_key, resp)
-            return resp
-
-        # Oversized namespace → skip the slow scan, use the approximate fallback.
-        if total > SCAN_CAP:
-            aggs = files_from_ingestion_log(db, account_id, index_name, namespace)
-            resp = NamespaceFilesResponse(
-                index_name=index_name,
-                namespace=namespace,
-                total_vectors=total,
-                scanned_vectors=0,
-                truncated=True,
-                source="ingestion_log",
-                files=_aggs_to_files(aggs),
-            )
-            _cache_put(cache_key, resp)
-            return resp
-
-        try:
-            aggs, scanned, truncated = scan_namespace_file_counts(index, namespace)
-            source = "pinecone"
-        except Exception as scan_err:
-            logger.warning(
-                "[LIST NAMESPACE FILES] live scan failed, falling back to log: %s",
-                scan_err,
-            )
-            aggs = files_from_ingestion_log(db, account_id, index_name, namespace)
-            scanned, truncated, source = 0, False, "ingestion_log"
-
+    # Oversized namespace → skip the slow scan, use the approximate fallback.
+    if total > SCAN_CAP:
+        aggs = files_from_ingestion_log(db, account_id, index_name, namespace)
         resp = NamespaceFilesResponse(
             index_name=index_name,
             namespace=namespace,
             total_vectors=total,
-            scanned_vectors=scanned,
-            truncated=truncated,
-            source=source,
+            scanned_vectors=0,
+            truncated=True,
+            source="ingestion_log",
             files=_aggs_to_files(aggs),
         )
         _cache_put(cache_key, resp)
         return resp
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[LIST NAMESPACE FILES]")
+    try:
+        aggs, scanned, truncated = scan_namespace_file_counts(index, namespace)
+        source = "pinecone"
+    except Exception as scan_err:
+        logger.warning(
+            "[LIST NAMESPACE FILES] live scan failed, falling back to log: %s",
+            scan_err,
+        )
+        aggs = files_from_ingestion_log(db, account_id, index_name, namespace)
+        scanned, truncated, source = 0, False, "ingestion_log"
+
+    resp = NamespaceFilesResponse(
+        index_name=index_name,
+        namespace=namespace,
+        total_vectors=total,
+        scanned_vectors=scanned,
+        truncated=truncated,
+        source=source,
+        files=_aggs_to_files(aggs),
+    )
+    _cache_put(cache_key, resp)
+    return resp

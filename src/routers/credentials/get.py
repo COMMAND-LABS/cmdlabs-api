@@ -7,7 +7,6 @@ from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensu
 from src.db.models import Credential
 from .encryption import get_credential_value
 from .models import CredentialDetailResponse
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
@@ -58,13 +57,9 @@ async def get_credential(
             credential_metadata=credential.credential_metadata
         )
 
-    except HTTPException:
-        raise
     except ValueError as e:
         logger.error('[CREDENTIALS] ValueError retrieving credential: %s', e)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail='Invalid credential data.',
         )
-    except Exception as e:
-        raise handle_db_error(e, "[ERROR RETRIEVING CREDENTIAL]")

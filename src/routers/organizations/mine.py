@@ -29,7 +29,7 @@ another member.
 """
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from sqlalchemy import func
@@ -38,7 +38,6 @@ from src.config import roles_registry as roles
 from src.db.models import Organization, OrganizationMember
 from src.deps import db_dependency, org_dependency
 from src.rate_limit import limiter
-from src.utils.errors import handle_db_error
 
 router = APIRouter()
 
@@ -70,49 +69,44 @@ class MyOrganizationsResponse(BaseModel):
 @router.get("/mine", response_model=MyOrganizationsResponse)
 @limiter.limit("120/minute")
 async def my_organizations(db: db_dependency, org: org_dependency, request: Request):
-    try:
-        rows = (
-            db.query(Organization, OrganizationMember)
-            .join(OrganizationMember,
-                  OrganizationMember.org_id == Organization.id)
-            .filter(OrganizationMember.account_id == org.account_id)
-            .order_by(Organization.name.asc())
-            .all()
-        )
-        # One count query for the whole list rather than a property per row —
-        # `is_personal` is now "has exactly one member", which is a count.
-        member_counts = dict(
-            db.query(OrganizationMember.org_id,
-                     func.count(OrganizationMember.id))
-              .filter(OrganizationMember.org_id.in_([o.id for o, _ in rows] or [0]))
-              .group_by(OrganizationMember.org_id).all()
-        )
+    rows = (
+        db.query(Organization, OrganizationMember)
+        .join(OrganizationMember,
+              OrganizationMember.org_id == Organization.id)
+        .filter(OrganizationMember.account_id == org.account_id)
+        .order_by(Organization.name.asc())
+        .all()
+    )
+    # One count query for the whole list rather than a property per row —
+    # `is_personal` is now "has exactly one member", which is a count.
+    member_counts = dict(
+        db.query(OrganizationMember.org_id,
+                 func.count(OrganizationMember.id))
+          .filter(OrganizationMember.org_id.in_([o.id for o, _ in rows] or [0]))
+          .group_by(OrganizationMember.org_id).all()
+    )
 
-        # No lookup for the label any more. It used to be a query against
-        # organization_tiers, carefully filtered to the caller's own (org, tier)
-        # pairs so the org's other tiers never entered the process. Roles are
-        # constants, so there is nothing to fetch and nothing to over-fetch.
+    # No lookup for the label any more. It used to be a query against
+    # organization_tiers, carefully filtered to the caller's own (org, tier)
+    # pairs so the org's other tiers never entered the process. Roles are
+    # constants, so there is nothing to fetch and nothing to over-fetch.
 
-        return MyOrganizationsResponse(
-            active_org_id=org.org_id,
-            organizations=[
-                MyOrganization(
-                    id=o.id,
-                    name=o.name,
-                    # From the org's own column. The Organization is already
-                    # joined for the name, so this needs no extra query.
-                    is_owner=(o.owner_account_id == org.account_id),
-                    is_personal=(member_counts.get(o.id, 0) == 1),
-                    is_active=(o.id == org.org_id),
-                    # From the membership row this query was already joining
-                    # and discarding.
-                    role=m.role,
-                    role_label=roles.label(m.role),
-                )
-                for o, m in rows
-            ],
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[MY ORGS]")
+    return MyOrganizationsResponse(
+        active_org_id=org.org_id,
+        organizations=[
+            MyOrganization(
+                id=o.id,
+                name=o.name,
+                # From the org's own column. The Organization is already
+                # joined for the name, so this needs no extra query.
+                is_owner=(o.owner_account_id == org.account_id),
+                is_personal=(member_counts.get(o.id, 0) == 1),
+                is_active=(o.id == org.org_id),
+                # From the membership row this query was already joining
+                # and discarding.
+                role=m.role,
+                role_label=roles.label(m.role),
+            )
+            for o, m in rows
+        ],
+    )

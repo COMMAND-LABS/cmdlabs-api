@@ -157,51 +157,44 @@ async def request_login_code(body: RequestCodeBody, db: db_dependency, request: 
     Creates the account if it doesn't exist, then emails a 6-digit code.
     Always returns 200 to avoid leaking whether the email is registered.
     """
-    try:
-        account = db.query(Account).filter(Account.email == body.email).first()
+    account = db.query(Account).filter(Account.email == body.email).first()
 
-        if not account:
-            account_count = db.query(Account).count()
-            if account_count >= 400:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Account creation is currently limited.",
-                )
-            stripe_customer_id = None
-            try:
-                stripe_customer_id = create_stripe_customer(body.email)
-            except Exception:
-                pass
-
-            account = Account(
-                email=body.email,
-                stripe_customer_id=stripe_customer_id,
+    if not account:
+        account_count = db.query(Account).count()
+        if account_count >= 400:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Account creation is currently limited.",
             )
-            db.add(account)
-            db.flush()
+        stripe_customer_id = None
+        try:
+            stripe_customer_id = create_stripe_customer(body.email)
+        except Exception:
+            pass
 
-            try:
-                usage_credits = UsageCredits(account_id=account.id, amount=1.00)
-                db.add(usage_credits)
-            except Exception:
-                pass
+        account = Account(
+            email=body.email,
+            stripe_customer_id=stripe_customer_id,
+        )
+        db.add(account)
+        db.flush()
 
-            db.commit()
-            db.refresh(account)
+        try:
+            usage_credits = UsageCredits(account_id=account.id, amount=1.00)
+            db.add(usage_credits)
+        except Exception:
+            pass
 
-        code = str(random.randint(10000000, 99999999))
-        account.login_otp = _hash_otp(code)
-        account.login_otp_expires_at = datetime.now(timezone.utc) + timedelta(minutes=OTP_TTL_MINUTES)
         db.commit()
+        db.refresh(account)
 
-        background_tasks.add_task(send_login_code_email_ses, account.email, code)
-        return {"detail": "Code sent"}
+    code = str(random.randint(10000000, 99999999))
+    account.login_otp = _hash_otp(code)
+    account.login_otp_expires_at = datetime.now(timezone.utc) + timedelta(minutes=OTP_TTL_MINUTES)
+    db.commit()
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[REQUEST CODE]")
+    background_tasks.add_task(send_login_code_email_ses, account.email, code)
+    return {"detail": "Code sent"}
 
 @router.post("/verify-code")
 @limiter.limit("10/minute")

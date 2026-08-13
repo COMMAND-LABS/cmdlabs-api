@@ -7,7 +7,6 @@ from src.deps import org_dependency, db_dependency, auth_dependency, account_id_
 from src.services.org_scope import tenant_predicate
 from src.db.models import Contact, CareerTimeline
 
-from src.utils.errors import handle_db_error
 from src.services.crm_vector_service import delete_vector
 from src.rate_limit import limiter
 
@@ -24,37 +23,30 @@ async def delete_career_timeline_entry(
     org: org_dependency,
     request: Request,
 ):
+    account_id = account_id_from_claims(auth)
+    account = ensure_account(db, account_id)
+
+    contact = db.query(Contact).filter(
+        Contact.id == contact_id,
+        tenant_predicate(Contact, org),
+    ).first()
+
+    if not contact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+
+    entry = db.query(CareerTimeline).filter(
+        CareerTimeline.id == entry_id,
+        CareerTimeline.contact_id == contact_id,
+        tenant_predicate(CareerTimeline, org),
+    ).first()
+
+    if not entry:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Career timeline entry not found")
+
+    db.delete(entry)
+    db.commit()
+
     try:
-        account_id = account_id_from_claims(auth)
-        account = ensure_account(db, account_id)
-
-        contact = db.query(Contact).filter(
-            Contact.id == contact_id,
-            tenant_predicate(Contact, org),
-        ).first()
-
-        if not contact:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
-
-        entry = db.query(CareerTimeline).filter(
-            CareerTimeline.id == entry_id,
-            CareerTimeline.contact_id == contact_id,
-            tenant_predicate(CareerTimeline, org),
-        ).first()
-
-        if not entry:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Career timeline entry not found")
-
-        db.delete(entry)
-        db.commit()
-
-        try:
-            delete_vector(f"career_timeline_{entry_id}")
-        except Exception as vec_err:
-            logger.warning("[DELETE CAREER TIMELINE] vector delete failed: %s", vec_err)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[DELETE CAREER TIMELINE]")
+        delete_vector(f"career_timeline_{entry_id}")
+    except Exception as vec_err:
+        logger.warning("[DELETE CAREER TIMELINE] vector delete failed: %s", vec_err)

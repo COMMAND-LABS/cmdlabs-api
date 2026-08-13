@@ -19,6 +19,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from src.middleware.dynamic_cors import DynamicCORSMiddleware
+from src.middleware.unhandled_errors import UnhandledErrorMiddleware
 from src.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
@@ -97,7 +98,17 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(IntegrityError)
 async def integrity_error_handler(request: Request, exc: IntegrityError):
-    """Catch any SQLAlchemy IntegrityError that bubbles past a router."""
+    """Catch any SQLAlchemy IntegrityError that bubbles past a router.
+
+    These three handlers ARE the error contract for every endpoint. Routers used
+    to repeat a `try/except Exception: raise handle_db_error(...)` tail 150-odd
+    times to produce exactly these responses; the tail is gone, and this is the
+    one place that maps a database failure onto a status code.
+
+    The per-endpoint log tag those tails carried ("[UPDATE CONTACT]") is
+    replaced by request.url.path, which names the same endpoint without having
+    to be kept in sync with the function it sits in.
+    """
     logger.error("[INTEGRITY ERROR] Path: %s | %s: %s", request.url.path, type(exc).__name__, exc)
     orig = getattr(exc, "orig", None)
     msg = str(orig).lower() if orig else str(exc).lower()
@@ -105,6 +116,11 @@ async def integrity_error_handler(request: Request, exc: IntegrityError):
         return JSONResponse(
             status_code=status.HTTP_409_CONFLICT,
             content={"detail": "A record with that value already exists."},
+        )
+    if "foreign key" in msg or "violates foreign" in msg:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": "The request references a resource that does not exist."},
         )
     return JSONResponse(
         status_code=status.HTTP_409_CONFLICT,
@@ -149,6 +165,13 @@ jwt_allowed_origins = [
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Added FIRST, so it sits INNERMOST (add_middleware prepends; last added runs
+# first). An unhandled exception is turned into a 500 response here, which then
+# travels back out through SlowAPI and CORS — so the browser gets the error
+# instead of a CORS failure. See src/middleware/unhandled_errors.py.
+app.add_middleware(UnhandledErrorMiddleware)
+
 app.add_middleware(SlowAPIMiddleware)
 
 # Dynamic CORS middleware (added last, so runs first to handle OPTIONS preflight)

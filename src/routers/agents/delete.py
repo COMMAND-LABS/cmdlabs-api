@@ -53,11 +53,6 @@ async def delete_agent(
 
         return None
         
-    except HTTPException:
-        raise
     except ValueError as e:
         db.rollback()
         raise handle_db_error(e, "[DELETE AGENT VALUE ERROR]")
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[ERROR DELETING AGENT]")

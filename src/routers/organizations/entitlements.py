@@ -8,13 +8,12 @@ next page load with no deploy.
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from src.deps import db_dependency, org_dependency
 from src.rate_limit import limiter
 from src.services import modules, organizations
-from src.utils.errors import handle_db_error
 
 router = APIRouter()
 
@@ -53,21 +52,16 @@ class EntitlementsResponse(BaseModel):
 @router.get("/me/entitlements", response_model=EntitlementsResponse)
 @limiter.limit("120/minute")
 async def my_entitlements(db: db_dependency, org: org_dependency, request: Request):
-    try:
-        return EntitlementsResponse(
-            org_id=org.org_id,
-            role=org.role,
-            is_owner=org.is_owner,
-            is_super_admin=org.is_super_admin,
-            is_personal=organizations.is_solo(db, org.org_id),
-            read_only=org.read_only,
-            grace_ends_at=org.grace_ends_at,
-            plan=org.plan,
-            modules=modules.effective_modules(db, org),
-            ceiling=(modules.ceiling_for(db, org.org_id)
-                     if (org.is_owner or org.is_super_admin) else None),
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[ENTITLEMENTS]")
+    return EntitlementsResponse(
+        org_id=org.org_id,
+        role=org.role,
+        is_owner=org.is_owner,
+        is_super_admin=org.is_super_admin,
+        is_personal=organizations.is_solo(db, org.org_id),
+        read_only=org.read_only,
+        grace_ends_at=org.grace_ends_at,
+        plan=org.plan,
+        modules=modules.effective_modules(db, org),
+        ceiling=(modules.ceiling_for(db, org.org_id)
+                 if (org.is_owner or org.is_super_admin) else None),
+    )

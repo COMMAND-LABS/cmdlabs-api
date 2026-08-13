@@ -64,72 +64,65 @@ async def create_checkout_session(
     first, checkout second — so an abandoned checkout still leaves a real
     account behind rather than losing the lead entirely.
     """
-    try:
-        account_id = account_id_from_claims(jwt)
-        account = ensure_account(db, account_id)
+    account_id = account_id_from_claims(jwt)
+    account = ensure_account(db, account_id)
 
-        if account.has_active_subscription:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="This account already has an active membership",
-            )
+    if account.has_active_subscription:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This account already has an active membership",
+        )
 
-        # Every account gets a Stripe customer at signup, but that call is
-        # best-effort there — create one now if it did not land.
-        if not account.stripe_customer_id:
-            try:
-                account.stripe_customer_id = create_stripe_customer(account.email)
-                db.commit()
-                db.refresh(account)
-            except stripe.error.StripeError as e:
-                db.rollback()
-                raise handle_db_error(e, "[STRIPE ERROR CREATING CUSTOMER]")
-
-        def _open_session() -> dict:
-            return create_subscription_checkout_session(
-                customer_id=account.stripe_customer_id,
-                account_id=account.id,
-                success_url=f"{APP_BASE_URL}{SUCCESS_PATH}",
-                cancel_url=f"{APP_BASE_URL}{CANCEL_PATH}",
-            )
-
+    # Every account gets a Stripe customer at signup, but that call is
+    # best-effort there — create one now if it did not land.
+    if not account.stripe_customer_id:
         try:
-            try:
-                session = _open_session()
-            except stripe.error.StripeError as e:
-                if not _is_missing_customer(e):
-                    raise
-                # The stored customer does not exist in this Stripe account —
-                # deleted in the dashboard, or created under the other mode's
-                # key. Without this, that account could never subscribe again.
-                # Safe to replace: a customer id we cannot resolve holds nothing
-                # we could keep.
-                logger.warning(
-                    "[BILLING] Customer %s missing for account %s — creating a replacement",
-                    account.stripe_customer_id, account.id,
-                )
-                account.stripe_customer_id = create_stripe_customer(account.email)
-                db.commit()
-                db.refresh(account)
-                session = _open_session()
-        except ValueError as e:
-            # No price configured — a deployment problem, not the caller's fault.
-            logger.error("[BILLING] %s", e)
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Memberships are not available right now",
-            )
+            account.stripe_customer_id = create_stripe_customer(account.email)
+            db.commit()
+            db.refresh(account)
         except stripe.error.StripeError as e:
-            raise handle_db_error(e, "[STRIPE ERROR CREATING CHECKOUT SESSION]")
+            db.rollback()
+            raise handle_db_error(e, "[STRIPE ERROR CREATING CUSTOMER]")
 
-        logger.info("[BILLING] Checkout session %s opened for account %s", session["id"], account.id)
-        return CheckoutSessionResponse(checkout_url=session["url"], session_id=session["id"])
+    def _open_session() -> dict:
+        return create_subscription_checkout_session(
+            customer_id=account.stripe_customer_id,
+            account_id=account.id,
+            success_url=f"{APP_BASE_URL}{SUCCESS_PATH}",
+            cancel_url=f"{APP_BASE_URL}{CANCEL_PATH}",
+        )
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[ERROR CREATING CHECKOUT SESSION]")
+    try:
+        try:
+            session = _open_session()
+        except stripe.error.StripeError as e:
+            if not _is_missing_customer(e):
+                raise
+            # The stored customer does not exist in this Stripe account —
+            # deleted in the dashboard, or created under the other mode's
+            # key. Without this, that account could never subscribe again.
+            # Safe to replace: a customer id we cannot resolve holds nothing
+            # we could keep.
+            logger.warning(
+                "[BILLING] Customer %s missing for account %s — creating a replacement",
+                account.stripe_customer_id, account.id,
+            )
+            account.stripe_customer_id = create_stripe_customer(account.email)
+            db.commit()
+            db.refresh(account)
+            session = _open_session()
+    except ValueError as e:
+        # No price configured — a deployment problem, not the caller's fault.
+        logger.error("[BILLING] %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Memberships are not available right now",
+        )
+    except stripe.error.StripeError as e:
+        raise handle_db_error(e, "[STRIPE ERROR CREATING CHECKOUT SESSION]")
+
+    logger.info("[BILLING] Checkout session %s opened for account %s", session["id"], account.id)
+    return CheckoutSessionResponse(checkout_url=session["url"], session_id=session["id"])
 
 
 @router.post("/portal-session", response_model=PortalSessionResponse)
@@ -143,30 +136,24 @@ async def create_portal_session(
     Hand back a Stripe billing-portal URL so a member can change their card or
     cancel. Cancellation comes back to us as a webhook like any other change.
     """
+    account_id = account_id_from_claims(jwt)
+    account = ensure_account(db, account_id)
+
+    if not account.stripe_customer_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No billing account to manage yet",
+        )
+
     try:
-        account_id = account_id_from_claims(jwt)
-        account = ensure_account(db, account_id)
+        portal_url = create_billing_portal_session(
+            account.stripe_customer_id,
+            return_url=f"{APP_BASE_URL}{PORTAL_RETURN_PATH}",
+        )
+    except stripe.error.StripeError as e:
+        raise handle_db_error(e, "[STRIPE ERROR CREATING PORTAL SESSION]")
 
-        if not account.stripe_customer_id:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="No billing account to manage yet",
-            )
-
-        try:
-            portal_url = create_billing_portal_session(
-                account.stripe_customer_id,
-                return_url=f"{APP_BASE_URL}{PORTAL_RETURN_PATH}",
-            )
-        except stripe.error.StripeError as e:
-            raise handle_db_error(e, "[STRIPE ERROR CREATING PORTAL SESSION]")
-
-        return PortalSessionResponse(portal_url=portal_url)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[ERROR CREATING PORTAL SESSION]")
+    return PortalSessionResponse(portal_url=portal_url)
 
 
 @router.get("/subscription", response_model=SubscriptionResponse)
@@ -182,21 +169,15 @@ async def get_subscription_status(
     Read from our own columns rather than by calling Stripe: the webhook keeps
     them current, and entitlement checks should not depend on a live API call.
     """
-    try:
-        account_id = account_id_from_claims(jwt)
-        account = ensure_account(db, account_id)
+    account_id = account_id_from_claims(jwt)
+    account = ensure_account(db, account_id)
 
-        period_end = account.subscription_current_period_end
-        return SubscriptionResponse(
-            status=account.subscription_status,
-            active=account.has_active_subscription,
-            current_period_end=period_end.isoformat() if period_end else None,
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[ERROR RETRIEVING SUBSCRIPTION]")
+    period_end = account.subscription_current_period_end
+    return SubscriptionResponse(
+        status=account.subscription_status,
+        active=account.has_active_subscription,
+        current_period_end=period_end.isoformat() if period_end else None,
+    )
 
 
 @router.post("/downgrade", response_model=SubscriptionResponse)
@@ -217,41 +198,34 @@ async def downgrade_to_free(
 
     Note: unused paid time is NOT refunded. Coming back is a fresh checkout.
     """
+    account_id = account_id_from_claims(jwt)
+    account = ensure_account(db, account_id)
+
+    if not account.stripe_subscription_id or not account.has_active_subscription:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This account does not have an active membership to cancel",
+        )
+
     try:
-        account_id = account_id_from_claims(jwt)
-        account = ensure_account(db, account_id)
+        subscription = cancel_subscription_now(account.stripe_subscription_id)
+    except stripe.error.StripeError as e:
+        raise handle_db_error(e, "[STRIPE ERROR CANCELLING SUBSCRIPTION]")
 
-        if not account.stripe_subscription_id or not account.has_active_subscription:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="This account does not have an active membership to cancel",
-            )
+    # Mirror what Stripe reports. Nothing else to update: this path and
+    # the webhook cannot disagree about paid-ness because neither stores it.
+    account.subscription_status = subscription.get("status") or "canceled"
+    db.commit()
+    db.refresh(account)
 
-        try:
-            subscription = cancel_subscription_now(account.stripe_subscription_id)
-        except stripe.error.StripeError as e:
-            raise handle_db_error(e, "[STRIPE ERROR CANCELLING SUBSCRIPTION]")
-
-        # Mirror what Stripe reports. Nothing else to update: this path and
-        # the webhook cannot disagree about paid-ness because neither stores it.
-        account.subscription_status = subscription.get("status") or "canceled"
-        db.commit()
-        db.refresh(account)
-
-        logger.info(
-            "[BILLING] Account %s cancelled subscription %s -> status %s",
-            account.id, account.stripe_subscription_id,
-            account.subscription_status,
-        )
-        period_end = account.subscription_current_period_end
-        return SubscriptionResponse(
-            status=account.subscription_status,
-            active=account.has_active_subscription,
-            current_period_end=period_end.isoformat() if period_end else None,
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[ERROR CANCELLING SUBSCRIPTION]")
+    logger.info(
+        "[BILLING] Account %s cancelled subscription %s -> status %s",
+        account.id, account.stripe_subscription_id,
+        account.subscription_status,
+    )
+    period_end = account.subscription_current_period_end
+    return SubscriptionResponse(
+        status=account.subscription_status,
+        active=account.has_active_subscription,
+        current_period_end=period_end.isoformat() if period_end else None,
+    )

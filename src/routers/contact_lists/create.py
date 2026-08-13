@@ -6,7 +6,6 @@ from src.deps import org_dependency, db_dependency, auth_dependency, account_id_
 from src.db.models import ContactList
 
 from .models import CreateContactListRequest, ContactListSummaryResponse
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 router = APIRouter()
@@ -20,37 +19,30 @@ async def create_contact_list(
     org: org_dependency,
     request: Request,
 ):
-    try:
-        account_id = account_id_from_claims(auth)
-        account = ensure_account(db, account_id)
+    account_id = account_id_from_claims(auth)
+    account = ensure_account(db, account_id)
 
-        if not request_body.name or not request_body.name.strip():
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="List name cannot be empty")
+    if not request_body.name or not request_body.name.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="List name cannot be empty")
 
-        contact_list = ContactList(
-            org_id=org.org_id,
-            account_id=account_id,
-            name=request_body.name.strip(),
-            description=request_body.description,
-        )
+    contact_list = ContactList(
+        org_id=org.org_id,
+        account_id=account_id,
+        name=request_body.name.strip(),
+        description=request_body.description,
+    )
 
-        db.add(contact_list)
-        db.commit()
-        db.refresh(contact_list)
+    db.add(contact_list)
+    db.commit()
+    db.refresh(contact_list)
 
-        result = ContactListSummaryResponse(
-            id=contact_list.id,
-            account_id=contact_list.account_id,
-            name=contact_list.name,
-            description=contact_list.description,
-            member_count=0,
-            created_at=contact_list.created_at,
-            updated_at=contact_list.updated_at,
-        )
-        return result
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[CREATE CONTACT LIST]")
+    result = ContactListSummaryResponse(
+        id=contact_list.id,
+        account_id=contact_list.account_id,
+        name=contact_list.name,
+        description=contact_list.description,
+        member_count=0,
+        created_at=contact_list.created_at,
+        updated_at=contact_list.updated_at,
+    )
+    return result

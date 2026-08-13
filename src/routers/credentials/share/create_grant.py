@@ -13,7 +13,6 @@ from src.db.models import Credential, AccessGrant
 from src.services import access
 from src.services.access_admin import resolve_grantee, upsert_grant, record_access_event
 from .models import CreateCredentialGrantRequest, CredentialGrantResponse
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 router = APIRouter()
@@ -30,63 +29,57 @@ async def create_credential_grant(
     request: Request,
 ):
     """Share a credential with one other person. Owner only. Use-not-view."""
-    try:
-        account_id = account_id_from_claims(jwt)
+    account_id = account_id_from_claims(jwt)
 
-        credential = db.query(Credential).filter(
-            Credential.id == credential_id,
-            Credential.account_id == account_id,
-        ).first()
-        if not credential:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credential not found")
+    credential = db.query(Credential).filter(
+        Credential.id == credential_id,
+        Credential.account_id == account_id,
+    ).first()
+    if not credential:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credential not found")
 
-        principal_type, principal_id, label = resolve_grantee(
-            db,
-            caller_account_id=account_id,
-            grantee_email=body.granteeEmail,
-        )
+    principal_type, principal_id, label = resolve_grantee(
+        db,
+        caller_account_id=account_id,
+        grantee_email=body.granteeEmail,
+    )
 
-        # Reject duplicate (a grant already exists for this person on this credential).
-        existing = db.query(AccessGrant).filter(
-            AccessGrant.principal_type == principal_type,
-            AccessGrant.principal_id == principal_id,
-            AccessGrant.resource_type == access.CREDENTIAL,
-            AccessGrant.resource_id == credential_id,
-        ).first()
-        if existing:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Credential is already shared with that person")
+    # Reject duplicate (a grant already exists for this person on this credential).
+    existing = db.query(AccessGrant).filter(
+        AccessGrant.principal_type == principal_type,
+        AccessGrant.principal_id == principal_id,
+        AccessGrant.resource_type == access.CREDENTIAL,
+        AccessGrant.resource_id == credential_id,
+    ).first()
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Credential is already shared with that person")
 
-        grant = upsert_grant(
-            db,
-            org_id=org.org_id,
-            principal_type=principal_type,
-            principal_id=principal_id,
-            resource_type=access.CREDENTIAL,
-            resource_id=credential_id,
-            role="use",
-        )
-        record_access_event(
-            db,
-            event_type="create",
-            actor_account_id=account_id,
-            resource_type=access.CREDENTIAL,
-            resource_id=credential_id,
-            principal_type=principal_type,
-            principal_id=principal_id,
-            role="use",
-        )
-        db.commit()
-        db.refresh(grant)
+    grant = upsert_grant(
+        db,
+        org_id=org.org_id,
+        principal_type=principal_type,
+        principal_id=principal_id,
+        resource_type=access.CREDENTIAL,
+        resource_id=credential_id,
+        role="use",
+    )
+    record_access_event(
+        db,
+        event_type="create",
+        actor_account_id=account_id,
+        resource_type=access.CREDENTIAL,
+        resource_id=credential_id,
+        principal_type=principal_type,
+        principal_id=principal_id,
+        role="use",
+    )
+    db.commit()
+    db.refresh(grant)
 
-        return CredentialGrantResponse(
-            id=grant.id,
-            credential_id=credential_id,
-            grantee_account_id=principal_id,
-            label=label,
-            created_at=grant.created_at,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[CREATE CREDENTIAL GRANT]")
+    return CredentialGrantResponse(
+        id=grant.id,
+        credential_id=credential_id,
+        grantee_account_id=principal_id,
+        label=label,
+        created_at=grant.created_at,
+    )

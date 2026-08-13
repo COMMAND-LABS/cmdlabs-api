@@ -36,7 +36,6 @@ from src.db.models import (
 )
 from src.deps import db_dependency, super_admin_dependency
 from src.rate_limit import limiter
-from src.utils.errors import handle_db_error
 
 router = APIRouter()
 
@@ -122,67 +121,62 @@ async def organization_detail(
     it across three round trips invites a UI that shows two of them and forgets
     the third.
     """
-    try:
-        org = _org_or_404(db, org_id)
-        from src.services import modules as modules_service
+    org = _org_or_404(db, org_id)
+    from src.services import modules as modules_service
 
-        entitlement = modules_service.org_entitlement(db, org_id)
-        ceiling = entitlement.ceiling
+    entitlement = modules_service.org_entitlement(db, org_id)
+    ceiling = entitlement.ceiling
 
 
-        # The org's one owner. Everything below asks "is this member that
-        # account?" rather than reading a per-row flag, so this page cannot
-        # disagree with what the org itself says.
-        owner_id = org.owner_account_id
+    # The org's one owner. Everything below asks "is this member that
+    # account?" rather than reading a per-row flag, so this page cannot
+    # disagree with what the org itself says.
+    owner_id = org.owner_account_id
 
-        member_rows = (
-            db.query(OrganizationMember, Account)
-            .join(Account, Account.id == OrganizationMember.account_id)
-            .filter(OrganizationMember.org_id == org_id)
-            .order_by((OrganizationMember.account_id == owner_id).desc(),
-                      Account.email.asc())
-            .all()
+    member_rows = (
+        db.query(OrganizationMember, Account)
+        .join(Account, Account.id == OrganizationMember.account_id)
+        .filter(OrganizationMember.org_id == org_id)
+        .order_by((OrganizationMember.account_id == owner_id).desc(),
+                  Account.email.asc())
+        .all()
+    )
+
+    def _effective(member) -> List[str]:
+        # Mirrors services.modules.effective_modules. Recomputed here from
+        # already-loaded rows rather than called per member, which would be
+        # two queries each; the intersection itself is the same expression.
+        if member.account_id == owner_id:
+            return ceiling
+        return role_registry.modules_for(member.role, ceiling)
+
+    members = [
+        AdminMember(
+            account_id=m.account_id, email=a.email, role=m.role,
+            is_owner=(m.account_id == owner_id), granted_by=m.granted_by,
+            effective_modules=_effective(m), created_at=m.created_at,
         )
+        for m, a in member_rows
+    ]
+    role_counts: dict = {}
+    for m, _ in member_rows:
+        role_counts[m.role] = role_counts.get(m.role, 0) + 1
+    # Modules capped by THIS org's ceiling, so a super admin sees what the
+    # role opens here rather than what it would open on a richer plan.
+    roles = [
+        AdminRole(role=key, label=role_registry.label(key),
+                  modules=role_registry.modules_for(key, ceiling),
+                  member_count=role_counts.get(key, 0))
+        for key in role_registry.ROLE_KEYS
+    ]
 
-        def _effective(member) -> List[str]:
-            # Mirrors services.modules.effective_modules. Recomputed here from
-            # already-loaded rows rather than called per member, which would be
-            # two queries each; the intersection itself is the same expression.
-            if member.account_id == owner_id:
-                return ceiling
-            return role_registry.modules_for(member.role, ceiling)
-
-        members = [
-            AdminMember(
-                account_id=m.account_id, email=a.email, role=m.role,
-                is_owner=(m.account_id == owner_id), granted_by=m.granted_by,
-                effective_modules=_effective(m), created_at=m.created_at,
-            )
-            for m, a in member_rows
-        ]
-        role_counts: dict = {}
-        for m, _ in member_rows:
-            role_counts[m.role] = role_counts.get(m.role, 0) + 1
-        # Modules capped by THIS org's ceiling, so a super admin sees what the
-        # role opens here rather than what it would open on a richer plan.
-        roles = [
-            AdminRole(role=key, label=role_registry.label(key),
-                      modules=role_registry.modules_for(key, ceiling),
-                      member_count=role_counts.get(key, 0))
-            for key in role_registry.ROLE_KEYS
-        ]
-
-        return OrganizationDetailResponse(
-            id=org.id, name=org.name,
-            is_personal=(len(members) == 1),
-            billing_state=_billing_state(db, org),
-            plan=entitlement.plan,
-            modules=ceiling,
-            pinned_plan=org.pinned_plan,
-            owner_account_id=org.owner_account_id, created_at=org.created_at,
-            members=members, roles=roles,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[ADMIN ORG DETAIL]")
+    return OrganizationDetailResponse(
+        id=org.id, name=org.name,
+        is_personal=(len(members) == 1),
+        billing_state=_billing_state(db, org),
+        plan=entitlement.plan,
+        modules=ceiling,
+        pinned_plan=org.pinned_plan,
+        owner_account_id=org.owner_account_id, created_at=org.created_at,
+        members=members, roles=roles,
+    )

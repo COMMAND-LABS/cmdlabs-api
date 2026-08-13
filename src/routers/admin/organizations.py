@@ -16,7 +16,6 @@ from src.rate_limit import limiter
 from src.services import audit
 from src.config import roles_registry as roles
 from src.services.organizations import GRANTED_BY_GRANT
-from src.utils.errors import handle_db_error
 
 router = APIRouter()
 
@@ -73,41 +72,36 @@ async def set_plan(
     time, so the change takes effect on the next request and no membership row is
     left holding a grant that could re-widen access later.
     """
-    try:
-        if body.plan is not None and not plans.is_valid(body.plan):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"plan must be one of {plans.PLAN_KEYS}, or null")
+    if body.plan is not None and not plans.is_valid(body.plan):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"plan must be one of {plans.PLAN_KEYS}, or null")
 
-        org = db.query(Organization).filter(Organization.id == org_id).first()
-        if not org:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                detail="Organization not found")
+    org = db.query(Organization).filter(Organization.id == org_id).first()
+    if not org:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="Organization not found")
 
-        before = org.pinned_plan
-        org.pinned_plan = body.plan
+    before = org.pinned_plan
+    org.pinned_plan = body.plan
 
-        if before != org.pinned_plan:
-            audit.record_org_change(
-                db,
-                event_type=audit.ORG_CEILING_CHANGE,
-                org_id=org.id,
-                detail=(f"pinned to the {org.pinned_plan} plan"
-                        if org.pinned_plan
-                        else "released — follows the owner's subscription"),
-                actor_account_id=super_admin.id,
-            )
-        db.commit()
+    if before != org.pinned_plan:
+        audit.record_org_change(
+            db,
+            event_type=audit.ORG_CEILING_CHANGE,
+            org_id=org.id,
+            detail=(f"pinned to the {org.pinned_plan} plan"
+                    if org.pinned_plan
+                    else "released — follows the owner's subscription"),
+            actor_account_id=super_admin.id,
+        )
+    db.commit()
 
-        from src.services import modules as modules_service
+    from src.services import modules as modules_service
 
-        entitlement = modules_service.org_entitlement(db, org.id)
-        return PlanResponse(org_id=org.id, pinned_plan=org.pinned_plan,
-                            plan=entitlement.plan, modules=entitlement.ceiling)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[SET PLAN]")
+    entitlement = modules_service.org_entitlement(db, org.id)
+    return PlanResponse(org_id=org.id, pinned_plan=org.pinned_plan,
+                        plan=entitlement.plan, modules=entitlement.ceiling)
 
 
 @router.post("/organizations/{org_id}/join", status_code=status.HTTP_201_CREATED,
@@ -131,49 +125,44 @@ async def join_organization(
     had looked. Joining leaves two marks: a row in their member list, and a
     super_admin.join entry naming who and when.
     """
-    try:
-        org = db.query(Organization).filter(Organization.id == org_id).first()
-        if not org:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                detail="Organization not found")
+    org = db.query(Organization).filter(Organization.id == org_id).first()
+    if not org:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="Organization not found")
 
-        existing = (db.query(OrganizationMember)
-                      .filter(OrganizationMember.org_id == org_id,
-                              OrganizationMember.account_id == super_admin.id).first())
-        if existing:
-            return JoinResponse(org_id=org.id, org_name=org.name,
-                                account_id=super_admin.id, role=existing.role)
-
-        member = OrganizationMember(
-            org_id=org.id,
-            account_id=super_admin.id,
-            # The smallest role, and every org has it because roles are
-            # platform-wide constants. This used to name a dedicated 'org_owner'
-            # tier that existed in exactly ONE organization, so joining any
-            # other org wrote a tier_key pointing at nothing. Nothing read it —
-            # super admins bypass the module layer — but a dangling reference
-            # behind a bypass is a bad thing to leave lying around, and the
-            # value was claiming an ownership it never conferred. Constants
-            # remove the failure mode rather than fixing an instance of it.
-            role=roles.DEFAULT_ROLE,
-            granted_by=GRANTED_BY_GRANT,
-            # A super admin joining does NOT become an owner of the customer's
-            # org — they join to read, not to take over. Structural now:
-            # ownership is organizations.owner_account_id, and joining does not
-            # touch it.
-        )
-        db.add(member)
-        audit.record_membership(
-            db, event_type=audit.SUPER_ADMIN_JOIN, org_id=org.id,
-            account_id=super_admin.id, role=roles.DEFAULT_ROLE,
-            actor_account_id=super_admin.id,
-        )
-        db.commit()
-        db.refresh(member)
-
+    existing = (db.query(OrganizationMember)
+                  .filter(OrganizationMember.org_id == org_id,
+                          OrganizationMember.account_id == super_admin.id).first())
+    if existing:
         return JoinResponse(org_id=org.id, org_name=org.name,
-                            account_id=super_admin.id, role=member.role)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[SUPER ADMIN JOIN ORG]")
+                            account_id=super_admin.id, role=existing.role)
+
+    member = OrganizationMember(
+        org_id=org.id,
+        account_id=super_admin.id,
+        # The smallest role, and every org has it because roles are
+        # platform-wide constants. This used to name a dedicated 'org_owner'
+        # tier that existed in exactly ONE organization, so joining any
+        # other org wrote a tier_key pointing at nothing. Nothing read it —
+        # super admins bypass the module layer — but a dangling reference
+        # behind a bypass is a bad thing to leave lying around, and the
+        # value was claiming an ownership it never conferred. Constants
+        # remove the failure mode rather than fixing an instance of it.
+        role=roles.DEFAULT_ROLE,
+        granted_by=GRANTED_BY_GRANT,
+        # A super admin joining does NOT become an owner of the customer's
+        # org — they join to read, not to take over. Structural now:
+        # ownership is organizations.owner_account_id, and joining does not
+        # touch it.
+    )
+    db.add(member)
+    audit.record_membership(
+        db, event_type=audit.SUPER_ADMIN_JOIN, org_id=org.id,
+        account_id=super_admin.id, role=roles.DEFAULT_ROLE,
+        actor_account_id=super_admin.id,
+    )
+    db.commit()
+    db.refresh(member)
+
+    return JoinResponse(org_id=org.id, org_name=org.name,
+                        account_id=super_admin.id, role=member.role)

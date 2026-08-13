@@ -39,7 +39,6 @@ from src.db.models import (
 from src.deps import db_dependency, named_org_dependency
 from src.rate_limit import limiter
 from src.services import modules
-from src.utils.errors import handle_db_error
 
 router = APIRouter()
 
@@ -236,10 +235,5 @@ async def organization_overview(db: db_dependency, org: named_org_dependency,
     one the caller happens to be acting in. Owning org A must not open the
     console of org B you are merely a member of.
     """
-    try:
-        _require_owner(org)
-        return _overview_payload(db, org)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[ORG OVERVIEW]")
+    _require_owner(org)
+    return _overview_payload(db, org)

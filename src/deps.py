@@ -25,10 +25,19 @@ def get_db():
     The engine is configured with pool_pre_ping=True and a checkout
     event listener that validates SSL connections, so stale connections
     are automatically replaced before being handed out.
+
+    The rollback is what lets routers stop writing `except Exception:
+    db.rollback()` around every write. It is belt-and-braces — close()
+    already discards an open transaction on return to the pool — but it
+    puts the guarantee in ONE place that cannot be forgotten, and it runs
+    before the session is handed back rather than as a side effect of it.
     """
     db = SessionLocal()
     try:
         yield db
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 

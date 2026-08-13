@@ -53,7 +53,6 @@ from src.db.models import Course
 from src.deps import db_dependency, org_dependency
 from src.rate_limit import limiter
 from src.services.org_scope import tenant_predicate
-from src.utils.errors import handle_db_error
 
 logger = logging.getLogger(__name__)
 
@@ -271,13 +270,8 @@ async def list_courses(db: db_dependency, org: org_dependency, request: Request)
     the browser can show somebody on the free plan what premium contains
     without the list becoming a way to read it.
     """
-    try:
-        return [_to_response(c, org.plan)
-                for c in _query(db, org, browsing=True).all()]
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[LIST COURSES]")
+    return [_to_response(c, org.plan)
+            for c in _query(db, org, browsing=True).all()]
 
 
 @router.get("/{course_key}", response_model=CourseResponse)
@@ -290,19 +284,14 @@ async def get_course(course_key: str, db: db_dependency, org: org_dependency,
     when the course does not exist here at all — so the response cannot be used
     to enumerate which courses another organization has bought.
     """
-    try:
-        course = _visible(db, org).filter(
-            Course.course_key == course_key.strip().lower()).first()
-        if not course:
-            logger.info("[COURSE] account %s (org %s) denied %s",
-                        org.account_id, org.org_id, course_key)
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                detail="Not found")
-        return _to_response(course, org.plan)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[GET COURSE]")
+    course = _visible(db, org).filter(
+        Course.course_key == course_key.strip().lower()).first()
+    if not course:
+        logger.info("[COURSE] account %s (org %s) denied %s",
+                    org.account_id, org.org_id, course_key)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="Not found")
+    return _to_response(course, org.plan)
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=CourseResponse)
@@ -310,38 +299,32 @@ async def get_course(course_key: str, db: db_dependency, org: org_dependency,
 async def create_course(body: CreateCourseRequest, db: db_dependency,
                         org: org_dependency, request: Request):
     """Enable a course for this organization."""
-    try:
-        _require_owner(org)
-        _assert_may_publish(db, org, body.visibility)
+    _require_owner(org)
+    _assert_may_publish(db, org, body.visibility)
 
-        existing = (db.query(Course)
-                      .filter(Course.org_id == org.org_id,
-                              Course.course_key == body.course_key).first())
-        if existing:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="That course is already enabled for this organization.")
+    existing = (db.query(Course)
+                  .filter(Course.org_id == org.org_id,
+                          Course.course_key == body.course_key).first())
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="That course is already enabled for this organization.")
 
-        course = Course(
-            org_id=org.org_id,
-            course_key=body.course_key,
-            title=body.title.strip(),
-            description=body.description,
-            sort_order=body.sort_order,
-            visibility=body.visibility,
-            required_plan=body.required_plan,
-            # Attribution, never tenancy.
-            account_id=org.account_id,
-        )
-        db.add(course)
-        db.commit()
-        db.refresh(course)
-        return _to_response(course, org.plan)
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[CREATE COURSE]")
+    course = Course(
+        org_id=org.org_id,
+        course_key=body.course_key,
+        title=body.title.strip(),
+        description=body.description,
+        sort_order=body.sort_order,
+        visibility=body.visibility,
+        required_plan=body.required_plan,
+        # Attribution, never tenancy.
+        account_id=org.account_id,
+    )
+    db.add(course)
+    db.commit()
+    db.refresh(course)
+    return _to_response(course, org.plan)
 
 
 @router.put("/{course_id}", response_model=CourseResponse)
@@ -351,33 +334,27 @@ async def update_course(course_id: int, body: UpdateCourseRequest,
     """Retitle or reorder. `course_key` is deliberately absent — it is the
     stable identifier grants are written against, so changing it would revoke
     access silently."""
-    try:
-        # Both directions: publishing a course INTO the catalog needs the
-        # right, and so does editing one that is already there — otherwise the
-        # check would only guard the create path.
-        _assert_may_publish(db, org, body.visibility)
-        course = _writable_course(db, org, course_id)
-        _assert_may_publish(db, org, course.visibility)
+    # Both directions: publishing a course INTO the catalog needs the
+    # right, and so does editing one that is already there — otherwise the
+    # check would only guard the create path.
+    _assert_may_publish(db, org, body.visibility)
+    course = _writable_course(db, org, course_id)
+    _assert_may_publish(db, org, course.visibility)
 
-        if body.title is not None:
-            course.title = body.title.strip()
-        if body.description is not None:
-            course.description = body.description
-        if body.sort_order is not None:
-            course.sort_order = body.sort_order
-        if body.visibility is not None:
-            course.visibility = body.visibility
-        if body.required_plan is not None:
-            course.required_plan = body.required_plan
+    if body.title is not None:
+        course.title = body.title.strip()
+    if body.description is not None:
+        course.description = body.description
+    if body.sort_order is not None:
+        course.sort_order = body.sort_order
+    if body.visibility is not None:
+        course.visibility = body.visibility
+    if body.required_plan is not None:
+        course.required_plan = body.required_plan
 
-        db.commit()
-        db.refresh(course)
-        return _to_response(course, org.plan)
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[UPDATE COURSE]")
+    db.commit()
+    db.refresh(course)
+    return _to_response(course, org.plan)
 
 
 @router.delete("/{course_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -390,12 +367,6 @@ async def delete_course(course_id: int, db: db_dependency, org: org_dependency,
     can open it is its container's membership — so deleting the row is the
     whole revocation.
     """
-    try:
-        course = _writable_course(db, org, course_id)
-        db.delete(course)
-        db.commit()
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise handle_db_error(e, "[DELETE COURSE]")
+    course = _writable_course(db, org, course_id)
+    db.delete(course)
+    db.commit()

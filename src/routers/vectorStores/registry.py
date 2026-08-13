@@ -16,14 +16,13 @@ row on the way past, which is exactly how a GET starts writing.
 import logging
 from typing import List
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from src.db.models import VectorStore
 from src.deps import db_dependency, org_dependency
 from src.rate_limit import limiter
 from src.services.org_scope import resource_predicate
-from src.utils.errors import handle_db_error
 
 logger = logging.getLogger(__name__)
 
@@ -48,18 +47,13 @@ async def registered_indexes(db: db_dependency, org: org_dependency,
     ownership and the server re-checks it, so this is a hint for the UI, never
     the decision.
     """
-    try:
-        rows = (db.query(VectorStore.id, VectorStore.index_name,
-                         VectorStore.owner_account_id)
-                  .filter(resource_predicate(VectorStore, org))
-                  .order_by(VectorStore.index_name.asc())
-                  .all())
-        return [
-            RegisteredIndex(id=vid, index_name=name,
-                            is_owner=(owner == org.account_id))
-            for vid, name, owner in rows
-        ]
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[LIST KB REGISTRY]")
+    rows = (db.query(VectorStore.id, VectorStore.index_name,
+                     VectorStore.owner_account_id)
+              .filter(resource_predicate(VectorStore, org))
+              .order_by(VectorStore.index_name.asc())
+              .all())
+    return [
+        RegisteredIndex(id=vid, index_name=name,
+                        is_owner=(owner == org.account_id))
+        for vid, name, owner in rows
+    ]

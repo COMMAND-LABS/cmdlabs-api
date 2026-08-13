@@ -3,13 +3,12 @@ List email events endpoint — with filters suited for a metrics dashboard.
 """
 from typing import List, Optional
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, status, Request, Query
+from fastapi import APIRouter, Request, Query
 from sqlalchemy import func as sqlfunc
 from src.deps import db_dependency, auth_dependency, account_id_from_claims
 from src.db.models import EmailEvent
 
 from .models import EmailEventResponse, EmailEventStatsResponse
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 router = APIRouter()
@@ -40,58 +39,52 @@ async def list_email_events(
     Designed for dashboard queries — filter by event type, contact, campaign,
     provider, date range, or recipient address.
     """
-    try:
-        account_id = account_id_from_claims(auth)
+    account_id = account_id_from_claims(auth)
 
-        query = db.query(EmailEvent).filter(EmailEvent.account_id == account_id)
+    query = db.query(EmailEvent).filter(EmailEvent.account_id == account_id)
 
-        if event_type:
-            query = query.filter(EmailEvent.event_type == event_type)
+    if event_type:
+        query = query.filter(EmailEvent.event_type == event_type)
 
-        if contact_id is not None:
-            query = query.filter(EmailEvent.contact_id == contact_id)
+    if contact_id is not None:
+        query = query.filter(EmailEvent.contact_id == contact_id)
 
-        if campaign_id is not None:
-            query = query.filter(EmailEvent.campaign_id == campaign_id)
+    if campaign_id is not None:
+        query = query.filter(EmailEvent.campaign_id == campaign_id)
 
-        if tool_approval_id is not None:
-            query = query.filter(EmailEvent.tool_approval_id == tool_approval_id)
+    if tool_approval_id is not None:
+        query = query.filter(EmailEvent.tool_approval_id == tool_approval_id)
 
-        if credential_id is not None:
-            query = query.filter(EmailEvent.credential_id == credential_id)
+    if credential_id is not None:
+        query = query.filter(EmailEvent.credential_id == credential_id)
 
-        if sender_domain:
-            query = query.filter(EmailEvent.sender_domain == sender_domain.strip().lower())
+    if sender_domain:
+        query = query.filter(EmailEvent.sender_domain == sender_domain.strip().lower())
 
-        if primary_recipient:
-            query = query.filter(EmailEvent.primary_recipient == primary_recipient.strip().lower())
+    if primary_recipient:
+        query = query.filter(EmailEvent.primary_recipient == primary_recipient.strip().lower())
 
-        if message_id:
-            query = query.filter(EmailEvent.message_id == message_id)
+    if message_id:
+        query = query.filter(EmailEvent.message_id == message_id)
 
-        if provider:
-            query = query.filter(EmailEvent.provider == provider)
+    if provider:
+        query = query.filter(EmailEvent.provider == provider)
 
-        if from_date:
-            query = query.filter(EmailEvent.created_at >= from_date)
+    if from_date:
+        query = query.filter(EmailEvent.created_at >= from_date)
 
-        if to_date:
-            query = query.filter(EmailEvent.created_at <= to_date)
+    if to_date:
+        query = query.filter(EmailEvent.created_at <= to_date)
 
-        events = (
-            query
-            .order_by(EmailEvent.created_at.desc())
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
+    events = (
+        query
+        .order_by(EmailEvent.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
 
-        return events
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[LIST EMAIL EVENTS]")
+    return events
 
 @router.get("/stats", response_model=EmailEventStatsResponse)
 @limiter.limit("60/minute")
@@ -110,49 +103,43 @@ async def get_email_event_stats(
     Supports the same date/campaign/approval/credential filters as the list endpoint.
     Useful for summary cards on the email metrics dashboard.
     """
-    try:
-        account_id = account_id_from_claims(auth)
+    account_id = account_id_from_claims(auth)
 
-        query = db.query(
-            EmailEvent.event_type,
-            sqlfunc.count(EmailEvent.id).label("count"),
-        ).filter(EmailEvent.account_id == account_id)
+    query = db.query(
+        EmailEvent.event_type,
+        sqlfunc.count(EmailEvent.id).label("count"),
+    ).filter(EmailEvent.account_id == account_id)
 
-        if campaign_id is not None:
-            query = query.filter(EmailEvent.campaign_id == campaign_id)
+    if campaign_id is not None:
+        query = query.filter(EmailEvent.campaign_id == campaign_id)
 
-        if tool_approval_id is not None:
-            query = query.filter(EmailEvent.tool_approval_id == tool_approval_id)
+    if tool_approval_id is not None:
+        query = query.filter(EmailEvent.tool_approval_id == tool_approval_id)
 
-        if credential_id is not None:
-            query = query.filter(EmailEvent.credential_id == credential_id)
+    if credential_id is not None:
+        query = query.filter(EmailEvent.credential_id == credential_id)
 
-        if from_date:
-            query = query.filter(EmailEvent.created_at >= from_date)
+    if from_date:
+        query = query.filter(EmailEvent.created_at >= from_date)
 
-        if to_date:
-            query = query.filter(EmailEvent.created_at <= to_date)
+    if to_date:
+        query = query.filter(EmailEvent.created_at <= to_date)
 
-        rows = query.group_by(EmailEvent.event_type).all()
+    rows = query.group_by(EmailEvent.event_type).all()
 
-        counts = {row.event_type: row.count for row in rows}
-        total = sum(counts.values())
+    counts = {row.event_type: row.count for row in rows}
+    total = sum(counts.values())
 
-        return EmailEventStatsResponse(
-            send=counts.get("send", 0),
-            send_to_ses=counts.get("send_to_ses", 0),
-            delivery=counts.get("delivery", 0),
-            open=counts.get("open", 0),
-            bounce=counts.get("bounce", 0),
-            complaint=counts.get("complaint", 0),
-            click=counts.get("click", 0),
-            attempting=counts.get("attempting", 0),
-            failed=counts.get("failed", 0),
-            other=counts.get("other", 0),
-            total=total,
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_db_error(e, "[EMAIL EVENT STATS]")
+    return EmailEventStatsResponse(
+        send=counts.get("send", 0),
+        send_to_ses=counts.get("send_to_ses", 0),
+        delivery=counts.get("delivery", 0),
+        open=counts.get("open", 0),
+        bounce=counts.get("bounce", 0),
+        complaint=counts.get("complaint", 0),
+        click=counts.get("click", 0),
+        attempting=counts.get("attempting", 0),
+        failed=counts.get("failed", 0),
+        other=counts.get("other", 0),
+        total=total,
+    )
