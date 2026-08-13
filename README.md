@@ -85,6 +85,12 @@ gcloud secrets add-iam-policy-binding <ENV_VAR_NAME_HERE> \
 
 ## CICD
 
+The pre-commit hook runs the test suite before every commit — inside the
+running `cmdlabs-api` dev container when it's up (Python 3.12 + docker-network
+hostnames, matching prod), otherwise on the host via `uv run` (`.python-version`
+pins 3.12; the test-db hostname is rewritten to localhost, where docker-compose
+maps the test pg on port 5432).
+
 SKIP_TESTS=1 git commit -m "..." — skips the test suite explicitly
 git commit --no-verify -m "..." — the standard git flag that skips all hooks
 
