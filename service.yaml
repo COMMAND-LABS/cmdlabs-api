@@ -5,6 +5,17 @@ metadata:
 spec:
   template:
     spec:
+      # This service now also runs the agent runtime (SSE streams), so both
+      # values below are explicit rather than platform defaults:
+      #
+      # containerConcurrency: long-lived SSE streams each hold a request slot
+      # for their whole duration. 60 (vs the default 80) makes a stream pile-up
+      # trigger scale-out earlier, keeping fast CRUD latency flat while
+      # streaming load grows.
+      containerConcurrency: 60
+      # timeoutSeconds: an SSE agent run with tool calls can comfortably exceed
+      # Cloud Run's 300s default, which would cut the stream mid-response.
+      timeoutSeconds: 900
       containers:
         - image: us-central1-docker.pkg.dev/command-labs/cmdlabs-api/cmdlabs-api
           resources:
