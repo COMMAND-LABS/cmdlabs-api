@@ -54,6 +54,11 @@ from .routers import feedback
 from .routers import admin
 from .routers import organizations
 from .routers import courses
+from .agent_runtime.router import (
+    agent_stream_router,
+    contact_chat_router,
+    pdf_to_faq_router,
+)
 
 app = FastAPI(
     docs_url="/api/docs",
@@ -188,6 +193,11 @@ _ROUTERS = [
     (courses.router, "/api/courses", ["Courses"]),
     (organizations.router, "/api/organizations", ["Organizations"]),
     (admin.router, "/api/admin", ["Platform Admin"]),
+    # Agent runtime (formerly cmdlabs-agent-api) — SSE streaming endpoints.
+    # Same paths the standalone service served, so cutover is a base-URL swap.
+    (agent_stream_router, "/api/agents", ["Agent Runtime"]),
+    (contact_chat_router, "/api/contact-chat", ["Contact Chat"]),
+    (pdf_to_faq_router, "/api/pdf-to-faq", ["PDF to FAQ"]),
 ]
 
 # Module gating is derived from the registry rather than hand-written on each

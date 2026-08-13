@@ -37,6 +37,10 @@ os.environ.setdefault("GCS_BUCKET_NAME", "test-bucket")
 os.environ.setdefault("PUBSUB_TOPIC", "test-topic")
 os.environ.setdefault("GCP_PROJECT_ID", "test-project")
 os.environ.setdefault("CREDENTIAL_ENCRYPTION_KEY", "dGVzdC1lbmNyeXB0aW9uLWtleS0zMi1ieXRlcw==")
+# The credentials cipher reads the PLURAL name and now fails fast when the key
+# is missing/invalid (no silent ephemeral-key fallback), so tests must provide
+# a valid Fernet key even outside the dev container.
+os.environ.setdefault("CREDENTIALS_ENCRYPTION_KEY", "dGVzdC1lbmNyeXB0aW9uLWtleS0zMi1ieXRlcyEhISE=")
 
 from datetime import timedelta, datetime, timezone
 from typing import Generator

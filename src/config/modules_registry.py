@@ -57,13 +57,20 @@ MODULES = (
     # but not Knowledge Bases.
     Module("agents", "Agents", ("/api/agents", "/api/tool-approvals", "/api/files")),
     Module("agent_chat", "Agent Chat", ("/api/chat-sessions",)),
-    Module("contacts", "Contacts", ("/api/contacts",)),
+    # /api/contact-chat is the contact-scoped CRM chat stream (agent runtime).
+    # Its tools are contact CRM tools, so it is gated with Contacts. (In the
+    # standalone agent-api it was route-ungated; tool entitlement was the only
+    # server-side gate.)
+    Module("contacts", "Contacts", ("/api/contacts", "/api/contact-chat")),
     Module("contact_lists", "Contact Lists", ("/api/contact-lists",)),
     Module("companies", "Companies", ("/api/companies",)),
     Module("deals", "Deals", ("/api/deals",)),
     Module("prompts", "Prompts", ("/api/prompts",)),
+    # /api/pdf-to-faq generates the Q&A pairs that feed knowledge-base QnA
+    # ingestion, so it is gated with the KB module. (Route-ungated in the
+    # standalone agent-api.)
     Module("knowledge_bases", "Knowledge Bases",
-           ("/api/vector-stores", "/api/similarity-search")),
+           ("/api/vector-stores", "/api/similarity-search", "/api/pdf-to-faq")),
     Module("access", "Access", ("/api/access-groups", "/api/access")),
     Module("credentials", "Credentials", ("/api/credentials",)),
     Module("email_templates", "Email Templates", ("/api/email-templates",)),
