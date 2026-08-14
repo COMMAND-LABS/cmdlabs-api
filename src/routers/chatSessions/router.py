@@ -24,9 +24,17 @@ class ChatSessionCreate(BaseModel):
     contactId: Optional[int] = None
 
 class ChatSessionUpdate(BaseModel):
+    """Partial update — each field applies only when the client sent it.
+
+    A PATCH carrying just agentId must not clear the title (and vice versa),
+    so the handler reads model_fields_set rather than treating None as a value.
+    """
     # Bounded so a pathological title cannot break the sidebar / list rendering.
     # The column itself is an unbounded String; this is the product-level cap.
     title: Optional[str] = Field(default=None, max_length=200)
+    # Switch which agent this session runs. The session (and its transcript)
+    # stays; only the agent answering the next turn changes.
+    agentId: Optional[int] = None
 
 def to_camel(s: str) -> str:
     parts = s.split('_')
@@ -263,12 +271,16 @@ async def update_session(
     org: org_dependency,
     request: Request
 ):
-    """Rename a session.
+    """Rename a session and/or switch the agent it runs.
 
     Titles are what make a session list human-readable — without one the UI can
     only fall back to "Agent #<id>". A blank/whitespace-only title clears the
     field back to NULL so the fallback chain takes over again, rather than
     persisting an empty string that renders as a nameless row.
+
+    Switching agentId keeps the session and its transcript; only the agent
+    answering from the next turn on changes. Gated exactly like session
+    creation: the caller must be able to access the new agent in this org.
 
     Rate-limited above the other mutations (30/min vs 10/min) because renaming
     is a title-only UPDATE and the sessions list invites several in a row.
@@ -292,8 +304,32 @@ async def update_session(
             detail="Session not found"
         )
 
-    title = payload.title.strip() if payload.title is not None else None
-    session.title = title or None
+    if 'agentId' in payload.model_fields_set:
+        if payload.agentId is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="agentId cannot be cleared; send a new agent id"
+            )
+        # Contact-bound sessions have no DB agent by design: the contact-chat
+        # endpoint injects a code-defined config, and the contact binding is a
+        # server-trusted tool scope. Re-pointing one at an arbitrary agent
+        # would silently drop that scope.
+        if session.contact_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Contact-bound sessions cannot switch agents"
+            )
+        account_id = account_id_from_claims(jwt)
+        if not can_access_agent(db, account_id, payload.agentId, org_id=org.org_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have access to this agent"
+            )
+        session.agent_id = payload.agentId
+
+    if 'title' in payload.model_fields_set:
+        title = payload.title.strip() if payload.title is not None else None
+        session.title = title or None
 
     db.commit()
     db.refresh(session)
