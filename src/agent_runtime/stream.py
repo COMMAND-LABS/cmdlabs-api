@@ -84,9 +84,32 @@ async def generator(
         yield sse_error("Internal server error", str(e))
 
 
+def _extract_text(content) -> str:
+    """Plain text from a stream chunk: OpenAI sends strings, Anthropic sends
+    content-block lists. Mirrors the UI's extractTextContent."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+    return ""
+
+
 async def _stream_agent_executor(ctx: AgentContext):
     user_message_stored = False
     tool_calls = []
+
+    # A multi-step turn is several model calls with tool calls in between.
+    # AgentExecutor's final output is only the LAST model response, so
+    # persisting that (as this used to) silently drops every earlier segment
+    # — text the user already watched stream. Track the turn ourselves:
+    # `segments` holds each model call's text; `blocks` records the
+    # presentation order (text segments interleaved with toolCalls indices).
+    segments: list[str] = []
+    blocks: list[dict] = []
 
     async for event in ctx.agent_executor.astream_events(
         {"input": ctx.agent_input},
@@ -100,19 +123,48 @@ async def _stream_agent_executor(ctx: AgentContext):
 
         elif kind == "on_chain_end":
             if event["name"] == "Agent":
-                content = event["data"].get("output", {}).get("output", "")
-                persist_ai_message(ctx.chat_session_id, content, tool_calls if tool_calls else None)
-                yield sse_event("on_chain_end", data=content, tool_calls=tool_calls if tool_calls else None)
+                # Materialize the turn: drop empty segments, join the rest.
+                final_blocks: list[dict] = []
+                for block in blocks:
+                    if block["kind"] == "text":
+                        text = segments[block["segment"]].strip()
+                        if text:
+                            final_blocks.append({"kind": "text", "content": text})
+                    else:
+                        final_blocks.append(block)
+                content = "\n\n".join(
+                    b["content"] for b in final_blocks if b["kind"] == "text"
+                )
+                if not content:
+                    # No streamed text captured (unexpected provider shape) —
+                    # fall back to the executor's final output as before.
+                    content = event["data"].get("output", {}).get("output", "")
+                    final_blocks = []
+                # blocks only earn their keep when there is an order to keep:
+                # a single text segment renders from `content` alone.
+                interleaved = final_blocks if len(final_blocks) > 1 else None
+                persist_ai_message(ctx.chat_session_id, content,
+                                   tool_calls if tool_calls else None,
+                                   blocks=interleaved)
+                yield sse_event("on_chain_end", data=content,
+                                tool_calls=tool_calls if tool_calls else None,
+                                blocks=interleaved)
 
         elif kind == "on_chat_model_start":
             if not user_message_stored:
                 persist_user_message(ctx.chat_session_id, ctx.prompt, ctx.pdf_filename, ctx.attachment_ref)
                 user_message_stored = True
+            # Each model call opens a new text segment — this event firing
+            # again after tool activity IS the segment boundary.
+            segments.append("")
+            blocks.append({"kind": "text", "segment": len(segments) - 1})
             yield sse_event("on_chat_model_start", tool_calls=tool_calls)
 
         elif kind == "on_chat_model_stream":
             content = event["data"]["chunk"].content
             if content:
+                if segments:
+                    segments[-1] += _extract_text(content)
                 yield sse_event("on_chat_model_stream", data=content)
 
         elif kind == "on_tool_start":
@@ -147,6 +199,7 @@ async def _stream_agent_executor(ctx: AgentContext):
                 )
                 if formatted:
                     tool_calls.append(formatted)
+                    blocks.append({"kind": "tool", "index": len(tool_calls) - 1})
                 yield sse_event("on_tool_end", data=formatted, run_id=run_id)
 
 

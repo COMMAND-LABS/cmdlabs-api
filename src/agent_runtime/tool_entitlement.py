@@ -55,6 +55,9 @@ TOOL_MODULES = {
     # Ungated: bound to a credential grant rather than to a product module.
     "dbTableRead": None,
     "dbTableWrite": None,
+    # Ungated: pure internal reasoning — touches no data, needs no credential.
+    # Must work for every caller, or multi-step turns silently degrade to one.
+    "think": None,
 }
 
 

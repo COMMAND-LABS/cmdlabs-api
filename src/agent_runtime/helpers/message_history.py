@@ -111,6 +111,7 @@ def store_ai_message(
     content: str,
     tool_calls: list[dict[str, Any]] | None = None,
     agent_name: str | None = None,
+    blocks: list[dict[str, Any]] | None = None,
     validate: bool = True,
 ) -> ChatMessage | None:
     """
@@ -138,6 +139,12 @@ def store_ai_message(
 
         if tool_calls:
             message_obj["toolCalls"] = tool_calls
+
+        # Ordered presentation blocks for multi-segment turns. `content`
+        # always carries the full text regardless, so a reader that ignores
+        # blocks loses layout, never words.
+        if blocks:
+            message_obj["blocks"] = blocks
 
         # Validate message against schema v2
         if validate:

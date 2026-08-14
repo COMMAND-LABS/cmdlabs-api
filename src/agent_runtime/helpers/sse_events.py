@@ -23,6 +23,7 @@ def sse_event(
     data: Any | None = None,
     tool_calls: list[dict[str, Any]] | None = None,
     run_id: str | None = None,
+    blocks: list[dict[str, Any]] | None = None,
 ) -> str:
     """
     Create a standard SSE event frame (``data: <json>\\n\\n``).
@@ -46,6 +47,9 @@ def sse_event(
 
     if tool_calls:  # only include when non-empty
         payload["toolCalls"] = tool_calls
+
+    if blocks:  # ordered presentation blocks (multi-segment turns)
+        payload["blocks"] = blocks
 
     return _frame(payload)
 

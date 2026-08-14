@@ -46,6 +46,9 @@ class ChatMessageResponse(BaseModel):
     content: str
     createdAt: datetime
     toolCalls: Optional[List[dict]] = None
+    # Ordered presentation blocks for multi-step turns (text segments
+    # interleaved with toolCalls indices); None for single-segment messages.
+    blocks: Optional[List[dict]] = None
 
 class ChatSessionResponse(BaseModel):
     id: int
@@ -237,11 +240,17 @@ async def get_session(
                 "content": _normalize_content(msg.message['content']),
                 "createdAt": msg.created_at
             }
-            
+
             # Include toolCalls if present in the message
             if 'toolCalls' in msg.message and msg.message['toolCalls']:
                 message_data["toolCalls"] = msg.message['toolCalls']
-            
+
+            # Ordered presentation blocks (multi-step turns): text segments
+            # interleaved with toolCalls indices. content still carries the
+            # full text, so consumers without block support lose nothing.
+            if msg.message.get('blocks'):
+                message_data["blocks"] = msg.message['blocks']
+
             return message_data
 
         messages = [convert_shape_of_message(m) for m in messages]

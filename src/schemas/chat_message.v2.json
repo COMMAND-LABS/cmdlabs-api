@@ -19,6 +19,32 @@
       "type": "string",
       "description": "The text content of the message."
     },
+    "blocks": {
+      "type": "array",
+      "description": "Ordered presentation blocks for AI messages produced over multiple model calls (multi-step turns). Text blocks carry one model segment's text; tool blocks reference an entry in toolCalls by index, preserving where in the turn the call happened. Absent for single-segment messages — content alone renders those. content always holds the full text (all segments joined), so consumers ignorant of blocks lose layout, never words.",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "content"],
+            "properties": {
+              "kind": { "type": "string", "const": "text" },
+              "content": { "type": "string" }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "index"],
+            "properties": {
+              "kind": { "type": "string", "const": "tool" },
+              "index": { "type": "integer", "minimum": 0 }
+            }
+          }
+        ]
+      }
+    },
     "toolCalls": {
       "type": "array",
       "description": "Array of tool calls made during the generation of this message. Only present for AI messages. Each tool call has a different schema depending on the tool type.",

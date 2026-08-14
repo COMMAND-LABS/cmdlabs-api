@@ -48,6 +48,7 @@ from src.services.credential_access import (
     load_credential_for_use,
 )
 from src.agent_runtime.tools import CredentialError, create_tools_from_agent_config
+from src.agent_runtime.tools.think import THINK_SYSTEM_GUIDANCE
 from src.utils.pdf_to_images import (
     build_document_message,
     build_image_message,
@@ -344,6 +345,11 @@ async def prepare_agent_context(
         raise AgentSetupError("Invalid tool configuration", str(exc)) from exc
 
     # --- Prompt template + agent ---
+    # The model only takes multiple steps if invited to: without this nudge,
+    # most models answer in one shot and the think tool sits unused.
+    if any(t.name == "think" for t in tools):
+        system_prompt = system_prompt + THINK_SYSTEM_GUIDANCE
+
     if tools:
         prompt_template = ChatPromptTemplate.from_messages([
             ("system", system_prompt),
@@ -480,10 +486,10 @@ def persist_user_message(
         db.close()
 
 
-def persist_ai_message(chat_session_id: int, content: str, tool_calls=None):
+def persist_ai_message(chat_session_id: int, content: str, tool_calls=None, blocks=None):
     """Write AI message using a short-lived DB session."""
     db = SessionLocal()
     try:
-        store_ai_message(db, chat_session_id, content, tool_calls)
+        store_ai_message(db, chat_session_id, content, tool_calls, blocks=blocks)
     finally:
         db.close()

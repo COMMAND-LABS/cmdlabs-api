@@ -98,6 +98,9 @@
       ],
       "oneOf": [
         {
+          "$ref": "#/$defs/thinkTool"
+        },
+        {
           "$ref": "#/$defs/vectorSearchTool"
         },
         {
@@ -131,6 +134,24 @@
           "$ref": "#/$defs/sendTxtEmailWithGoogleSmtpTool"
         }
       ]
+    },
+    "thinkTool": {
+      "type": "object",
+      "description": "Internal reasoning tool. No external access, no credential — calling it lets the agent take multiple reasoning steps within one turn.",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "think"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
     },
     "vectorSearchTool": {
       "type": "object",
