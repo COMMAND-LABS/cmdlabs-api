@@ -56,6 +56,10 @@ MODULES = (
     # took chat file upload and citation links away from anybody with Agents
     # but not Knowledge Bases.
     Module("agents", "Agents", ("/api/agents", "/api/tool-approvals", "/api/files")),
+    # Direct LLM completions — the model without an agent around it. No
+    # sessions, no tools, no persistence; the client holds the transcript and
+    # sends it whole on every turn, so the only route is the stream itself.
+    Module("llm_chat", "LLM Chat", ("/api/llm-chat",)),
     Module("agent_chat", "Agent Chat", ("/api/chat-sessions",)),
     # /api/contact-chat is the contact-scoped CRM chat stream (agent runtime).
     # Its tools are contact CRM tools, so it is gated with Contacts. (In the

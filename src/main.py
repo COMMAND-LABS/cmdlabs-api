@@ -55,6 +55,7 @@ from .routers import feedback
 from .routers import admin
 from .routers import organizations
 from .routers import courses
+from .routers import llm_chat
 from .agent_runtime.router import (
     agent_stream_router,
     contact_chat_router,
@@ -214,6 +215,8 @@ _ROUTERS = [
     (tracking.router, "/t", ["Tracking"]),
     (feedback.router, "/api/feedback", ["Feedback"]),
     (courses.router, "/api/courses", ["Courses"]),
+    # Direct LLM completions (no agent). Premium-gated via the llm_chat module.
+    (llm_chat.router, "/api/llm-chat", ["LLM Chat"]),
     (organizations.router, "/api/organizations", ["Organizations"]),
     (admin.router, "/api/admin", ["Platform Admin"]),
     # Agent runtime (formerly cmdlabs-agent-api) — SSE streaming endpoints.
