@@ -57,6 +57,7 @@ from .routers import organizations
 from .routers import app_settings
 from .routers import courses
 from .routers import llm_chat
+from .routers import memory_chat
 from .agent_runtime.router import (
     agent_stream_router,
     contact_chat_router,
@@ -219,6 +220,8 @@ _ROUTERS = [
     (courses.router, "/api/courses", ["Courses"]),
     # Direct LLM completions (no agent). Premium-gated via the llm_chat module.
     (llm_chat.router, "/api/llm-chat", ["LLM Chat"]),
+    # The context-window teaching demo — llm-chat plus a server-held transcript.
+    (memory_chat.router, "/api/memory-chat", ["Memory Chat"]),
     (organizations.router, "/api/organizations", ["Organizations"]),
     (admin.router, "/api/admin", ["Platform Admin"]),
     # Agent runtime (formerly cmdlabs-agent-api) — SSE streaming endpoints.

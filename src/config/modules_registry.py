@@ -65,6 +65,10 @@ MODULES = (
     # sessions, no tools, no persistence; the client holds the transcript and
     # sends it whole on every turn, so the only route is the stream itself.
     Module("llm_chat", "LLM Chat", ("/api/llm-chat",)),
+    # The context-window teaching demo: llm-chat plus a server-held transcript.
+    # Its own key (not llm_chat's) so plans/roles can offer one without the
+    # other — a demo surface and a work surface are different promises.
+    Module("memory_chat", "Memory Chat", ("/api/memory-chat",)),
     Module("agent_chat", "Agent Chat", ("/api/chat-sessions",)),
     # /api/contact-chat is the contact-scoped CRM chat stream (agent runtime).
     # Its tools are contact CRM tools, so it is gated with Contacts. (In the

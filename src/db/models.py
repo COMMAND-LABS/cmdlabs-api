@@ -538,6 +538,35 @@ class AppSettings(Base):
         return f'<AppSettings account={self.account_id} org={self.org_id} default_agent={self.default_agent_id}>'
 
 
+class MemoryChatMessage(Base):
+    """
+    One turn of the Memory Chat demo — a teaching surface that shows how an
+    LLM's context window fills up and forgets.
+
+    ONE ROLLING CONVERSATION PER (account, org), not sessions: the demo's
+    whole point is a single transcript that outlives the browser (persistence)
+    while the model's view of it shrinks (the window). Every prompt and every
+    completion is appended here; NOTHING is deleted when the window drops old
+    turns — "dropped" means excluded from what is sent to the model, and the
+    row surviving that is what makes the lesson visible. Deletion happens only
+    through the explicit clear endpoint.
+    """
+    __tablename__ = 'memory_chat_messages'
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey('accounts.id', ondelete='CASCADE'), nullable=False, index=True)
+    org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'), nullable=False, index=True)
+    # 'human' | 'ai' — the UI's Message roles, same vocabulary as llm-chat.
+    role = Column(String(10), nullable=False)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
+
+    account = relationship('Account', foreign_keys=[account_id])
+
+    def __repr__(self):
+        return f'<MemoryChatMessage {self.id} ({self.role}) account={self.account_id}>'
+
+
 class ApiKeyStatus(str, Enum):
     """Enumeration of API key statuses."""
     ACTIVE = "active"

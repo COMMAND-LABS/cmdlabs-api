@@ -118,7 +118,7 @@ PLAN_LABELS = {
 # consults them at all.
 PLAN_MODULES = {
     PLAN_FREE: ("home", "courses", "prompts", "settings"),
-    PLAN_PREMIUM: ("home", "agents", "llm_chat", "agent_chat", "contacts", "contact_lists",
+    PLAN_PREMIUM: ("home", "agents", "llm_chat", "memory_chat", "agent_chat", "contacts", "contact_lists",
                    "companies", "deals", "prompts", "knowledge_bases", "access",
                    "credentials", "email_templates", "email_campaigns",
                    "courses", "analytics", "settings"),
