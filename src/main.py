@@ -54,6 +54,7 @@ from .routers import tracking
 from .routers import feedback
 from .routers import admin
 from .routers import organizations
+from .routers import app_settings
 from .routers import courses
 from .routers import llm_chat
 from .agent_runtime.router import (
@@ -200,6 +201,7 @@ _ROUTERS = [
     (agents.router, "/api/agents", ["Agents"]),
     (apiKeys.router, "/api/api-keys", ["API Keys"]),
     (accounts.router, "/api/accounts", ["Accounts"]),
+    (app_settings.router, "/api/app-settings", ["App Settings"]),
     (prompts.router, "/api/prompts", ["Prompts"]),
     (access_audit.router, "/api/access", ["Access Audit"]),
     (contacts.router, "/api/contacts", ["Contacts"]),

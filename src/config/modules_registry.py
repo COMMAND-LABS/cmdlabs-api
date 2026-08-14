@@ -34,6 +34,11 @@ class Module:
 ALWAYS_ALLOWED_PREFIXES = (
     "/api/auth",
     "/api/accounts",
+    # Your own per-org preferences (default agent, TTS voice). Same reasoning
+    # as /api/accounts — and Agent Chat reads the default agent from here, so
+    # gating it under the Settings module would break a page gated by a
+    # DIFFERENT module for any role that lacks Settings.
+    "/api/app-settings",
     "/api/billing",
     "/api/logins",
     "/api/feedback",

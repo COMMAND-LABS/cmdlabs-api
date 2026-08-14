@@ -505,6 +505,39 @@ class CredentialDefault(Base):
         return f'<CredentialDefault account={self.account_id} type={self.credential_type} -> credential={self.credential_id}>'
 
 
+class AppSettings(Base):
+    """
+    Per-account, per-org application preferences (the App Settings page).
+
+    Scoped to (account_id, org_id) rather than account alone because the
+    default agent points at an org-scoped resource: the same account acting in
+    two orgs must be able to hold a different default in each, and a default
+    must never leak across the tenant boundary.
+
+    default_agent_id is SET NULL (not CASCADE) on agent deletion: the settings
+    row carries other preferences that should survive the agent going away.
+    """
+    __tablename__ = 'app_settings'
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey('accounts.id', ondelete='CASCADE'), nullable=False, index=True)
+    org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'), nullable=False, index=True)
+    default_agent_id = Column(Integer, ForeignKey('agents.id', ondelete='SET NULL'), nullable=True, index=True)
+    elevenlabs_voice_id = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('account_id', 'org_id', name='uq_app_settings_account_org'),
+    )
+
+    account = relationship('Account', foreign_keys=[account_id])
+    default_agent = relationship('Agent', foreign_keys=[default_agent_id])
+
+    def __repr__(self):
+        return f'<AppSettings account={self.account_id} org={self.org_id} default_agent={self.default_agent_id}>'
+
+
 class ApiKeyStatus(str, Enum):
     """Enumeration of API key statuses."""
     ACTIVE = "active"
