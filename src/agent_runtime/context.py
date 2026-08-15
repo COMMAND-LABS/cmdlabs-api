@@ -47,6 +47,11 @@ from src.services.credential_access import (
     can_use_credential,
     load_credential_for_use,
 )
+from src.agent_runtime.skills import (
+    build_skills_guidance,
+    create_load_skill_tool,
+    load_agent_skills,
+)
 from src.agent_runtime.tools import CredentialError, create_tools_from_agent_config
 from src.agent_runtime.tools.think import THINK_SYSTEM_GUIDANCE
 from src.utils.pdf_to_images import (
@@ -343,6 +348,19 @@ async def prepare_agent_context(
         raise AgentSetupError("Tool configuration error", str(exc)) from exc
     except ValueError as exc:
         raise AgentSetupError("Invalid tool configuration", str(exc)) from exc
+
+    # --- Skills (progressive disclosure) ---
+    # Index in the prompt, body behind the load_skill tool — see
+    # agent_runtime/skills.py. Placed before the tools/no-tools branch below
+    # because attaching a skill is what may give a previously toolless agent
+    # its first tool, which flips it onto the AgentExecutor path.
+    # build_skills_guidance returns pre-escaped text (the same {→{{ treatment
+    # the base prompt got above); the override path (contact-chat) has no
+    # agent row and therefore no skills.
+    attached_skills = load_agent_skills(db, agent, org_scope)
+    if attached_skills:
+        system_prompt = system_prompt + build_skills_guidance(attached_skills)
+        tools = tools + [create_load_skill_tool(attached_skills)]
 
     # --- Prompt template + agent ---
     # The model only takes multiple steps if invited to: without this nudge,

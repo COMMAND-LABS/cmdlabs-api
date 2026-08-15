@@ -62,6 +62,9 @@ _CREATED_BY_COLUMN = {
 # something one account hands to another.
 AGENT = 'agent'
 VECTOR_STORE = 'vector_store'
+# Skills are resource-shaped (org_id + visibility) from day one so per-person
+# grants are an additive change; no AccessGrant names a skill yet.
+SKILL = 'skill'
 
 
 def created_by_column(model):

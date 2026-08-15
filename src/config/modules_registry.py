@@ -79,6 +79,12 @@ MODULES = (
     Module("companies", "Companies", ("/api/companies",)),
     Module("deals", "Deals", ("/api/deals",)),
     Module("prompts", "Prompts", ("/api/prompts",)),
+    # Agent Skills: SKILL.md-style instruction packages agents load on demand.
+    # This key gates the CRUD surface; the runtime side (the system-prompt
+    # index + load_skill tool) checks the same key in agent_runtime/skills.py,
+    # for the same reason tool entitlement exists — otherwise a caller whose
+    # plan excludes skills would still get them by running an agent.
+    Module("skills", "Skills", ("/api/skills",)),
     # /api/pdf-to-faq generates the Q&A pairs that feed knowledge-base QnA
     # ingestion, so it is gated with the KB module. (Route-ungated in the
     # standalone agent-api.)

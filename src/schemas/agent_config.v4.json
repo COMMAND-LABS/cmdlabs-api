@@ -53,6 +53,25 @@
             "$ref": "#/$defs/tool"
           },
           "default": []
+        },
+        "skills": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 20,
+          "description": "Skills attached to this agent, referenced by id. At runtime the agent's system prompt carries an index of (name, description) per skill, and the full markdown body is loaded on demand through the load_skill tool.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["skillId"],
+            "properties": {
+              "skillId": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Id of a skill row visible to the agent's owner in the agent's organization."
+              }
+            }
+          },
+          "default": []
         }
       }
     }

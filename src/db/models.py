@@ -743,6 +743,61 @@ class Prompt(Base):
         return f'<Prompt {self.id}: {self.name}>'
 
 
+class Skill(Base):
+    """
+    An Agent Skill: a named markdown instruction package an agent loads on
+    demand (the SKILL.md pattern).
+
+    Deliberately modeled on Agent/VectorStore rather than Prompt: org-scoped
+    with a visibility column, so the org_scope resource predicates apply
+    unchanged and per-person AccessGrant sharing can be added later by adding
+    a 'skill' resource type — Prompt's account-only tenancy is the weaker
+    precedent.
+
+    `content` is the markdown BODY with any YAML front matter already
+    stripped at write time (services/skill_markdown.py); `frontmatter` keeps
+    the parsed mapping so an Anthropic-format SKILL.md round-trips. Bodies
+    are small (≤64 KB, enforced at the routes) which is why they live here
+    and not in GCS — per-account GCS credentials are required for uploads,
+    and skills must not fail to save for an account that never configured
+    one. A future multi-file bundle adds a skill_files table + GCS prefix;
+    this row stays the identity either way.
+
+    At runtime the agent's system prompt carries only (name, description) of
+    each attached skill; the body is fetched through the load_skill tool.
+    `description` is therefore not decoration — it is what the model reads
+    when deciding to load, and it is required.
+    """
+    __tablename__ = 'skills'
+    # Tenant scope. Reads filter on this; account_id below is retained as
+    # created_by (attribution), never as the tenant key.
+    org_id = Column(Integer, ForeignKey('organizations.id', ondelete='CASCADE'),
+                    nullable=False, index=True)
+    # Intra-org visibility. 'private' = creator plus explicit grantees;
+    # 'org' = every member. Defaults to 'private' so widening is always a
+    # deliberate act.
+    visibility = Column(String(20), nullable=False, server_default='private')
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey('accounts.id'), nullable=False, index=True)
+    # Kebab-case identifier (enforced at the routes), unique per org: it is
+    # the handle the model passes to load_skill, so two skills with one name
+    # would be indistinguishable to the agent.
+    name = Column(String(64), nullable=False)
+    description = Column(String(1024), nullable=False)
+    content = Column(Text, nullable=False)
+    frontmatter = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('org_id', 'name', name='uq_skill_org_name'),
+    )
+
+    def __repr__(self):
+        return f'<Skill {self.id}: {self.name}>'
+
+
 class Course(Base):
     """
     A course an organization may open.

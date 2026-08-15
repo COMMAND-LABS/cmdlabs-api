@@ -62,6 +62,7 @@ def format_tool_call(
         "vector_search_with_reranking": lambda n, i, o: _format_vector_search(n, i, o, "vectorSearchWithReranking"),
         "send_txt_email_with_ses": _format_send_txt_email,
         "send_html_email_with_ses": _format_send_html_email,
+        "load_skill": _format_load_skill,
     }
 
     formatter = _FORMATTERS.get(tool_name)
@@ -206,6 +207,34 @@ def _format_send_html_email(
             "success": tool_output.get("success", False),
             "messageId": tool_output.get("message_id", tool_output.get("messageId")),
             "error": tool_output.get("error"),
+        },
+    }
+
+
+def _format_load_skill(
+    tool_name: str,
+    tool_input: dict[str, Any],
+    tool_output: dict[str, Any]
+) -> dict[str, Any]:
+    """Format a load_skill call (validates as customToolCall in v2).
+
+    The output is a PREVIEW, deliberately: the tool result is a skill body up
+    to 64 KB, and persisting it whole onto every chat message row (and
+    shipping it to the UI with every history load) would bloat both for text
+    the transcript does not need — the model already consumed it in-turn.
+    """
+    result = tool_output.get("result", "")
+    if not isinstance(result, str):
+        result = str(result)
+    preview_limit = 500
+    return {
+        "toolType": "loadSkill",
+        "toolName": tool_name,
+        "input": {"skillName": tool_input.get("skill_name", "")},
+        "output": {
+            "loaded": not result.startswith("No skill named"),
+            "contentPreview": result[:preview_limit],
+            "contentLength": len(result),
         },
     }
 

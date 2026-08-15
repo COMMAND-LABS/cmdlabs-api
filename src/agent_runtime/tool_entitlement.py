@@ -59,6 +59,11 @@ TOOL_MODULES = {
     # Must work for every caller, or multi-step turns silently degrade to one.
     "think": None,
 }
+# NOT in this map: load_skill. Skills attach via data.skills (by id), not as a
+# data.tools entry, so allowed_tool_configs never sees them; their module gate
+# ('skills') is applied in agent_runtime/skills.py::load_agent_skills, which
+# drops the prompt index and the tool together. Listed here so the absence
+# reads as a decision, matching this map's own rule about oversights.
 
 
 def effective_modules(db: Session, account_id: int, org_id: int) -> set[str]:

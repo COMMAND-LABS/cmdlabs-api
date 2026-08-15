@@ -37,6 +37,7 @@ from .routers import (
     apiKeys,
     accounts,
     prompts,
+    skills,
     similaritySearch,
     contacts,
 )
@@ -204,6 +205,7 @@ _ROUTERS = [
     (accounts.router, "/api/accounts", ["Accounts"]),
     (app_settings.router, "/api/app-settings", ["App Settings"]),
     (prompts.router, "/api/prompts", ["Prompts"]),
+    (skills.router, "/api/skills", ["Skills"]),
     (access_audit.router, "/api/access", ["Access Audit"]),
     (contacts.router, "/api/contacts", ["Contacts"]),
     (contact_lists.router, "/api/contact-lists", ["Contact Lists"]),

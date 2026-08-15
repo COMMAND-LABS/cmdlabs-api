@@ -8,6 +8,7 @@ from src.db.models import Agent
 from src.schemas import validate_against_schema
 from jsonschema import ValidationError as JsonSchemaValidationError
 from .models import UpdateAgentRequest, AgentResponse
+from .skill_refs import validate_skill_refs
 from src.rate_limit import limiter
 
 router = APIRouter()
@@ -65,6 +66,8 @@ async def update_agent(
         except FileNotFoundError as e:
             import logging as _log
             _log.getLogger(__name__).warning("[UPDATE AGENT] Config schema file not found: %s", e)
+
+        validate_skill_refs(db, request_body.config, org)
 
         agent.config = request_body.config
 
