@@ -4,12 +4,15 @@ Direct LLM completions (SSE) — the model without an agent around it.
 WHAT THIS IS NOT
 ----------------
 Not the agent runtime. No agent config, no tools, no tool entitlement, no HITL
-approvals, and — deliberately — NO PERSISTENCE. The client holds the transcript
-and sends it whole on every turn, so there is no chat_sessions row and nothing
-to clean up. That keeps this endpoint a pure function of its request: caller +
-credentials + messages in, token stream out. If saved LLM conversations ever
-matter, that is a feature to design (it would need its own session surface),
-not a column to sneak in here.
+approvals, and — deliberately — NO PERSISTENCE and NO MEMORY. Each request is
+ONE completion: optional system prompt + the current prompt, nothing else. A
+`history` field used to ride along here, which quietly made "the raw model"
+surface a conversational one; it is gone on purpose. This is the teaching
+contrast to Memory Chat (server-held transcript + context window): here every
+turn starts blank. That keeps this endpoint a pure function of its request:
+caller + credentials + one prompt in, token stream out. If saved LLM
+conversations ever matter, that is a feature to design (it would need its own
+session surface), not a field to sneak back in here.
 
 WHOSE KEY FUNDS IT
 ------------------
@@ -55,30 +58,9 @@ callbacks = get_langsmith_callbacks("llm-chat")
 
 SUPPORTED_PROVIDERS = ("openai", "anthropic", "google", "kimi", "ollama")
 
-# The transcript rides in each request, so its size is the request's cost.
-# Bound it so a runaway client cannot ship an unbounded prompt; a long
-# conversation degrades by dropping its oldest turns client-side.
-MAX_HISTORY_MESSAGES = 200
-
-
-class HistoryMessage(BaseModel):
-    # The UI's Message roles. tool_approval never appears here — that is an
-    # agent-runtime concept and this endpoint has no tools.
-    role: str
-    content: str = Field(max_length=200_000)
-
-    @field_validator("role")
-    @classmethod
-    def _known_role(cls, v: str) -> str:
-        if v not in ("human", "ai"):
-            raise ValueError("role must be 'human' or 'ai'")
-        return v
-
 
 class LlmChatPrompt(BaseModel):
     prompt: str = Field(min_length=1, max_length=200_000)
-    history: list[HistoryMessage] = Field(default_factory=list,
-                                          max_length=MAX_HISTORY_MESSAGES)
     provider: str
     model: str = Field(min_length=1, max_length=128)
     systemPrompt: str | None = Field(default=None, max_length=100_000)
@@ -131,11 +113,11 @@ async def _generator(body: LlmChatPrompt, db, auth: dict):
         yield sse_error("LLM initialization failed", str(exc))
         return
 
-    # --- Messages: optional system + client-held history + this turn ---
+    # --- Messages: optional system + this turn. Nothing else, by contract:
+    # every request is a fresh single completion with no memory. ---
     messages: list[tuple[str, str]] = []
     if body.systemPrompt and body.systemPrompt.strip():
         messages.append(("system", body.systemPrompt))
-    messages.extend((m.role, m.content) for m in body.history)
     messages.append(("human", body.prompt))
 
     yield sse_event("on_chat_model_start")
