@@ -22,12 +22,15 @@ from src.agent_runtime.helpers import (
     sse_error,
     sse_event,
 )
+from src.agent_runtime.prompt_dump import get_prompt_dump_callbacks
 from src.utils.langsmith import get_langsmith_callbacks
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-callbacks = get_langsmith_callbacks("dynamic-agent")
+# The dump handler is a no-op unless DUMP_AGENT_PROMPT is set, so this costs
+# nothing in normal operation.
+callbacks = get_langsmith_callbacks("dynamic-agent") + get_prompt_dump_callbacks()
 
 
 async def generator(
