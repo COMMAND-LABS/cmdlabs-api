@@ -31,6 +31,7 @@ session, which context.py closes before streaming.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 
 from langchain_core.tools import StructuredTool
@@ -139,6 +140,44 @@ def build_skills_guidance(skills: list[AttachedSkill]) -> str:
         lines.append(f"- {skill.name}: {skill.description}")
     lines.append("</available_skills>")
     return _escape_braces("\n".join(lines))
+
+
+def expand_slash_command(prompt: str, skills: list[AttachedSkill]) -> str | None:
+    """Deterministic skill invocation: '/name rest' → expanded turn input.
+
+    When the user's message begins with a slash command naming an attached
+    skill, the skill body is injected directly into the turn instead of
+    waiting for the model to elect load_skill — an explicit invocation must
+    not be subject to model discretion.
+
+    Returns None whenever the message is not a match (no leading slash, or a
+    first token that names no attached skill) so an ordinary message that
+    happens to start with '/' passes through untouched. Matching is exact:
+    names are kebab-case handles and near-misses fall back to the model-side
+    index, where load_skill's unknown-name reply lets it self-correct.
+
+    Only the EXPANDED text goes to the model; the caller keeps persisting the
+    raw prompt, so the transcript shows what the user actually typed.
+    """
+    if not skills:
+        return None
+    # First token after the slash is the command; whatever follows any
+    # whitespace (space or newline) is the arguments.
+    match = re.match(r"/(\S+)(?:\s+([\s\S]*))?$", prompt)
+    if match is None:
+        return None
+    command, args = match.group(1), match.group(2) or ""
+    skill = next((s for s in skills if s.name == command), None)
+    if skill is None:
+        return None
+    expanded = (
+        f"The user explicitly invoked the skill '/{skill.name}'. "
+        f"Follow these instructions now:\n\n{skill.content}"
+    )
+    args = args.strip()
+    if args:
+        expanded += f"\n\nUser input for this invocation:\n{args}"
+    return expanded
 
 
 class LoadSkillInput(BaseModel):

@@ -39,6 +39,31 @@ blank, and the stored body has the front matter stripped.
 Verify the injection with `DUMP_AGENT_PROMPT=1` — the dumped system message
 shows the skills block with zero extra code.
 
+## Slash commands (explicit invocation)
+
+Everything above is model-discretionary: the model reads the index and
+decides. A chat message that starts with `/skill-name` is the user deciding,
+so it must not depend on that election. `expand_slash_command`
+(`src/agent_runtime/skills.py`) matches the first token against the attached
+(already entitlement- and visibility-filtered) skills and, on a hit,
+`prepare_agent_context` swaps the TURN INPUT for the skill body plus the
+rest of the message as arguments. Three properties to preserve:
+
+- **The transcript keeps the raw command.** `ctx.prompt` (persisted) and
+  `ctx.agent_input` (sent to the model) are separate on purpose — the same
+  split attachments use. Only the model sees the expansion.
+- **No brace escaping** on the expanded text: it rides in the `{input}`
+  template *variable*, not template text like the system-prompt index.
+- **Non-matches pass through untouched** — exact name match only. A near-miss
+  falls back to the model-side index (`load_skill`'s unknown-name reply lets
+  the model self-correct); an ordinary message starting with "/" is just text.
+
+The composer's autocomplete (cmdlabs-ui `agent-chat/prompt-form.tsx`) offers
+ATTACHED skills only — the menu mirrors what the runtime will actually
+expand. It reads names via `/api/skills`, so a member running a shared agent
+may not see the owner's private skills in the menu; typing such a command
+still expands, because runtime visibility follows the owner (above).
+
 ## Failure directions (the part worth re-reading before changing anything)
 
 - **Stale reference → fail-soft.** A deleted/inaccessible skill is logged

@@ -50,6 +50,7 @@ from src.services.credential_access import (
 from src.agent_runtime.skills import (
     build_skills_guidance,
     create_load_skill_tool,
+    expand_slash_command,
     load_agent_skills,
 )
 from src.agent_runtime.tools import CredentialError, create_tools_from_agent_config
@@ -362,6 +363,17 @@ async def prepare_agent_context(
         system_prompt = system_prompt + build_skills_guidance(attached_skills)
         tools = tools + [create_load_skill_tool(attached_skills)]
 
+    # --- Slash command (explicit skill invocation) ---
+    # "/skill-name args" injects the skill body into THIS turn's model input
+    # deterministically — an explicit invocation must not depend on the model
+    # electing load_skill. Only turn_prompt goes to the model; `prompt` is
+    # what gets persisted, so the transcript keeps the raw typed command.
+    # A non-matching or non-entitled prompt passes through unchanged
+    # (attached_skills is already entitlement- and visibility-filtered).
+    # No brace escaping: this rides in the {input} template VARIABLE, not in
+    # template text like the system-prompt index.
+    turn_prompt = expand_slash_command(prompt, attached_skills) or prompt
+
     # --- Prompt template + agent ---
     # The model only takes multiple steps if invited to: without this nudge,
     # most models answer in one shot and the think tool sits unused.
@@ -421,7 +433,7 @@ async def prepare_agent_context(
         # this instance, including in-flight SSE streams.
         agent_input = await run_in_threadpool(
             build_pdf_message,
-            prompt=prompt,
+            prompt=turn_prompt,
             pdf_base64=pdf_base64,
             pdf_filename=pdf_filename,
             use_vision=pdf_use_vision,
@@ -429,19 +441,19 @@ async def prepare_agent_context(
         )
     elif image_base64:
         agent_input = build_image_message(
-            prompt=prompt,
+            prompt=turn_prompt,
             image_base64=image_base64,
             content_type=attachment_content_type or "image/png",
             filename=attachment_filename,
         )
     elif document_text:
         agent_input = build_document_message(
-            prompt=prompt,
+            prompt=turn_prompt,
             document_text=document_text,
             filename=attachment_filename,
         )
     else:
-        agent_input = prompt
+        agent_input = turn_prompt
 
     # Build the persisted attachment reference (GCS-backed) for the chat message.
     attachment_ref: dict | None = None

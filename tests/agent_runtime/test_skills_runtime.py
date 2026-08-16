@@ -14,6 +14,7 @@ from src.agent_runtime.skills import (
     LOAD_SKILL_TOOL_NAME,
     build_skills_guidance,
     create_load_skill_tool,
+    expand_slash_command,
     load_agent_skills,
 )
 from src.db.models import Agent, Skill
@@ -82,6 +83,65 @@ async def test_load_skill_tolerates_whitespace():
     tool = create_load_skill_tool(SKILLS)
     result = await tool.coroutine(skill_name="  brand-voice ")
     assert "Write plainly." in result
+
+
+# ---------------------------------------------------------------------------
+# slash commands (explicit invocation)
+# ---------------------------------------------------------------------------
+
+def test_slash_expands_with_args():
+    expanded = expand_slash_command("/sql-review the orders migration", SKILLS)
+    assert expanded is not None
+    assert "'/sql-review'" in expanded
+    assert "Check indexes." in expanded
+    assert "the orders migration" in expanded
+
+
+def test_slash_expands_without_args():
+    expanded = expand_slash_command("/brand-voice", SKILLS)
+    assert expanded is not None
+    assert "Write plainly." in expanded
+    assert "User input" not in expanded
+
+
+def test_slash_newline_ends_the_command_token():
+    expanded = expand_slash_command("/sql-review\ncheck the orders\nmigration", SKILLS)
+    assert expanded is not None
+    assert "Check indexes." in expanded
+    assert "check the orders\nmigration" in expanded
+
+
+def test_slash_unknown_command_passes_through():
+    assert expand_slash_command("/no-such-skill do it", SKILLS) is None
+
+
+def test_slash_requires_exact_name():
+    """'/sql' must not fuzzy-match 'sql-review' — near-misses fall back to the
+    model-side index rather than silently running the wrong skill."""
+    assert expand_slash_command("/sql review this", SKILLS) is None
+
+
+def test_slash_ordinary_message_untouched():
+    assert expand_slash_command("what does /etc/hosts do?", SKILLS) is None
+    assert expand_slash_command("plain message", SKILLS) is None
+    assert expand_slash_command("/", SKILLS) is None
+
+
+def test_slash_no_skills_passes_through():
+    """The caller hands in the already entitlement-filtered list; empty means
+    a matching-looking command is just text."""
+    assert expand_slash_command("/brand-voice hello", []) is None
+
+
+def test_slash_body_is_not_brace_escaped():
+    """The expansion rides in the {input} template VARIABLE, so a skill body
+    with braces must arrive verbatim — doubling them here would show the
+    model literal {{ }}."""
+    braced = [AttachedSkill(name="tmpl", description="d",
+                            content="Render {{ user.name }} like this")]
+    expanded = expand_slash_command("/tmpl", braced)
+    assert expanded is not None
+    assert "Render {{ user.name }} like this" in expanded
 
 
 # ---------------------------------------------------------------------------
