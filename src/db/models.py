@@ -40,6 +40,9 @@ class Account(Base):
     __tablename__ = 'accounts'
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, unique=True, index=True)
+    # Display name, self-reported and optional — accounts are created from an
+    # email alone (verify-code signup), so NULL simply means "never provided".
+    name = Column(String, nullable=True)
     hashed_password = Column(String)
     reset_token = Column(String)
     stripe_customer_id = Column(String, nullable=True)

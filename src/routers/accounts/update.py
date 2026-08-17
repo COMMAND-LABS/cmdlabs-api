@@ -22,18 +22,23 @@ async def update_account(
     
     Updatable fields:
     - email: The account email address
+    - name: Display name (whitespace-only clears it)
     - newsletter_subscribed: Newsletter subscription preference
-    
+
     Note: Password changes should use the /auth/reset-password flow.
     """
     account_id = account_id_from_claims(jwt)
     account = ensure_account(db, account_id)
-        
+
     # Check if at least one field is being updated
-    if request_body.email is None and request_body.newsletter_subscribed is None:
+    if (
+        request_body.email is None
+        and request_body.name is None
+        and request_body.newsletter_subscribed is None
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="At least one field (email or newsletter_subscribed) must be provided for update"
+            detail="At least one field (email, name, or newsletter_subscribed) must be provided for update"
         )
         
     # Update email if provided
@@ -59,6 +64,11 @@ async def update_account(
             
         account.email = email
         
+    # Update name if provided; a whitespace-only value clears it back to NULL
+    # (the column is optional, so there has to be a way back out).
+    if request_body.name is not None:
+        account.name = request_body.name.strip() or None
+
     # Update newsletter_subscribed if provided
     if request_body.newsletter_subscribed is not None:
         account.newsletter_subscribed = request_body.newsletter_subscribed
@@ -70,6 +80,7 @@ async def update_account(
     return AccountResponse(
         id=account.id,
         email=account.email,
+        name=account.name,
         newsletter_subscribed=account.newsletter_subscribed,
         stripe_customer_id=account.stripe_customer_id,
         is_super_admin=account.is_super_admin,

@@ -25,6 +25,7 @@ async def get_account(
     return AccountResponse(
         id=account.id,
         email=account.email,
+        name=account.name,
         newsletter_subscribed=account.newsletter_subscribed,
         stripe_customer_id=account.stripe_customer_id,
         is_super_admin=account.is_super_admin,

@@ -9,6 +9,8 @@ class AccountResponse(BaseModel):
     """Response model for account data (excludes sensitive fields)."""
     id: int
     email: str
+    # Self-reported display name; None until the user provides one.
+    name: Optional[str] = None
     newsletter_subscribed: bool
     stripe_customer_id: Optional[str] = None
     # Platform super admins. Replaced a `role` field that also carried
@@ -31,6 +33,10 @@ class UpdateAccountRequest(BaseModel):
     revoked out of band by scripts/super_admin.py and by no API path at all.
     """
     email: Optional[str] = None
+    # Whitespace-only clears the name back to NULL — "optional" includes the
+    # way back out, and omitting the field (None) must stay distinct from
+    # clearing it.
+    name: Optional[str] = None
     newsletter_subscribed: Optional[bool] = None
 
     model_config = ConfigDict(populate_by_name=True)

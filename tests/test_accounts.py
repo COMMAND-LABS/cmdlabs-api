@@ -28,6 +28,35 @@ async def test_super_admin_is_not_self_updatable(
     assert response.json()["is_super_admin"] is False
 
 
+async def test_name_starts_null_and_is_updatable(authed_client: AsyncClient):
+    response = await authed_client.get("/api/accounts/me")
+    assert response.json()["name"] is None
+
+    # A name-only update satisfies the at-least-one-field check.
+    response = await authed_client.put(
+        "/api/accounts/me", json={"name": "  Tad Example  "}
+    )
+    assert response.status_code == 200
+    assert response.json()["name"] == "Tad Example"
+
+    response = await authed_client.get("/api/accounts/me")
+    assert response.json()["name"] == "Tad Example"
+
+
+async def test_name_clears_back_to_null(authed_client: AsyncClient):
+    """Whitespace-only clears; an omitted field leaves the name alone."""
+    await authed_client.put("/api/accounts/me", json={"name": "Tad"})
+
+    response = await authed_client.put(
+        "/api/accounts/me", json={"newsletter_subscribed": True}
+    )
+    assert response.json()["name"] == "Tad"
+
+    response = await authed_client.put("/api/accounts/me", json={"name": "   "})
+    assert response.status_code == 200
+    assert response.json()["name"] is None
+
+
 async def test_get_me_unauthenticated(client: AsyncClient):
     response = await client.get("/api/accounts/me")
     assert response.status_code == 401
