@@ -273,3 +273,41 @@ async def test_agent_config_rejects_malformed_skills_shape(authed_client: AsyncC
         "/api/agents/", json={"name": "Malformed", "config": config},
     )
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Built-in templates
+# ---------------------------------------------------------------------------
+
+async def test_list_templates_includes_skill_creator(authed_client: AsyncClient):
+    resp = await authed_client.get("/api/skills/templates/")
+    assert resp.status_code == 200, resp.text
+    names = {t["name"]: t for t in resp.json()}
+    assert "skill-creator" in names
+    assert names["skill-creator"]["installed"] is False
+    assert "save_skill" in names["skill-creator"]["content"]
+
+
+async def test_install_skill_creator_template(authed_client: AsyncClient):
+    resp = await authed_client.post("/api/skills/templates/skill-creator/install")
+    assert resp.status_code == 201, resp.text
+    skill = resp.json()
+    assert skill["name"] == "skill-creator"
+    assert skill["visibility"] == "private"
+    assert skill["is_owner"] is True
+    assert not skill["content"].startswith("---")
+
+    # Now listed as installed, and a second install is a 409 not a duplicate.
+    resp = await authed_client.get("/api/skills/templates/")
+    assert {t["name"]: t["installed"] for t in resp.json()}["skill-creator"] is True
+    resp = await authed_client.post("/api/skills/templates/skill-creator/install")
+    assert resp.status_code == 409
+
+    # The installed row is a normal skill: visible in the list, editable.
+    resp = await authed_client.get("/api/skills/")
+    assert any(s["name"] == "skill-creator" for s in resp.json())
+
+
+async def test_install_unknown_template_404(authed_client: AsyncClient):
+    resp = await authed_client.post("/api/skills/templates/nope/install")
+    assert resp.status_code == 404

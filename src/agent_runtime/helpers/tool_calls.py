@@ -63,6 +63,7 @@ def format_tool_call(
         "send_txt_email_with_ses": _format_send_txt_email,
         "send_html_email_with_ses": _format_send_html_email,
         "load_skill": _format_load_skill,
+        "save_skill": _format_save_skill,
     }
 
     formatter = _FORMATTERS.get(tool_name)
@@ -235,6 +236,39 @@ def _format_load_skill(
             "loaded": not result.startswith("No skill named"),
             "contentPreview": result[:preview_limit],
             "contentLength": len(result),
+        },
+    }
+
+
+def _format_save_skill(
+    tool_name: str,
+    tool_input: dict[str, Any],
+    tool_output: dict[str, Any]
+) -> dict[str, Any]:
+    """Format a save_skill call (validates as customToolCall in v2).
+
+    Like load_skill, the body is NOT persisted on the message — it now lives
+    on the skills row the output points at. The card links there.
+    """
+    content = tool_input.get("content", "")
+    if not isinstance(content, str):
+        content = str(content)
+    return {
+        "toolType": "saveSkill",
+        "toolName": tool_name,
+        "input": {
+            "name": tool_input.get("name", ""),
+            "description": tool_input.get("description", ""),
+            "overwrite": bool(tool_input.get("overwrite", False)),
+            "contentLength": len(content),
+        },
+        "output": {
+            "saved": bool(tool_output.get("saved", False)),
+            "action": tool_output.get("action"),
+            "skillId": tool_output.get("skillId"),
+            "name": tool_output.get("name"),
+            "visibility": tool_output.get("visibility"),
+            "error": tool_output.get("error"),
         },
     }
 

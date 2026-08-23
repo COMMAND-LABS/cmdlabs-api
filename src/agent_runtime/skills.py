@@ -27,6 +27,15 @@ agent the owner built — exactly how the agent's tools already behave.
 Bodies are loaded eagerly with the index (≤20 skills × ≤64 KB, one query) so
 the tool needs no DB session at invoke time — tools outlive the request
 session, which context.py closes before streaming.
+
+save_skill — the one WRITE in this module — is the exception: it opens its
+own short-lived session per call (tools/sessions.py pattern). It exists so a
+"skill-creator" skill can persist what it drafts, and it is only built when a
+skill with that name is attached: the capability travels with the skill that
+knows how to use it rather than appearing on every skilled agent. Created
+rows belong to the CALLER (not the agent owner) and are private by default —
+a colleague running a shared agent authors into their own space, and nothing
+becomes org-visible without a deliberate act in the skills UI.
 """
 from __future__ import annotations
 
@@ -39,6 +48,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import and_, or_
 
 from src.agent_runtime.tool_entitlement import effective_modules
+from src.agent_runtime.tools.sessions import default_session_factory
 from src.db.models import Skill
 from src.services.org_scope import OrgScope
 
@@ -47,6 +57,12 @@ logger = logging.getLogger(__name__)
 SKILLS_MODULE_KEY = "skills"
 
 LOAD_SKILL_TOOL_NAME = "load_skill"
+SAVE_SKILL_TOOL_NAME = "save_skill"
+
+# The attached-skill name that unlocks save_skill. Matches the built-in
+# template (src/skill_templates/skill-creator.md); an org may also hand-write
+# a skill with this name and get the tool.
+SKILL_CREATOR_NAME = "skill-creator"
 
 
 @dataclass(frozen=True)
@@ -219,4 +235,162 @@ def create_load_skill_tool(skills: list[AttachedSkill]) -> StructuredTool:
             "skill's description covers."
         ),
         args_schema=LoadSkillInput,
+    )
+
+
+# ---------------------------------------------------------------------------
+# save_skill (skill-creator only)
+# ---------------------------------------------------------------------------
+
+def has_skill_creator(skills: list[AttachedSkill]) -> bool:
+    return any(skill.name == SKILL_CREATOR_NAME for skill in skills)
+
+
+class SaveSkillInput(BaseModel):
+    name: str = Field(
+        description="Kebab-case skill name, e.g. 'contract-redline'. Unique "
+                    "within the organization. Max 64 characters.",
+    )
+    description: str = Field(
+        description="When an agent should load this skill: what it does and "
+                    "the requests that should trigger it. Max 1024 characters.",
+    )
+    content: str = Field(
+        description="The markdown body of the skill WITHOUT a YAML front "
+                    "matter block (name and description are separate fields).",
+    )
+    overwrite: bool = Field(
+        default=False,
+        description="Replace an existing skill with this name that the user "
+                    "owns. Only set after the user explicitly asked to "
+                    "overwrite.",
+    )
+
+
+def create_save_skill_tool(
+    org_scope: OrgScope,
+    *,
+    session_factory=None,
+) -> StructuredTool:
+    """Build save_skill bound to the CALLER's org scope.
+
+    Validation reuses the route validators so a skill the model writes obeys
+    exactly the limits a skill typed into the UI does. Every failure comes
+    back as a tool result the model can act on (fix the name, ask the user
+    about overwriting) — never an exception, which would end the turn.
+    """
+    # Imported here: the routers package pulls in FastAPI app wiring that the
+    # runtime module should not load at import time.
+    from fastapi import HTTPException
+
+    from src.routers.skills.models import (
+        validate_skill_content,
+        validate_skill_description,
+        validate_skill_name,
+    )
+    from src.services.skill_markdown import SkillMarkdownError, parse_skill_markdown
+
+    factory = session_factory or default_session_factory
+
+    async def _save_skill(
+        name: str, description: str, content: str, overwrite: bool = False,
+    ) -> dict:
+        try:
+            name = validate_skill_name(name.strip())
+            description = validate_skill_description(description.strip())
+            content = validate_skill_content(content)
+            # The model was told not to send front matter, but if it does,
+            # honor it the way the create route would rather than storing a
+            # stray '---' block as body text.
+            frontmatter, body = parse_skill_markdown(content)
+            body = validate_skill_content(body)
+        except HTTPException as exc:
+            return {"saved": False, "error": str(exc.detail)}
+        except SkillMarkdownError as exc:
+            return {"saved": False, "error": str(exc)}
+
+        db = factory()
+        try:
+            existing = db.query(Skill).filter(
+                Skill.org_id == org_scope.org_id, Skill.name == name,
+            ).first()
+            if existing is not None:
+                if not overwrite:
+                    return {
+                        "saved": False,
+                        "error": (
+                            f"A skill named '{name}' already exists. Ask the "
+                            "user whether to overwrite it (then call again "
+                            "with overwrite=true) or choose a different name."
+                        ),
+                        "skillId": existing.id,
+                    }
+                if existing.account_id != org_scope.account_id:
+                    return {
+                        "saved": False,
+                        "error": (
+                            f"'{name}' belongs to another member of the "
+                            "organization and cannot be overwritten. Choose "
+                            "a different name."
+                        ),
+                    }
+                existing.description = description
+                existing.content = body
+                existing.frontmatter = frontmatter or None
+                db.commit()
+                db.refresh(existing)
+                logger.info("[SKILLS] save_skill updated skill %s (%s)", existing.id, name)
+                return {
+                    "saved": True,
+                    "action": "updated",
+                    "skillId": existing.id,
+                    "name": name,
+                    "visibility": existing.visibility,
+                    "message": (
+                        f"Updated skill '{name}'. Agents that have it attached "
+                        "will use the new version on their next turn."
+                    ),
+                }
+
+            skill = Skill(
+                org_id=org_scope.org_id,
+                account_id=org_scope.account_id,
+                name=name,
+                description=description,
+                content=body,
+                frontmatter=frontmatter or None,
+                visibility="private",
+            )
+            db.add(skill)
+            db.commit()
+            db.refresh(skill)
+            logger.info("[SKILLS] save_skill created skill %s (%s)", skill.id, name)
+            return {
+                "saved": True,
+                "action": "created",
+                "skillId": skill.id,
+                "name": name,
+                "visibility": "private",
+                "message": (
+                    f"Created private skill '{name}'. The user must attach it "
+                    "to an agent (agent settings → Skills) before that agent "
+                    f"can use it; it can then be invoked with /{name}."
+                ),
+            }
+        except Exception as exc:  # noqa: BLE001 — a tool must not end the turn
+            db.rollback()
+            logger.exception("[SKILLS] save_skill failed for %s", name)
+            return {"saved": False, "error": f"Could not save skill: {exc}"}
+        finally:
+            db.close()
+
+    return StructuredTool.from_function(
+        coroutine=_save_skill,
+        name=SAVE_SKILL_TOOL_NAME,
+        description=(
+            "Save a skill the user has approved as a new private skill in "
+            "their organization. Call only after the user confirmed the "
+            "draft. Returns the saved skill's id, or an error to act on."
+        ),
+        args_schema=SaveSkillInput,
     )

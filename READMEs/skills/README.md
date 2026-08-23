@@ -64,6 +64,42 @@ expand. It reads names via `/api/skills`, so a member running a shared agent
 may not see the owner's private skills in the menu; typing such a command
 still expands, because runtime visibility follows the owner (above).
 
+## skill-creator and `save_skill` (the one write path)
+
+Skills are instruction-only, so a "skill that writes skills" needs somewhere
+to put its output. That is `save_skill` (`agent_runtime/skills.py`), the
+only write in the skills runtime:
+
+- **Built only when an attached skill is named `skill-creator`**
+  (`has_skill_creator`). The capability travels with the skill that knows
+  how to use it; every other skilled agent sees `load_skill` alone.
+- **Writes as the CALLER** (`org_scope`), not the agent owner: a colleague
+  running a shared skill-creator agent authors into their own space.
+  Created rows are `private`; widening to org is a deliberate act in the UI.
+- **Never silently overwrites.** Name clash → tool result asks the model to
+  confirm with the user and call again with `overwrite=true`; a clash with a
+  skill the caller does not own is refused outright.
+- **Fails as a tool result, never an exception** — the route validators are
+  reused so limits match the UI, but a bad name comes back as text the model
+  can fix within the turn.
+- Opens its own short-lived session (`tools/sessions.py` pattern); tools run
+  after the request session closes.
+- Persisted as `toolType: "saveSkill"` with the skill id (not the body, which
+  now lives on the row). The drawer card links to the skill's edit page.
+
+The skill itself ships as a **built-in template**
+(`src/skill_templates/skill-creator.md`, loaded by
+`services/skill_templates.py`). `GET /api/skills/templates/` lists templates
+with an `installed` flag; `POST /api/skills/templates/{name}/install` copies
+one into the org as a normal private row the org then owns — later edits to
+the file never touch an installed copy. The skills page shows an install CTA
+until the org has a skill by that name. Templates are mounted before
+`/{skill_id}` so "templates" is never parsed as an id.
+
+Demo path: Skills → Install skill-creator → attach to an agent → in chat,
+`/skill-creator <what the agent should learn>` → approve the draft → the
+agent calls `save_skill` → attach the new skill → `/new-skill-name`.
+
 ## Failure directions (the part worth re-reading before changing anything)
 
 - **Stale reference → fail-soft.** A deleted/inaccessible skill is logged
@@ -100,7 +136,9 @@ still expands, because runtime visibility follows the owner (above).
 
 ## Tests
 
-`tests/test_skills.py` (CRUD + attachment), `tests/test_skill_markdown.py`
-(front matter), `tests/test_org_isolation_skills.py` (tenancy + the
-cross-org attachment boundary), `tests/agent_runtime/test_skills_runtime.py`
-(index escaping, tool behavior, loader failure directions).
+`tests/test_skills.py` (CRUD + attachment + template install),
+`tests/test_skill_markdown.py` (front matter),
+`tests/test_org_isolation_skills.py` (tenancy + the cross-org attachment
+boundary), `tests/agent_runtime/test_skills_runtime.py` (index escaping,
+tool behavior, loader failure directions, `save_skill` ownership/overwrite
+rules).

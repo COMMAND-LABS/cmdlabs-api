@@ -50,6 +50,8 @@ from src.services.credential_access import (
 from src.agent_runtime.skills import (
     build_skills_guidance,
     create_load_skill_tool,
+    create_save_skill_tool,
+    has_skill_creator,
     expand_slash_command,
     load_agent_skills,
 )
@@ -362,6 +364,11 @@ async def prepare_agent_context(
     if attached_skills:
         system_prompt = system_prompt + build_skills_guidance(attached_skills)
         tools = tools + [create_load_skill_tool(attached_skills)]
+        # save_skill rides with the skill-creator skill only. It writes as
+        # the CALLER (org_scope) so a created skill lands in the space of the
+        # person chatting, not the agent owner's — see agent_runtime/skills.py.
+        if has_skill_creator(attached_skills):
+            tools = tools + [create_save_skill_tool(org_scope)]
 
     # --- Slash command (explicit skill invocation) ---
     # "/skill-name args" injects the skill body into THIS turn's model input

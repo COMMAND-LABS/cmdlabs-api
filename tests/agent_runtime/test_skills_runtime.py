@@ -249,3 +249,125 @@ def test_loader_handles_agentless_path(db: Session):
     """The contact-chat override path has no agent row — no skills, no error."""
     t = make_tenant(db, slug="skl-none", account_id=5508)
     assert load_agent_skills(db, None, _scope(t)) == []
+
+
+# ---------------------------------------------------------------------------
+# save_skill (skill-creator)
+# ---------------------------------------------------------------------------
+
+from src.agent_runtime.skills import (  # noqa: E402
+    SAVE_SKILL_TOOL_NAME,
+    SKILL_CREATOR_NAME,
+    create_save_skill_tool,
+    has_skill_creator,
+)
+
+
+class _NoCloseSession:
+    """Hands the test's transactional session to the tool as if it were a
+    fresh one: commit flushes, close is a no-op, so the fixture's rollback
+    still owns the data."""
+    def __init__(self, db):
+        self._db = db
+
+    def __getattr__(self, name):
+        return getattr(self._db, name)
+
+    def commit(self):
+        self._db.flush()
+
+    def close(self):
+        pass
+
+
+def _save_tool(db, tenant):
+    return create_save_skill_tool(_scope(tenant), session_factory=lambda: _NoCloseSession(db))
+
+
+def test_has_skill_creator_is_name_based():
+    assert not has_skill_creator(SKILLS)
+    assert has_skill_creator(SKILLS + [AttachedSkill(name=SKILL_CREATOR_NAME, description="d", content="c")])
+
+
+@pytest.mark.asyncio
+async def test_save_skill_creates_private_skill_owned_by_caller(db: Session):
+    t = make_tenant(db, slug="skl-save", account_id=5601)
+    tool = _save_tool(db, t)
+    assert tool.name == SAVE_SKILL_TOOL_NAME
+
+    result = await tool.coroutine(
+        name="contract-redline",
+        description="Use when reviewing a contract.",
+        content="# Redline\n\nFlag indemnity clauses.",
+    )
+    assert result["saved"] is True
+    assert result["action"] == "created"
+
+    row = db.get(Skill, result["skillId"])
+    assert row.org_id == t.org_id
+    assert row.account_id == t.account_id
+    assert row.visibility == "private"
+    assert row.content == "# Redline\n\nFlag indemnity clauses."
+
+
+@pytest.mark.asyncio
+async def test_save_skill_strips_front_matter_if_model_sends_it(db: Session):
+    t = make_tenant(db, slug="skl-fm", account_id=5602)
+    result = await _save_tool(db, t).coroutine(
+        name="fm-skill", description="d",
+        content="---\nname: fm-skill\nversion: 2\n---\n# Body\n",
+    )
+    assert result["saved"] is True
+    row = db.get(Skill, result["skillId"])
+    assert row.content == "# Body\n"
+    assert row.frontmatter == {"name": "fm-skill", "version": 2}
+
+
+@pytest.mark.asyncio
+async def test_save_skill_rejects_bad_name_as_tool_result(db: Session):
+    t = make_tenant(db, slug="skl-bad", account_id=5603)
+    result = await _save_tool(db, t).coroutine(
+        name="Not Kebab", description="d", content="body",
+    )
+    assert result["saved"] is False
+    assert "kebab" in result["error"].lower() or "name" in result["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_save_skill_refuses_silent_overwrite(db: Session):
+    t = make_tenant(db, slug="skl-dup", account_id=5604)
+    existing = Skill(org_id=t.org_id, account_id=t.account_id, name="dup",
+                     description="old", content="OLD")
+    db.add(existing); db.flush()
+
+    tool = _save_tool(db, t)
+    result = await tool.coroutine(name="dup", description="new", content="NEW")
+    assert result["saved"] is False
+    assert "overwrite" in result["error"]
+    assert result["skillId"] == existing.id
+    db.refresh(existing)
+    assert existing.content == "OLD"
+
+    result = await tool.coroutine(name="dup", description="new", content="NEW", overwrite=True)
+    assert result["saved"] is True
+    assert result["action"] == "updated"
+    db.refresh(existing)
+    assert existing.content == "NEW"
+    assert existing.description == "new"
+
+
+@pytest.mark.asyncio
+async def test_save_skill_never_overwrites_a_colleagues_skill(db: Session):
+    owner = make_tenant(db, slug="skl-col", account_id=5605)
+    caller = make_tenant(db, slug="skl-col", account_id=5606)
+    theirs = Skill(org_id=owner.org_id, account_id=owner.account_id, name="theirs",
+                   description="d", content="THEIRS", visibility="org")
+    db.add(theirs); db.flush()
+
+    result = await _save_tool(db, caller).coroutine(
+        name="theirs", description="x", content="MINE", overwrite=True,
+    )
+    assert result["saved"] is False
+    assert "another member" in result["error"]
+    db.refresh(theirs)
+    assert theirs.content == "THEIRS"
