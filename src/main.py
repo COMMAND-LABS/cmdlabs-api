@@ -53,6 +53,7 @@ from .routers import email_campaigns
 from .routers import emails
 from .routers import tracking
 from .routers import feedback
+from .routers import lead_magnets
 from .routers import admin
 from .routers import organizations
 from .routers import app_settings
@@ -219,6 +220,8 @@ _ROUTERS = [
     (emails.router, "/api/emails", ["Emails"]),
     (tracking.router, "/t", ["Tracking"]),
     (feedback.router, "/api/feedback", ["Feedback"]),
+    # Public email capture for the /resources lead magnet pages.
+    (lead_magnets.router, "/api/lead-magnets", ["Lead Magnets"]),
     (courses.router, "/api/courses", ["Courses"]),
     # Direct LLM completions (no agent). Premium-gated via the llm_chat module.
     (llm_chat.router, "/api/llm-chat", ["LLM Chat"]),

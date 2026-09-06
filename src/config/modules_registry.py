@@ -43,6 +43,8 @@ ALWAYS_ALLOWED_PREFIXES = (
     "/api/logins",
     "/api/feedback",
     "/api/waitlist",
+    "/api/lead-magnets",    # public lead magnet signup from the /resources pages
+
     "/api/api-keys",
     "/api/organizations",   # your own org + entitlements
     "/api/admin",           # separately gated by require_super_admin

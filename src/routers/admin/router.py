@@ -10,9 +10,11 @@ from fastapi import APIRouter
 from .organization_detail import router as org_detail_router
 from .organizations import router as org_admin_router
 from .list_organizations import router as list_organizations_router
+from .lead_magnet_stats import router as lead_magnet_stats_router
 
 router = APIRouter()
 
 router.include_router(list_organizations_router)
 router.include_router(org_admin_router)
 router.include_router(org_detail_router)
+router.include_router(lead_magnet_stats_router)

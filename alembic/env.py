@@ -10,8 +10,11 @@ from src.db.models import Base # NOTE: for integrating SQLAlchemy schema with Al
 # name they export — hence the noqa. Feedback and Waitlist are declared outside
 # models.py, so without these imports autogenerate cannot see them, concludes
 # their models were deleted, and emits `op.drop_table` for both. Do not remove.
+# LeadMagnetSignup lives outside models.py for the same reason Feedback does
+# (public, account-less capture) and needs the same treatment.
 from src.db import feedback as _feedback_models  # noqa: F401
 from src.db import waitlist as _waitlist_models  # noqa: F401
+from src.db import lead_magnet_signups as _lead_magnet_models  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

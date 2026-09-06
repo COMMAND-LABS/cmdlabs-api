@@ -36,3 +36,21 @@ class OrganizationSummary(BaseModel):
 class OrganizationListResponse(BaseModel):
     organizations: List[OrganizationSummary]
     total: int
+
+
+class LeadMagnetStatRow(BaseModel):
+    """Per-magnet signup counts. Aggregates only — no emails — for the same
+    reason OrganizationSummary carries no tenant data."""
+    slug: str
+    # None when the slug has rows but is no longer in the registry.
+    title: Optional[str] = None
+    signups: int
+    unique_emails: int
+    first_signup_at: Optional[datetime] = None
+    last_signup_at: Optional[datetime] = None
+
+
+class LeadMagnetStatsResponse(BaseModel):
+    since: Optional[datetime] = None
+    until: Optional[datetime] = None
+    rows: List[LeadMagnetStatRow]
