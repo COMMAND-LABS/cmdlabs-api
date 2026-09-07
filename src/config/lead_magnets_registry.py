@@ -78,6 +78,37 @@ LEAD_MAGNETS: tuple[LeadMagnet, ...] = (
             ),
         ),
     ),
+    LeadMagnet(
+        slug="automate-linkedin-content-with-abc",
+        title="Automate LinkedIn Content with Airtable, Blotato, and Claude",
+        subject="Your ABC kit from COMMAND LABS: automate LinkedIn content with Airtable, Blotato, and Claude",
+        intro=(
+            "Here is the ABC kit. Set it up in this order: Claude first, then Blotato, "
+            "then Airtable. After that, one prompt writes the week, you tick what you "
+            "approve in Airtable, and one more prompt schedules it. Bookmark this email "
+            "so you can come back to it."
+        ),
+        links=(
+            LeadMagnetLink(
+                label="The ABC kit on GitHub",
+                url="https://github.com/COMMAND-LABS/automate-linkedin-content-with-abc",
+                note="The setup guides, the example prompts, and the 1-click Airtable base install.",
+            ),
+            LeadMagnetLink(
+                label="The 5-day campaign prompt",
+                url=(
+                    "https://github.com/COMMAND-LABS/automate-linkedin-content-with-abc/"
+                    "blob/main/example_prompts/5_posts.compile.md"
+                ),
+                note="One prompt, five posts, each one moving the reader a stage closer to buying.",
+            ),
+            LeadMagnetLink(
+                label="Book a free call",
+                url="https://cal.com/cmdlabs",
+                note="Want Claude running the rest of your operation, not just LinkedIn? Grab a slot.",
+            ),
+        ),
+    ),
 )
 
 BY_SLUG = {m.slug: m for m in LEAD_MAGNETS}
