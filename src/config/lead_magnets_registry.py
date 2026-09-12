@@ -95,17 +95,9 @@ LEAD_MAGNETS: tuple[LeadMagnet, ...] = (
                 note="The setup guides, the example prompts, and the 1-click Airtable base install.",
             ),
             LeadMagnetLink(
-                label="The 5-day campaign prompt",
-                url=(
-                    "https://github.com/COMMAND-LABS/automate-linkedin-content-with-abc/"
-                    "blob/main/example_prompts/5_posts.compile.md"
-                ),
-                note="One prompt, five posts, each one moving the reader a stage closer to buying.",
-            ),
-            LeadMagnetLink(
                 label="Book a free call",
                 url="https://cal.com/cmdlabs",
-                note="Want Claude running the rest of your operation, not just LinkedIn? Grab a slot.",
+                note="Want Claude posting for you on all of your Social Media accounts?",
             ),
         ),
     ),
