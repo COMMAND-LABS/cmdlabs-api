@@ -79,8 +79,8 @@ LEAD_MAGNETS: tuple[LeadMagnet, ...] = (
         ),
     ),
     LeadMagnet(
-        slug="automate-linkedin-content-with-abc",
-        title="Automate LinkedIn Content with Airtable, Blotato, and Claude",
+        slug="automate-content-with-abc",
+        title="Automate Content with Airtable, Blotato, and Claude",
         subject="Your ABC kit from COMMAND LABS: automate LinkedIn content with Airtable, Blotato, and Claude",
         intro=(
             "Here is the ABC kit. Set it up in this order: Claude first, then Blotato, "
