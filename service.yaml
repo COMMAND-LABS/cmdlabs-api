@@ -51,12 +51,6 @@ spec:
                   name: POSTGRES_URL
                   key: latest
 
-            - name: COHERE_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: COHERE_API_KEY
-                  key: latest
-
             - name: REPLICATE_API_TOKEN
               valueFrom:
                 secretKeyRef:
