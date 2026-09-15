@@ -216,14 +216,6 @@ spec:
             - name: APP_BASE_URL
               value: "https://cmdlabs.io"
 
-            # Reranker
-
-            - name: RERANKER_API_URL
-              valueFrom:
-                secretKeyRef:
-                  name: RERANKER_API_URL
-                  key: latest
-
             - name: CREDENTIALS_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
