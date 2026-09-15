@@ -15,6 +15,7 @@ import os
 import boto3
 
 from src.config import lead_magnets_registry as registry
+from src.services import ses_logging
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,8 @@ logger = logging.getLogger(__name__)
 APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:3001")
 
 FROM_ADDRESS = "noreply@cmdlabs.io"
+
+EMAIL_KIND = "lead_magnet"
 
 
 def resource_url(slug: str) -> str:
@@ -83,6 +86,8 @@ def send_lead_magnet_email_ses(to_email: str, slug: str) -> None:
         logger.error("[send_lead_magnet_email_ses] Unknown slug %r for %s", slug, to_email)
         return
 
+    ses_logging.log_attempt(logger, kind=EMAIL_KIND, to_email=to_email,
+                            source=FROM_ADDRESS)
     try:
         client = boto3.client(
             "ses",
@@ -90,7 +95,7 @@ def send_lead_magnet_email_ses(to_email: str, slug: str) -> None:
             aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
             aws_secret_access_key=os.getenv("AWS_SECRET_KEY"),
         )
-        client.send_email(
+        response = client.send_email(
             Source=FROM_ADDRESS,
             Destination={"ToAddresses": [to_email]},
             Message={
@@ -101,7 +106,10 @@ def send_lead_magnet_email_ses(to_email: str, slug: str) -> None:
                 },
             },
         )
-    except Exception:
-        logger.exception(
-            "[send_lead_magnet_email_ses] Failed to send %r to %s", slug, to_email
-        )
+    except Exception as exc:  # noqa: BLE001 — best effort; the caller must not fail
+        ses_logging.log_failed(logger, kind=EMAIL_KIND, to_email=to_email,
+                               source=FROM_ADDRESS, exc=exc)
+        return
+
+    ses_logging.log_accepted(logger, kind=EMAIL_KIND, to_email=to_email,
+                             source=FROM_ADDRESS, response=response)

@@ -2,10 +2,19 @@ import logging
 import os
 import boto3
 
+from src.services import ses_logging
+
 logger = logging.getLogger(__name__)
+
+EMAIL_KIND = "reset_password_link"
+# NOTE: kalygo.io, not cmdlabs.io like the other senders. See the same note in
+# send_password_has_been_reset_email_ses.
+FROM_ADDRESS = "noreply@kalygo.io"
 
 
 def send_reset_password_link_email_ses(account_id: int, to_email: str, reset_token: str):
+    ses_logging.log_attempt(logger, kind=EMAIL_KIND, to_email=to_email,
+                            source=FROM_ADDRESS)
     try:
         client = boto3.client(
             'ses',
@@ -14,8 +23,8 @@ def send_reset_password_link_email_ses(account_id: int, to_email: str, reset_tok
             aws_secret_access_key=os.getenv("AWS_SECRET_KEY")
         )
 
-        client.send_email(
-            Source='noreply@kalygo.io',
+        response = client.send_email(
+            Source=FROM_ADDRESS,
             Destination={
                 'ToAddresses': [to_email]
             },
@@ -30,5 +39,10 @@ def send_reset_password_link_email_ses(account_id: int, to_email: str, reset_tok
                 }
             }
         )
-    except Exception:
-        logger.exception("[send_reset_password_link_email_ses] Failed to send to %s", to_email)
+    except Exception as exc:  # noqa: BLE001 — best effort; the caller must not fail
+        ses_logging.log_failed(logger, kind=EMAIL_KIND, to_email=to_email,
+                               source=FROM_ADDRESS, exc=exc)
+        return
+
+    ses_logging.log_accepted(logger, kind=EMAIL_KIND, to_email=to_email,
+                             source=FROM_ADDRESS, response=response)

@@ -2,10 +2,17 @@ import logging
 import os
 import boto3
 
+from src.services import ses_logging
+
 logger = logging.getLogger(__name__)
+
+EMAIL_KIND = "login_code"
+FROM_ADDRESS = "noreply@cmdlabs.io"
 
 
 def send_login_code_email_ses(to_email: str, code: str) -> None:
+    ses_logging.log_attempt(logger, kind=EMAIL_KIND, to_email=to_email,
+                            source=FROM_ADDRESS)
     try:
         client = boto3.client(
             "ses",
@@ -14,8 +21,8 @@ def send_login_code_email_ses(to_email: str, code: str) -> None:
             aws_secret_access_key=os.getenv("AWS_SECRET_KEY"),
         )
 
-        client.send_email(
-            Source="noreply@cmdlabs.io",
+        response = client.send_email(
+            Source=FROM_ADDRESS,
             Destination={"ToAddresses": [to_email]},
             Message={
                 "Subject": {"Data": "Your COMMAND LABS sign-in code"},
@@ -38,5 +45,10 @@ def send_login_code_email_ses(to_email: str, code: str) -> None:
                 },
             },
         )
-    except Exception:
-        logger.exception("[send_login_code_email_ses] Failed to send login code to %s", to_email)
+    except Exception as exc:  # noqa: BLE001 — best effort; the caller must not fail
+        ses_logging.log_failed(logger, kind=EMAIL_KIND, to_email=to_email,
+                               source=FROM_ADDRESS, exc=exc)
+        return
+
+    ses_logging.log_accepted(logger, kind=EMAIL_KIND, to_email=to_email,
+                             source=FROM_ADDRESS, response=response)
