@@ -11,18 +11,35 @@ from src.clients.pubsub_client import PubSubClient
 
 logger = logging.getLogger(__name__)
 
+# Each ingest cloud function has its OWN topic and its own subscription. A
+# message on the wrong topic is not an error anywhere: the publish succeeds,
+# this service returns success, the UI says "queued", and the file is simply
+# never ingested — the VectorDbIngestionLog row sits at PENDING forever. So the
+# topic is chosen by the CALLER, which is the only place that knows what kind of
+# upload this is, rather than being inferred here from the filename.
+#
+# qna-ingest-topic -> two-column Q&A CSVs and reviewed PDF-to-FAQ pairs; builds
+#                     one vector per Q&A pair.
+# txt-ingest-topic -> kalygo3-txt-ingest-cloud-function-python; chunks .txt/.md
+#                     free text and parses YAML front matter into file_* keys.
+QNA_INGEST_TOPIC = "qna-ingest-topic"
+TXT_INGEST_TOPIC = "txt-ingest-topic"
+
+
 class VectorStoresUploadService:
     """
     Upload service for the Vector Stores module.
 
     Uploads files to the account's OWN Google Cloud Storage bucket (per-account
-    credentials) and publishes a message to the 'qna-ingest-topic' Pub/Sub topic
-    for async ingestion. The Pub/Sub message carries account_id so the ingest
-    cloud function can resolve the same per-account credentials to download.
+    credentials) and publishes a message to an ingest Pub/Sub topic for async
+    ingestion. The Pub/Sub message carries account_id so the ingest cloud
+    function can resolve the same per-account credentials to download.
+
+    Which topic is a per-call decision — see the module constants above and the
+    `topic_name` argument to upload_file_and_publish.
     """
 
     def __init__(self):
-        self.pubsub_topic_name = "qna-ingest-topic"
         self.project_id = os.getenv("GOOGLE_CLOUD_PROJECT", "kalygo-436411")
 
     async def upload_file_and_publish(
@@ -35,12 +52,17 @@ class VectorStoresUploadService:
         jwt: str,
         db: Session,
         account_id: int,
+        topic_name: str = QNA_INGEST_TOPIC,
         batch_number: Optional[str] = None,
         comment: Optional[str] = None,
         extra_message_fields: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Upload file to the account's GCS bucket and publish a message to Pub/Sub.
+
+        `topic_name` selects the ingest cloud function. It defaults to the Q&A
+        topic because that is what the CSV and PDF-to-FAQ flows use; anything
+        that is not Q&A-shaped must pass it explicitly.
 
         `extra_message_fields` are merged into the published Pub/Sub message. The
         PDF-to-FAQ flow uses this to carry the reviewed Q&A pairs (so the ingest
@@ -99,15 +121,20 @@ class VectorStoresUploadService:
                 message_data.update(extra_message_fields)
 
             publisher_client = PubSubClient.get_publisher_client()
-            topic_path = publisher_client.topic_path(self.project_id, self.pubsub_topic_name)
-            
+            topic_path = publisher_client.topic_path(self.project_id, topic_name)
+
             message_json = json.dumps(message_data)
             message_bytes = message_json.encode("utf-8")
-            
+
             future = publisher_client.publish(topic_path, data=message_bytes)
             message_id = future.result()
-            
-            logger.info("Published message %s for file %s", message_id, file.filename)
+
+            # Topic included: "published successfully" to the wrong topic looks
+            # identical to the right one in every other log line.
+            logger.info(
+                "Published message %s for file %s to topic %s",
+                message_id, file.filename, topic_name
+            )
             
             return {
                 "success": True,
@@ -121,7 +148,7 @@ class VectorStoresUploadService:
                 "namespace": namespace,
                 "processing_status": "pending",
                 "message": "File uploaded successfully and queued for vector database ingestion",
-                "pubsub_topic": self.pubsub_topic_name,
+                "pubsub_topic": topic_name,
                 "module": "vector_stores"
             }
 

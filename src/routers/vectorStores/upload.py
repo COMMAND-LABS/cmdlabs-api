@@ -7,7 +7,11 @@ import logging
 from fastapi import APIRouter, Request, UploadFile, File, HTTPException, Form
 from typing import Optional
 from src.deps import org_dependency, jwt_dependency, db_dependency, ensure_account
-from src.services.vector_stores_upload_service import VectorStoresUploadService
+from src.services.vector_stores_upload_service import (
+    QNA_INGEST_TOPIC,
+    TXT_INGEST_TOPIC,
+    VectorStoresUploadService,
+)
 from src.services.vector_store_access import authorize_vector_store
 from src.services.account_gcs_service import AccountGcsCredentialMissing
 from src.db.models import VectorDbIngestionLog
@@ -89,6 +93,7 @@ async def upload_csv_file(
                 jwt=request.cookies.get("jwt") if request else None,
                 db=db,
                 account_id=account_id,
+                topic_name=QNA_INGEST_TOPIC,
                 batch_number=batch_number,
                 comment=comment
             )
@@ -229,6 +234,7 @@ async def upload_pdf_faq(
                 jwt=request.cookies.get("jwt") if request else None,
                 db=db,
                 account_id=account_id,
+                topic_name=QNA_INGEST_TOPIC,
                 batch_number=batch_number,
                 comment=comment,
                 extra_message_fields={
@@ -350,18 +356,22 @@ async def upload_text_file(
                 jwt=request.cookies.get("jwt") if request else None,
                 db=db,
                 account_id=account_id,
+                # Free text goes to the TXT ingest function, which chunks the
+                # document and reads YAML front matter. The Q&A function would
+                # not recognise this file at all.
+                topic_name=TXT_INGEST_TOPIC,
                 batch_number=batch_number,
                 comment=comment
             )
         except AccountGcsCredentialMissing as e:
             raise HTTPException(status_code=400, detail=str(e))
-        
+
         if not result.get("success"):
             raise HTTPException(
                 status_code=500,
                 detail=result.get("error", "Failed to upload file")
             )
-        
+
         # Create ingestion log entry with PENDING status
         try:
             ingestion_log = VectorDbIngestionLog(
