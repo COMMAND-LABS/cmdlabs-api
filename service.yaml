@@ -164,7 +164,7 @@ spec:
 
             # Google Cloud Storage and PubSub
             - name: GCS_BUCKET_NAME
-              value: "kalygo-kb-ingest-storage"
+              value: "cmdlabs-kb-ingest-storage"
 
             - name: GOOGLE_CLOUD_PROJECT
               value: "command-labs"
