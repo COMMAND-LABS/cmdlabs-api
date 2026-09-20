@@ -4,6 +4,9 @@ metadata:
   name: cmdlabs-api-service
 spec:
   template:
+    metadata:              # <- this block doesn't exist yet
+      annotations:
+        autoscaling.knative.dev/minScale: "1"
     spec:
       # This service now also runs the agent runtime (SSE streams), so both
       # values below are explicit rather than platform defaults:
