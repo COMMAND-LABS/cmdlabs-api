@@ -62,3 +62,7 @@ TOKEN=$(gcloud auth print-identity-token)
 
 ##
 
+gcloud iam service-accounts add-iam-policy-binding \
+  cmdlabs-runner-sa@$PROJECT.iam.gserviceaccount.com --project $PROJECT \
+  --member "serviceAccount:command-labs-api-cicd@$PROJECT.iam.gserviceaccount.com" \
+  --role roles/iam.serviceAccountUser

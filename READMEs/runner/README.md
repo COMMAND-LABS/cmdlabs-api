@@ -64,6 +64,15 @@ gcloud run services add-iam-policy-binding cmdlabs-runner \
   --project $PROJECT --region $REGION \
   --member "serviceAccount:$API_SA" --role roles/run.invoker
 
+# 3b. Let CI deploy it. The GitHub workflow authenticates as the API CI
+#     service account; deploying a service that RUNS AS cmdlabs-runner-sa
+#     requires actAs on that account. Without this the runner workflow fails
+#     with "Permission iam.serviceaccounts.actAs denied".
+gcloud iam service-accounts add-iam-policy-binding \
+  cmdlabs-runner-sa@$PROJECT.iam.gserviceaccount.com --project $PROJECT \
+  --member "serviceAccount:command-labs-api-cicd@$PROJECT.iam.gserviceaccount.com" \
+  --role roles/iam.serviceAccountUser
+
 # 4. Confirm there is NO Cloud NAT in the region. If this prints a router
 #    with NAT, runs would have internet access through it — pick a subnet
 #    without NAT and change the network-interfaces annotation to match.
