@@ -66,3 +66,32 @@ gcloud iam service-accounts add-iam-policy-binding \
   cmdlabs-runner-sa@$PROJECT.iam.gserviceaccount.com --project $PROJECT \
   --member "serviceAccount:command-labs-api-cicd@$PROJECT.iam.gserviceaccount.com" \
   --role roles/iam.serviceAccountUser
+
+##
+
+```sh
+gcloud iam service-accounts list --project command-labs
+gcloud storage ls --project command-labs
+```
+
+##
+
+python -m scripts.upload_dataset --env-file .env.production --email tad@cmdlabs.io \
+  --file data/mock/duty_spend.csv --gcs-path datasets/duty_spend.csv
+
+##
+
+python -m scripts.upload_dataset --env-file .env.production --email tad@cmdlabs.io \
+  --file data/mock/duty_spend.csv --gcs-path datasets/duty_spend.csv
+
+##
+
+cd runner
+uv run uvicorn runner.app:app --port 8081
+
+##
+
+python -m scripts.create_agent --email tad@cmdlabs.io --name "Logistics Analyst" --config READMEs/runner/logistics_analyst_agent.pedestal.json
+
+##
+
