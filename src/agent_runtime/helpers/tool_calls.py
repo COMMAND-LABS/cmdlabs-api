@@ -64,6 +64,11 @@ def format_tool_call(
         "send_html_email_with_ses": _format_send_html_email,
         "load_skill": _format_load_skill,
         "save_skill": _format_save_skill,
+        # Default names of the runner-backed and knowledge-write tools. A
+        # config that renames one falls through to the generic "custom" shape.
+        "time_series_forecast": lambda n, i, o: _format_typed(n, i, o, "timeSeriesForecast"),
+        "run_python": lambda n, i, o: _format_typed(n, i, o, "codeExecution"),
+        "knowledge_write": lambda n, i, o: _format_typed(n, i, o, "knowledgeWrite"),
     }
 
     formatter = _FORMATTERS.get(tool_name)
@@ -270,6 +275,22 @@ def _format_save_skill(
             "visibility": tool_output.get("visibility"),
             "error": tool_output.get("error"),
         },
+    }
+
+
+def _format_typed(
+    tool_name: str,
+    tool_input: dict[str, Any],
+    tool_output: dict[str, Any],
+    tool_type: str,
+) -> dict[str, Any]:
+    """Generic shape with a specific discriminator, for tools whose output is
+    already a plain dict the UI can render as-is."""
+    return {
+        "toolType": tool_type,
+        "toolName": tool_name,
+        "input": tool_input,
+        "output": tool_output,
     }
 
 

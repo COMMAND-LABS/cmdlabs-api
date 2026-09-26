@@ -6,12 +6,15 @@ Add a new tool type by writing a builder module and registering it below.
 """
 from functools import partial
 
+from .code_execution import create_code_execution_tool
 from .contact_crm import (
     create_contact_event_write_tool,
     create_contact_events_read_tool,
     create_contact_read_tool,
 )
 from .db_read import create_db_read_tool
+from .knowledge_write import create_knowledge_write_tool
+from .time_series_forecast import create_time_series_forecast_tool
 from .db_write import create_db_write_tool
 from .exceptions import CredentialError
 from .factory import create_tools_from_agent_config
@@ -36,6 +39,12 @@ ToolRegistry.register("contactEventWrite", create_contact_event_write_tool)
 # Internal reasoning — no external access. Registering a tool is what enables
 # multi-step turns, so this is how a "toolless" agent gets a reasoning loop.
 ToolRegistry.register("think", create_think_tool)
+# Runner-backed (cmdlabs-runner does the work; see agent_runtime/runner_client.py)
+# and the HITL knowledge writer. Built only when RUNNER_URL / a writable KB is
+# configured; otherwise skipped with a log line like any other misconfigured tool.
+ToolRegistry.register("timeSeriesForecast", create_time_series_forecast_tool)
+ToolRegistry.register("codeExecution", create_code_execution_tool)
+ToolRegistry.register("knowledgeWrite", create_knowledge_write_tool)
 
 __all__ = [
     "CredentialError",

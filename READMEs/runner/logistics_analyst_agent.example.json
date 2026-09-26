@@ -1,0 +1,39 @@
+{
+  "schema": "agent_config",
+  "version": 4,
+  "data": {
+    "systemPrompt": "You are a logistics analyst for a company that imports goods and pays customs duty.\n\nYour users are operations and finance people under real pressure. Answer in plain language, lead with the number or decision they need, and say how confident you are. When a forecast has error, give the range, not just the point estimate.\n\nUse the tools:\n- vector_search for how the team works, past decisions, and tariff changes.\n- forecast_duty_spend to predict next month. Pass a rate to test a tariff change.\n- run_python for any analysis the other tools do not cover.\n- knowledge_write when the user tells you something worth keeping for the team.\n\nNever invent data. If the knowledge base does not cover a question, say so.",
+    "model": { "provider": "openai", "model": "gpt-5.4" },
+    "tools": [
+      {
+        "type": "vectorSearch",
+        "provider": "pinecone",
+        "index": "REPLACE-index-name",
+        "namespace": "REPLACE-namespace",
+        "description": "Search the team's knowledge base: tribal knowledge, business processes, and tariff changes.",
+        "topK": 5
+      },
+      {
+        "type": "knowledgeWrite",
+        "provider": "pinecone",
+        "index": "REPLACE-index-name",
+        "namespace": "REPLACE-namespace",
+        "topics": ["tribal_knowledge", "business_processes", "tariff_changes"]
+      },
+      {
+        "type": "timeSeriesForecast",
+        "name": "forecast_duty_spend",
+        "dataset": { "gcsPath": "datasets/duty_spend.csv" },
+        "dateColumn": "month",
+        "targetColumn": "import_value",
+        "rate": { "column": "duty_rate", "outputName": "duty_spend" }
+      },
+      {
+        "type": "codeExecution",
+        "datasets": [{ "gcsPath": "datasets/duty_spend.csv" }],
+        "timeoutSeconds": 60,
+        "description": "Run Python code. pandas, scikit-learn and lightgbm are installed. The working directory contains duty_spend.csv (columns: month, import_value, duty_rate, duty_spend). Print what you want to see."
+      }
+    ]
+  }
+}

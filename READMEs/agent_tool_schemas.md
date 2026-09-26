@@ -355,6 +355,101 @@ function ResultCard({ result }) {
 }
 ```
 
+## Runner-backed and knowledge-write tools
+
+Three tool types added for dataset analysis and team knowledge capture. All
+three are additive entries in `agent_config.v4.json` — existing configs are
+unchanged. Full deploy/setup notes: [`READMEs/runner/README.md`](/code/READMEs/runner/README.md);
+a complete agent using all of them: [`logistics_analyst_agent.example.json`](/code/READMEs/runner/logistics_analyst_agent.example.json).
+
+| Type | Default tool name | `toolType` in tool calls | Runs where | Module gate |
+|---|---|---|---|---|
+| `timeSeriesForecast` | `time_series_forecast` (configurable via `name`) | `timeSeriesForecast` | cmdlabs-runner | none (owner opt-in) |
+| `codeExecution` | `run_python` (configurable via `name`) | `codeExecution` | cmdlabs-runner | none (owner opt-in) |
+| `knowledgeWrite` | `knowledge_write` | `knowledgeWrite` | API, after approval | `knowledge_bases` |
+
+A renamed forecast/code tool falls through to `toolType: "custom"`; the
+output shape is the same.
+
+### `timeSeriesForecast`
+
+```json
+{
+  "type": "timeSeriesForecast",
+  "name": "forecast_duty_spend",
+  "dataset": { "gcsPath": "datasets/duty_spend.csv" },
+  "dateColumn": "month",
+  "targetColumn": "import_value",
+  "rate": { "column": "duty_rate", "outputName": "duty_spend" }
+}
+```
+
+The dataset is a CSV in the **agent owner's** GCS bucket (upload with
+`python -m scripts.upload_dataset`). Monthly data only in v1. The model may pass
+`model` (`lightgbm` | `random_forest`) and, only when `rate` is configured,
+a `rate` override for scenario questions.
+
+Output:
+
+```json
+{
+  "period": "2026-01", "target": "import_value",
+  "prediction": 2981234.5, "low": 2790000.1, "high": 3172468.9,
+  "interval_basis": "prediction ± holdout MAPE (approximate, not a calibrated confidence interval)",
+  "last_actual": 2760570.19, "last_period": "2025-12",
+  "model": "lightgbm", "val_mape": 0.041, "holdout_mape": 0.064, "n_rows": 60,
+  "dataset": "duty_spend.csv",
+  "rate": {
+    "column": "duty_rate", "value": 0.1, "overridden": true, "last_actual_rate": 0.085,
+    "derived_prediction": 298123.45, "derived_low": 279000.01, "derived_high": 317246.89,
+    "derived_last_actual": 234648.47, "output_name": "duty_spend"
+  }
+}
+```
+
+### `codeExecution`
+
+```json
+{
+  "type": "codeExecution",
+  "datasets": [{ "gcsPath": "datasets/duty_spend.csv" }],
+  "timeoutSeconds": 60
+}
+```
+
+Input `{ "code": "..." }`; output `{ "stdout", "stderr", "returncode", "timed_out" }`
+(each stream truncated to its last 4000 characters). Datasets appear in the
+working directory under their `filename` (default: last path segment). The
+sandbox has pandas, numpy, scikit-learn and lightgbm, and no network.
+
+### `knowledgeWrite`
+
+```json
+{
+  "type": "knowledgeWrite",
+  "provider": "pinecone",
+  "index": "team-kb",
+  "namespace": "logistics",
+  "topics": ["tribal_knowledge", "business_processes", "tariff_changes"]
+}
+```
+
+Input `{ "topic": <one of topics>, "text": "..." }`. The call never writes
+directly: it queues a `PendingToolApproval` (`tool_type: "knowledgeWrite"`)
+and the stream emits the same `tool_approval_required` event as the email
+tools, with `preview: { topic, text, index, namespace }`. Approving via
+`POST /api/tool-approvals/{id}/approve` (optional `{ "body": "<edited text>" }`)
+stores a markdown note with YAML front matter in the KB's bucket and publishes
+to `txt-ingest-topic`; it becomes searchable once ingestion completes.
+
+The tool is only built for callers who may write to that knowledge base
+(owner, or a member with a write grant), and the check is repeated at
+approval time.
+
+**UI work this needs:** an approval card for `tool_type === "knowledgeWrite"`
+(render `preview.topic` and an editable `preview.text`, send edits as `body`),
+and tool-picker entries for the three new types.
+
 ## Support
 
 For questions or issues with the tool schemas:

@@ -164,6 +164,40 @@ def upload_bytes(
     return {"gcs_bucket": bucket_name, "gcs_file_path": gcs_file_path}
 
 
+def download_bytes(
+    db: Session,
+    account_id: int,
+    *,
+    gcs_file_path: str,
+    max_bytes: int = 50 * 1024 * 1024,
+) -> bytes:
+    """
+    Download an object from the account's GCS bucket.
+
+    Used by dataset-backed agent tools (forecast, code execution), which read a
+    CSV the owner placed in their own bucket. Blocking — call from a worker
+    thread on the request path.
+
+    Raises AccountGcsCredentialMissing if the account has no GCS credential,
+    google.cloud.exceptions.NotFound if the object does not exist, and
+    ValueError if the object is larger than max_bytes (a guard against pulling
+    a multi-GB object into memory on the API instance).
+    """
+    service_account_json, bucket_name = _resolve_account_gcs_config(db, account_id)
+
+    client = _build_storage_client(service_account_json)
+    blob = client.bucket(bucket_name).blob(gcs_file_path)
+    blob.reload()  # populates size; raises NotFound for a missing object
+    if blob.size is not None and blob.size > max_bytes:
+        raise ValueError(
+            f"gs://{bucket_name}/{gcs_file_path} is {blob.size} bytes; the limit is {max_bytes}."
+        )
+    data = blob.download_as_bytes()
+    logger.info("[ACCOUNT GCS] Downloaded gs://%s/%s (%d bytes) for account %s",
+                bucket_name, gcs_file_path, len(data), account_id)
+    return data
+
+
 def upload_bytes_for_index(
     db: Session,
     owner_account_id: int,

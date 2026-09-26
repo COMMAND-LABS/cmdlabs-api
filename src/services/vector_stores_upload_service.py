@@ -72,6 +72,47 @@ class VectorStoresUploadService:
         Raises account_gcs_service.AccountGcsCredentialMissing when the account
         has no GCS credential configured (callers map this to HTTP 400).
         """
+        file_content = await file.read()
+        return await self.upload_bytes_and_publish(
+            file_bytes=file_content,
+            filename=file.filename,
+            content_type=file.content_type,
+            user_id=user_id,
+            user_email=user_email,
+            index_name=index_name,
+            namespace=namespace,
+            jwt=jwt,
+            db=db,
+            account_id=account_id,
+            topic_name=topic_name,
+            batch_number=batch_number,
+            comment=comment,
+            extra_message_fields=extra_message_fields,
+        )
+
+    async def upload_bytes_and_publish(
+        self,
+        *,
+        file_bytes: bytes,
+        filename: str,
+        content_type: Optional[str],
+        user_id: str,
+        user_email: str,
+        index_name: str,
+        namespace: str,
+        jwt: Optional[str],
+        db: Session,
+        account_id: int,
+        topic_name: str = QNA_INGEST_TOPIC,
+        batch_number: Optional[str] = None,
+        comment: Optional[str] = None,
+        extra_message_fields: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        The bytes form of upload_file_and_publish, for callers that build the
+        file themselves (the knowledgeWrite approval renders a markdown note).
+        Same storage path, same message, same return shape.
+        """
         try:
             file_id = str(uuid.uuid4())
             timestamp = datetime.now().isoformat()
@@ -79,9 +120,9 @@ class VectorStoresUploadService:
             if batch_number is None:
                 batch_number = str(uuid.uuid4())
 
-            gcs_file_path = f"vector_stores/{index_name}/{namespace}/{batch_number}/{file_id}/{file.filename}"
+            gcs_file_path = f"vector_stores/{index_name}/{namespace}/{batch_number}/{file_id}/{filename}"
 
-            file_content = await file.read()
+            file_content = file_bytes
 
             # Store in the bucket bound to this knowledge base (falls back to the
             # owner's default GCS credential when the index has no explicit bind).
@@ -91,7 +132,7 @@ class VectorStoresUploadService:
                 index_name,
                 file_bytes=file_content,
                 gcs_file_path=gcs_file_path,
-                content_type=file.content_type,
+                content_type=content_type,
             )
             gcs_bucket = ref["gcs_bucket"]
 
@@ -99,11 +140,11 @@ class VectorStoresUploadService:
 
             message_data = {
                 "file_id": file_id,
-                "filename": file.filename,
+                "filename": filename,
                 "gcs_bucket": gcs_bucket,
                 "gcs_file_path": gcs_file_path,
                 "file_size": len(file_content),
-                "content_type": file.content_type,
+                "content_type": content_type,
                 "user_id": user_id,
                 "user_email": user_email,
                 "account_id": account_id,
@@ -133,13 +174,13 @@ class VectorStoresUploadService:
             # identical to the right one in every other log line.
             logger.info(
                 "Published message %s for file %s to topic %s",
-                message_id, file.filename, topic_name
+                message_id, filename, topic_name
             )
             
             return {
                 "success": True,
                 "file_id": file_id,
-                "filename": file.filename,
+                "filename": filename,
                 "gcs_bucket": gcs_bucket,
                 "gcs_file_path": gcs_file_path,
                 "message_id": message_id,

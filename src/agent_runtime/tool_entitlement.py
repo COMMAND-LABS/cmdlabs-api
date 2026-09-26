@@ -58,6 +58,13 @@ TOOL_MODULES = {
     # Ungated: pure internal reasoning — touches no data, needs no credential.
     # Must work for every caller, or multi-step turns silently degrade to one.
     "think": None,
+    # Writes to a KB: same module as reading one.
+    "knowledgeWrite": "knowledge_bases",
+    # Ungated for v1 by the same rule as dbTableRead: the agent OWNER opts in
+    # by adding the tool, and the dataset it reads sits in the owner's own
+    # bucket. Give these an 'analytics' module when they are priced separately.
+    "timeSeriesForecast": None,
+    "codeExecution": None,
 }
 # NOT in this map: load_skill. Skills attach via data.skills (by id), not as a
 # data.tools entry, so allowed_tool_configs never sees them; their module gate

@@ -1,0 +1,70 @@
+name: Deploy cmdlabs-runner to Cloud Run
+
+# The runner is its own image and its own Cloud Run service. It only changes
+# when runner/ changes, so it deploys on its own trigger rather than riding
+# every API deploy. One-time setup (service account, invoker binding, network)
+# is in READMEs/runner/README.md — this workflow assumes it is done.
+on:
+  push:
+    branches: ["main"]
+    paths: ["runner/**", ".github/workflows/runner.yaml"]
+
+concurrency:
+  group: deploy-runner-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: command-labs
+  SERVICE_NAME: cmdlabs-runner
+  SERVICE_REGION: us-east1
+  IMAGE: us-central1-docker.pkg.dev/command-labs/cmdlabs-api/cmdlabs-runner
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v4
+      - name: Run runner tests
+        working-directory: runner
+        run: |
+          uv venv
+          uv pip install -e '.[dev]'
+          uv run python -m pytest -q
+
+  deploy:
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Google Cloud Auth
+        uses: "google-github-actions/auth@v3"
+        with:
+          credentials_json: "${{ secrets.GCP_SA }}"
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Configure Docker
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev
+
+      - name: Build and Push
+        run: |-
+          docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+            -t "${{ env.IMAGE }}:${{ github.sha }}" -t "${{ env.IMAGE }}:latest" --push runner
+
+      # replace = the spec (concurrency=1, no-role SA, VPC egress...);
+      # deploy = roll the immutable :sha image. Never --allow-unauthenticated:
+      # IAM is the only thing standing between the internet and /execute.
+      - name: Replace Cloud Run Service
+        run: gcloud run services replace runner/service.yaml --region $SERVICE_REGION
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy $SERVICE_NAME \
+            --image ${{ env.IMAGE }}:${{ github.sha }} \
+            --platform managed \
+            --region $SERVICE_REGION \
+            --no-allow-unauthenticated

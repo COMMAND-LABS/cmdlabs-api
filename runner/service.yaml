@@ -1,0 +1,53 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: cmdlabs-runner
+  annotations:
+    # Ingress stays "all" on purpose: cmdlabs-api is not on VPC egress, so
+    # its calls arrive from a public IP and "internal" ingress would reject
+    # them. The gate is IAM instead — the service is deployed WITHOUT
+    # --allow-unauthenticated and only the API's service account holds
+    # roles/run.invoker. See READMEs/runner/README.md.
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        # Cold-starting pandas + lightgbm costs a few seconds; keeping one
+        # instance warm keeps tool calls snappy. Set to "0" to trade that for
+        # zero idle cost.
+        autoscaling.knative.dev/minScale: "1"
+        autoscaling.knative.dev/maxScale: "10"
+        # gen1 = gVisor. gen2 (microVM) also works; gen1 is the stricter
+        # syscall surface for code we did not write.
+        run.googleapis.com/execution-environment: gen1
+        # Route ALL egress through the VPC. The subnet has no Cloud NAT, so
+        # there is no path to the internet from inside a run. See
+        # READMEs/runner/README.md for the one-time network setup.
+        run.googleapis.com/network-interfaces: '[{"network":"default","subnetwork":"default"}]'
+        run.googleapis.com/vpc-access-egress: all-traffic
+    spec:
+      # A dedicated identity with NO roles: the metadata server will still
+      # mint it a token, but the token opens nothing.
+      serviceAccountName: cmdlabs-runner-sa@command-labs.iam.gserviceaccount.com
+      # One request per instance. Model-written code from two tenants never
+      # shares a process, a filesystem or a CPU at the same moment.
+      containerConcurrency: 1
+      # A hard ceiling above the largest per-call timeout the API can request
+      # (codeExecution.timeoutSeconds max is 120).
+      timeoutSeconds: 150
+      containers:
+        - image: us-central1-docker.pkg.dev/command-labs/cmdlabs-api/cmdlabs-runner
+          resources:
+            limits:
+              memory: "2Gi"
+              cpu: "2"
+          startupProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12
+          ports:
+            - containerPort: 8080

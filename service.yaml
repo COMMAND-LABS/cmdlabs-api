@@ -172,6 +172,15 @@ spec:
             - name: GOOGLE_CLOUD_PROJECT
               value: "command-labs"
 
+            # cmdlabs-runner: the isolated compute service behind the
+            # timeSeriesForecast and codeExecution tools. Set to the runner's
+            # Cloud Run URL after its first deploy (READMEs/runner/README.md).
+            # Unset = those two tool types are skipped at build time; every
+            # other tool and agent is unaffected. Auth is a Google ID token
+            # minted from this service's identity (RUNNER_AUTH_MODE=iam).
+            - name: RUNNER_URL
+              value: "https://cmdlabs-runner-382688591561.us-east1.run.app"
+
             # Stripe
             #
             # All three of these must come from the SAME Stripe account and the

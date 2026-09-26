@@ -1,0 +1,28 @@
+[project]
+name = "cmdlabs-runner"
+version = "0.1.0"
+description = "Isolated compute service for cmdlabs-api agent tools: sandboxed Python execution and time-series forecasting."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.112.0,<1.0",
+    "uvicorn>=0.30.5,<1.0",
+    "pydantic>=2.9.0",
+    # Available to model-written code as well as to /forecast.
+    "pandas>=2.2,<3.0",
+    "numpy>=1.26.0,<3.0.0",
+    "scikit-learn>=1.5,<2.0",
+    "lightgbm>=4.5,<5.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3", "httpx>=0.27"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["runner"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

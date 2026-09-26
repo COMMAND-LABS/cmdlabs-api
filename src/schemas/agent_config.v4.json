@@ -151,8 +151,113 @@
         },
         {
           "$ref": "#/$defs/sendTxtEmailWithGoogleSmtpTool"
+        },
+        {
+          "$ref": "#/$defs/timeSeriesForecastTool"
+        },
+        {
+          "$ref": "#/$defs/codeExecutionTool"
+        },
+        {
+          "$ref": "#/$defs/knowledgeWriteTool"
         }
       ]
+    },
+    "datasetRef": {
+      "type": "object",
+      "description": "A CSV dataset in the agent owner's Google Cloud Storage bucket (the one bound to the owner's GCS credential). Read at tool-call time; never cached across turns.",
+      "additionalProperties": false,
+      "required": ["gcsPath"],
+      "properties": {
+        "gcsPath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Object path inside the owner's bucket, e.g. 'datasets/duty_spend.csv'."
+        },
+        "filename": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "description": "Name the file appears under in the sandbox working directory. Defaults to the last path segment of gcsPath."
+        }
+      }
+    },
+    "timeSeriesForecastTool": {
+      "type": "object",
+      "description": "Generic one-step-ahead forecast over a monthly CSV. Trains on the history (lagged target + calendar month), reports a range (point ± holdout MAPE), and optionally applies a rate column to derive a second series (spend = volume × rate). Training runs in the isolated runner service, not in the API.",
+      "additionalProperties": false,
+      "required": ["type", "dataset", "dateColumn", "targetColumn"],
+      "properties": {
+        "type": { "type": "string", "const": "timeSeriesForecast" },
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "description": "Tool name shown to the model. Defaults to 'time_series_forecast'. Set it when an agent has more than one forecast tool."
+        },
+        "description": { "type": "string", "minLength": 1 },
+        "dataset": { "$ref": "#/$defs/datasetRef" },
+        "dateColumn": { "type": "string", "minLength": 1, "description": "Column holding the period start date (parseable by pandas)." },
+        "targetColumn": { "type": "string", "minLength": 1, "description": "Numeric column to forecast." },
+        "frequency": {
+          "type": "string",
+          "enum": ["monthly"],
+          "default": "monthly",
+          "description": "Period frequency. v1 supports monthly data only."
+        },
+        "rate": {
+          "type": "object",
+          "description": "Optional derived series: prediction × rate. When set, the model may pass a `rate` override to test a scenario (e.g. a tariff change).",
+          "additionalProperties": false,
+          "required": ["column", "outputName"],
+          "properties": {
+            "column": { "type": "string", "minLength": 1, "description": "Rate column in the dataset; its last value is the default rate." },
+            "outputName": { "type": "string", "minLength": 1, "description": "Name of the derived series in the output, e.g. 'duty_spend'." }
+          }
+        }
+      }
+    },
+    "codeExecutionTool": {
+      "type": "object",
+      "description": "Run model-written Python in the isolated runner service (no network, no credentials, per-call time limit). The listed datasets are placed in the working directory before the code runs.",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string", "const": "codeExecution" },
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "description": "Tool name shown to the model. Defaults to 'run_python'."
+        },
+        "description": { "type": "string", "minLength": 1 },
+        "datasets": {
+          "type": "array",
+          "maxItems": 10,
+          "default": [],
+          "items": { "$ref": "#/$defs/datasetRef" }
+        },
+        "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 120, "default": 60 }
+      }
+    },
+    "knowledgeWriteTool": {
+      "type": "object",
+      "description": "Save a note to a knowledge base. Always queued for human approval; on approval the note is stored as a markdown file in the KB's bucket and sent through the text-ingest pipeline, so it becomes searchable after ingestion completes (not instantly).",
+      "additionalProperties": false,
+      "required": ["type", "provider", "index", "namespace", "topics"],
+      "properties": {
+        "type": { "type": "string", "const": "knowledgeWrite" },
+        "provider": { "type": "string", "enum": ["pinecone"] },
+        "index": { "type": "string", "minLength": 1 },
+        "namespace": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 },
+        "topics": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "uniqueItems": true,
+          "description": "Closed list of topics the model may file a note under. Each becomes the note's front-matter topic and a folder in the bucket.",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" }
+        }
+      }
     },
     "thinkTool": {
       "type": "object",

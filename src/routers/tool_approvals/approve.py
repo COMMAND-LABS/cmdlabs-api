@@ -6,6 +6,8 @@ Handles:
   - sendHtmlEmailWithSes         — sends agent-authored HTML email via AWS SES
   - sendTxtEmailWithGoogleOAuth  — sends via Google Gmail API (OAuth refresh token)
   - sendTxtEmailWithGoogleSmtp   — sends via Gmail SMTP + App Password
+  - knowledgeWrite               — stores a note in a KB bucket and queues
+                                   ingestion (see knowledge_write.py)
 """
 import base64
 import email as email_lib
@@ -21,6 +23,7 @@ from src.services.credential_access import load_credential_for_use
 from src.routers.credentials.encryption import decrypt_credential_data
 from .models import ApproveToolApprovalResponse
 from .email_html import inject_tracking_pixel, strip_html_tags
+from .knowledge_write import execute_knowledge_write
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +220,19 @@ async def approve_tool_approval(
         approval.status = "expired"
         db.commit()
         raise HTTPException(status_code=410, detail="This approval request has expired")
+
+    # ── Non-email tools ─────────────────────────────────────────────────────
+    # Each has its own executor module; the email flow below is untouched.
+    if approval.tool_type == "knowledgeWrite":
+        message = await execute_knowledge_write(
+            db, approval,
+            account_id=account_id,
+            user_email=str(auth.get("email", "")),
+            jwt=request.cookies.get("jwt"),
+            # The user may edit the note before approving; it rides in `body`.
+            text_override=overrides.body if overrides else None,
+        )
+        return ApproveToolApprovalResponse(id=approval.id, status="approved", message=message)
 
     # ── Execute the tool ────────────────────────────────────────────────────
     def _resolve(field: str, fallback: str) -> str:
