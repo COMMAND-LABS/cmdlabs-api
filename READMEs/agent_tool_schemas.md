@@ -17,7 +17,7 @@ All tool outputs follow a consistent, strongly-typed schema defined in JSON Sche
 
 - **[`chat_message.v2.json`](/code/src/schemas/chat_message.v2.json)** - Defines the structure of chat messages including tool calls
 - **[`agent_streaming_events.v1.json`](/code/src/schemas/agent_streaming_events.v1.json)** - Defines the streaming events emitted during agent execution
-- **[`agent_config.v2.json`](/code/src/schemas/agent_config.v2.json)** - Defines the agent configuration format
+- **[`agent_config.v4.json`](/code/src/schemas/agent_config.v4.json)** - Defines the agent configuration format (the API validates every saved config against it; tool-picker forms must produce what it accepts)
 
 ## Tool Call Structure
 
@@ -186,6 +186,7 @@ The agent endpoint streams events as JSON objects. See [`agent_streaming_events.
 | `on_chat_model_stream` | Token streamed from LLM | `data` (token) |
 | `on_tool_start` | Tool execution begins | `data` (description) |
 | `on_tool_end` | Tool execution completes | None |
+| `tool_approval_required` | A human-in-the-loop tool queued an action for review | `approval_id`, `tool_type`, `preview` (per tool type; see `knowledgeWrite` below) |
 
 ### Example Event Stream
 
@@ -368,8 +369,23 @@ a complete agent using all of them: [`logistics_analyst_agent.example.json`](/co
 | `codeExecution` | `run_python` (configurable via `name`) | `codeExecution` | cmdlabs-runner | none (owner opt-in) |
 | `knowledgeWrite` | `knowledge_write` | `knowledgeWrite` | API, after approval | `knowledge_bases` |
 
-A renamed forecast/code tool falls through to `toolType: "custom"`; the
-output shape is the same.
+`toolType` is assigned from the tool's **name**, not its config `type`
+(`src/agent_runtime/helpers/tool_calls.py`). Only the default names above map
+to the typed discriminators; a forecast/code tool given a custom `name` arrives
+as `toolType: "custom"` with the same `input`/`output` shape. For example, the
+logistics analyst names its forecast tool `forecast_duty_spend`, so its calls
+arrive as `"custom"`. Until that is fixed server-side, a renderer can detect
+these by output shape:
+
+```typescript
+const isForecastOutput = (o: any) => 'prediction' in o && 'holdout_mape' in o;
+const isCodeExecutionOutput = (o: any) => 'stdout' in o && 'returncode' in o;
+```
+
+**Errors.** When the dataset cannot be read or the runner fails, the forecast
+and code tools return `output: { "error": "<message>" }` instead of the shapes
+below. Render it as a failed tool call; the agent sees the same message and
+usually explains it in its reply.
 
 ### `timeSeriesForecast`
 
@@ -418,7 +434,9 @@ Output:
 ```
 
 Input `{ "code": "..." }`; output `{ "stdout", "stderr", "returncode", "timed_out" }`
-(each stream truncated to its last 4000 characters). Datasets appear in the
+(each stream truncated to its last 4000 characters). A non-zero `returncode`
+or `timed_out: true` is the model's code failing, not a tool error. Show
+`stderr`. Datasets appear in the
 working directory under their `filename` (default: last path segment). The
 sandbox has pandas, numpy, scikit-learn and lightgbm, and no network.
 
@@ -437,7 +455,9 @@ sandbox has pandas, numpy, scikit-learn and lightgbm, and no network.
 Input `{ "topic": <one of topics>, "text": "..." }`. The call never writes
 directly: it queues a `PendingToolApproval` (`tool_type: "knowledgeWrite"`)
 and the stream emits the same `tool_approval_required` event as the email
-tools, with `preview: { topic, text, index, namespace }`. Approving via
+tools, with `preview: { topic, text, index, namespace }`. The event is
+`{ "event": "tool_approval_required", "approval_id", "tool_type": "knowledgeWrite", "preview": { topic, text, index, namespace } }`.
+Rejecting is `POST /api/tool-approvals/{id}/reject`. Approving via
 `POST /api/tool-approvals/{id}/approve` (optional `{ "body": "<edited text>" }`)
 stores a markdown note with YAML front matter in the KB's bucket and publishes
 to `txt-ingest-topic`; it becomes searchable once ingestion completes.
@@ -460,6 +480,7 @@ For questions or issues with the tool schemas:
 
 ## Related Documentation
 
-- [Agent Configuration Schema](/code/src/schemas/agent_config.v2.json)
-- [Tool Registry Architecture](/code/src/tools/ARCHITECTURE.md)
-- [Tools Quick Reference](/code/src/tools/QUICK_REFERENCE.md)
+- [Agent Configuration Schema](/code/src/schemas/agent_config.v4.json)
+- [Tool implementations](/code/src/agent_runtime/tools/)
+- [Tool call formatting (`toolType` mapping)](/code/src/agent_runtime/helpers/tool_calls.py)
+- [Runner setup and deploy](/code/READMEs/runner/README.md)
