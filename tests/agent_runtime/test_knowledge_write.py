@@ -129,7 +129,7 @@ def upload(monkeypatch):
 
     async def fake_upload(self, **kwargs):
         calls.append(kwargs)
-        return {"success": True, "gcs_file_path": "vector_stores/x.md"}
+        return {"success": True, "gcs_bucket": "kb-bucket", "gcs_file_path": "vector_stores/x.md"}
 
     monkeypatch.setattr(exec_mod.VectorStoresUploadService, "upload_bytes_and_publish", fake_upload)
     monkeypatch.setattr(exec_mod, "authorize_vector_store", lambda *a, **k: 1)
@@ -150,6 +150,27 @@ async def test_approval_stores_the_note_and_queues_txt_ingest(upload):
     assert call["filename"].startswith("tariff_changes-") and call["filename"].endswith(".md")
     body = call["file_bytes"].decode()
     assert 'topic: "tariff_changes"' in body and body.rstrip().endswith("Rate moves to 10%.")
+
+
+async def test_approval_logs_a_pending_ingest_with_the_source_pointer(upload):
+    approval, db = _approval(), MagicMock()
+    await execute_knowledge_write(db, approval, account_id=2, user_email="ops@co.io", jwt=None)
+
+    row = db.add.call_args.args[0]
+    assert isinstance(row, exec_mod.VectorDbIngestionLog)
+    assert row.account_id == 1, "logged under the KB OWNER so the detail page and source links find it"
+    assert (row.index_name, row.namespace) == ("team-kb", "logistics")
+    assert (row.operation_type, row.status) == ("INGEST", "PENDING")
+    assert row.filenames == [upload[0]["filename"]]
+    assert (row.gcs_bucket, row.gcs_file_path) == ("kb-bucket", "vector_stores/x.md")
+    assert row.batch_number == upload[0]["batch_number"] and row.comment == upload[0]["comment"]
+
+
+async def test_log_failure_does_not_undo_the_approval(upload):
+    approval, db = _approval(), MagicMock()
+    db.add.side_effect = RuntimeError("db down")
+    message = await execute_knowledge_write(db, approval, account_id=2, user_email="u", jwt=None)
+    assert approval.status == "approved" and db.rollback.called and "queued" in message
 
 
 async def test_user_edit_overrides_the_agents_text(upload):

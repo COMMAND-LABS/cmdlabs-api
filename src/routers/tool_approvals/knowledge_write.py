@@ -5,6 +5,11 @@ bucket (the txt-ingest function parses front matter into `file_*` metadata,
 so the topic is searchable) and a message on txt-ingest-topic. Ingestion is
 asynchronous; "approved" here means "stored and queued", not "searchable".
 
+Like the CSV/TXT upload routes, each approved note gets a PENDING
+VectorDbIngestionLog row under the KB owner, carrying the GCS pointer. That row
+is what surfaces the note on the knowledge base detail page and what the
+source-URL endpoints check before signing a link to the original file.
+
 Authorization is re-checked at approval time. The tool checked it when the
 agent turn was built, but a grant can be revoked between the two.
 """
@@ -19,7 +24,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from src.db.models import PendingToolApproval
+from src.db.models import PendingToolApproval, VectorDbIngestionLog
 from src.services import account_gcs_service
 from src.services.vector_store_access import authorize_vector_store
 from src.services.vector_stores_upload_service import TXT_INGEST_TOPIC, VectorStoresUploadService
@@ -72,6 +77,10 @@ async def execute_knowledge_write(
     now = datetime.now(timezone.utc)
     content = render_note(topic=topic, text=text, author_email=user_email, approved_at=now)
     filename = f"{topic}-{now.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}.md"
+    comment = f"knowledge_write by {user_email} (approval {approval.id})"
+    # Chosen here, not by the upload service, so the log row and the Pub/Sub
+    # message carry the same batch_number.
+    batch_number = str(uuid.uuid4())
 
     try:
         result = await VectorStoresUploadService().upload_bytes_and_publish(
@@ -86,7 +95,8 @@ async def execute_knowledge_write(
             db=db,
             account_id=owner_account_id,
             topic_name=TXT_INGEST_TOPIC,
-            comment=f"knowledge_write by {user_email} (approval {approval.id})",
+            batch_number=batch_number,
+            comment=comment,
         )
     except account_gcs_service.AccountGcsCredentialMissing as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -98,4 +108,31 @@ async def execute_knowledge_write(
     approval.status = "approved"
     db.commit()
     logger.info("knowledgeWrite approval %s stored as %s", approval.id, result.get("gcs_file_path"))
+
+    # Logged after the approval commits: the note is already stored and queued,
+    # so a logging failure must not leave the approval pending (a retry would
+    # upload a duplicate). Same best-effort policy as the upload routes.
+    try:
+        db.add(VectorDbIngestionLog(
+            account_id=owner_account_id,
+            provider="pinecone",
+            index_name=index_name,
+            namespace=namespace,
+            filenames=[filename],
+            comment=comment,
+            gcs_bucket=result.get("gcs_bucket"),
+            gcs_file_path=result.get("gcs_file_path"),
+            operation_type="INGEST",
+            status="PENDING",
+            vectors_added=0,
+            vectors_deleted=0,
+            vectors_failed=0,
+            batch_number=batch_number,
+        ))
+        db.commit()
+    except Exception as e:
+        logger.warning("knowledgeWrite approval %s: failed to create ingestion log entry: %s: %s",
+                       approval.id, type(e).__name__, e)
+        db.rollback()
+
     return f"Note saved under '{topic}' and queued for ingestion into {index_name}/{namespace}."
