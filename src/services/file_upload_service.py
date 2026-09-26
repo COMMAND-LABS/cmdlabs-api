@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class FileUploadService:
     def __init__(self):
         self.pubsub_topic_name = "qna-ingest-topic"
-        self.project_id = os.getenv("GOOGLE_CLOUD_PROJECT", "kalygo-436411")
+        self.project_id = os.getenv("GOOGLE_CLOUD_PROJECT", "command-labs")
 
     async def upload_file_and_publish(self, file: UploadFile, user_id: str, user_email: str, namespace: str, jwt: str, db: Session, account_id: int) -> Dict[str, Any]:
         """

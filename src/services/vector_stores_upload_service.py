@@ -40,7 +40,7 @@ class VectorStoresUploadService:
     """
 
     def __init__(self):
-        self.project_id = os.getenv("GOOGLE_CLOUD_PROJECT", "kalygo-436411")
+        self.project_id = os.getenv("GOOGLE_CLOUD_PROJECT", "command-labs")
 
     async def upload_file_and_publish(
         self,
