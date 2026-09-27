@@ -1,6 +1,6 @@
 # Database Read Tool
 
-The Database Read Tool allows agents to query structured data from Kalygo database tables. This enables agents to access and reason about user-specific data like chat sessions, usage credits, and ingestion logs.
+The Database Read Tool allows agents to query structured data from Command Labs database tables. This enables agents to access and reason about user-specific data like chat sessions, usage credits, and ingestion logs.
 
 ## Overview
 
@@ -347,7 +347,7 @@ To whitelist a new table for agent access:
 ### 1. Create an agent with dbTableRead tool:
 
 ```bash
-curl -X POST https://api.kalygo.io/api/agents \
+curl -X POST https://api.cmdlabs.io/api/agents \
   -H "Content-Type: application/json" \
   -H "Cookie: jwt=YOUR_JWT" \
   -d '{
@@ -371,7 +371,7 @@ curl -X POST https://api.kalygo.io/api/agents \
 ### 2. Test the tool:
 
 ```bash
-curl -X POST https://api.kalygo.io/api/agents/{agent_id}/completion \
+curl -X POST https://api.cmdlabs.io/api/agents/{agent_id}/completion \
   -H "Cookie: jwt=YOUR_JWT" \
   -d '{
     "sessionId": "...",

@@ -1,6 +1,6 @@
 # TLDR
 
-Documenting process of deploying Kalygo 3.0 A.I. API to GCP
+Documenting process of deploying Command Labs API to GCP
 
 ## ToC
 
@@ -13,12 +13,12 @@ Documenting process of deploying Kalygo 3.0 A.I. API to GCP
 ## 1. Artifact Registry
 
 - TODO: setup gcloud inside of Devcontainer
-- `gcloud artifacts repositories create kalygo3-fastapi --repository-format docker --project kalygo-v3 --location us-central1`
-- CONFIRM REPOSITORY WAS CREATED: `https://console.cloud.google.com/artifacts?hl=en&project=kalygo-v3`
+- `gcloud artifacts repositories create command-labs-fastapi --repository-format docker --project command-labs --location us-central1`
+- CONFIRM REPOSITORY WAS CREATED: `https://console.cloud.google.com/artifacts?hl=en&project=command-labs`
 ## 2. Cloud Build
 
 - `gcloud builds submit --region=us-central1 --config cloudbuild.yaml`
-  - CONFIRM IMAGE WAS STORED: `https://console.cloud.google.com/artifacts/docker/kalygo-v3/us-central1/kalygo3-fastapi?hl=en&project=kalygo-v3`
+  - CONFIRM IMAGE WAS STORED: `https://console.cloud.google.com/artifacts/docker/command-labs/us-central1/command-labs-fastapi?hl=en&project=command-labs`
 
 ## 3. Add Application Secrets to GCP project
 
@@ -59,12 +59,12 @@ Documenting process of deploying Kalygo 3.0 A.I. API to GCP
   - ie: `echo -n "all-minilm-l6-v2-384-dims" | gcloud secrets create PINECONE_ALL_MINILM_L6_V2_INDEX --data-file=-`
   - ie: `echo -n "imagebind-1024-dims" | gcloud secrets create PINECONE_IMAGEBIND_1024_DIMS_INDEX --data-file=-`
   <!-- -->
-  - ie: `echo -n "https://kalygo-reranker-service-830723611668.us-east1.run.app"  | gcloud secrets create RERANKER_API_URL --data-file=-`
+  - ie: `echo -n "https://command-labs-reranker-service-830723611668.us-east1.run.app"  | gcloud secrets create RERANKER_API_URL --data-file=-`
   <!-- -->
 
 
 - Verify secrets created in console
-  - ie: `https://console.cloud.google.com/security/secret-manager?referrer=search&hl=en&project=kalygo-v3`
+  - ie: `https://console.cloud.google.com/security/secret-manager?referrer=search&hl=en&project=command-labs`
 
 - Grant the Cloud Run service permission to access the secrets at runtime
 
@@ -137,4 +137,4 @@ Documenting process of deploying Kalygo 3.0 A.I. API to GCP
 ## 4. Cloud Run
 
 - `gcloud run services replace service.yaml --region us-east1`
-- `gcloud run services set-iam-policy kalygo3-nextjs-service gcr-service-policy.yaml --region us-east1`
+- `gcloud run services set-iam-policy command-labs-nextjs-service gcr-service-policy.yaml --region us-east1`

@@ -1,6 +1,6 @@
 # Agent Tool Output Schemas
 
-This document describes the structured output schemas for tools used by agents on the Kalygo platform.
+This document describes the structured output schemas for tools used by agents on the Command Labs platform.
 
 ## Overview
 
@@ -72,7 +72,7 @@ Results from vector search contain metadata that varies based on how the data wa
 
 ### Text/Document Metadata
 
-Used for `.txt` and `.md` files ingested via `kalygo3-txt-ingest-cloud-function-python`.
+Used for `.txt` and `.md` files ingested via `cmdlabs-txt-ingest-cloud-function-python`.
 
 ```typescript
 interface TextDocumentMetadata {
@@ -111,7 +111,7 @@ interface TextDocumentMetadata {
 
 ### Q&A Metadata
 
-Used for `.csv` files with Q&A pairs ingested via `kalygo3-qna-ingest-cloud-function-python`.
+Used for `.csv` files with Q&A pairs ingested via `cmdlabs-qna-ingest-cloud-function-python`.
 
 ```typescript
 interface QAMetadata {
@@ -141,7 +141,7 @@ interface QAMetadata {
   "content": "Q: What is the pricing for the Pro plan?\nA: The Pro plan costs $29/month with unlimited projects",
   "filename": "faq.csv",
   "user_id": "123",
-  "user_email": "admin@kalygo.io",
+  "user_email": "admin@cmdlabs.io",
   "upload_timestamp": "1706234567890",
   "created_at": "2024-01-15T10:00:00Z",
   "last_edited_at": "2024-01-20T15:30:00Z"
@@ -476,7 +476,7 @@ For questions or issues with the tool schemas:
 
 1. Check the [JSON Schema files](/code/src/schemas/) for the source of truth
 2. Review the [examples](/code/src/schemas/chat_message.v2.json) in the schema files
-3. Check the [ingestion worker code](https://github.com/Kalygo-io/) to see how metadata is created
+3. Check the [ingestion worker code](https://github.com/COMMAND-LABS/) to see how metadata is created
 
 ## Related Documentation
 
