@@ -10,8 +10,8 @@ COMMAND LABS API (powered by FastAPI)
 
 ## Alternate technique
 
-- `docker build -f Dockerfile.dev -t kalygo-ai-api .`
-- `docker run -p 4000:4000 kalygo-ai-api`
+- `docker build -f Dockerfile.dev -t command-labs-api .`
+- `docker run -p 4000:4000 command-labs-api`
 
 ## How to run the FastAPI
 
