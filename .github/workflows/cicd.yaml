@@ -199,8 +199,19 @@ jobs:
 
       # END - Docker auth and build
 
+      # service.yaml names the image untagged (= :latest), so applying it as-is
+      # left the template unchanged between deploys: Cloud Run created no new
+      # revision and just re-reported the latest one. Once that revision was
+      # broken, every later deploy failed here and never reached the step that
+      # ships the fixed image. Pinning THIS run's smoke-tested :sha makes every
+      # deploy a new revision of exactly the image CI just checked.
       - name: Replace Cloud Run Service
-        run: gcloud run services replace service.yaml --region $SERVICE_REGION
+        run: |-
+          sed "s|image: ${{ env.ARTIFACTORY_URL }}\s*$|image: ${{ env.ARTIFACTORY_URL }}:${{ github.sha }}|" \
+            service.yaml > service.deploy.yaml
+          grep -q "image: ${{ env.ARTIFACTORY_URL }}:${{ github.sha }}" service.deploy.yaml \
+            || { echo "::error::could not pin the image in service.yaml"; exit 1; }
+          gcloud run services replace service.deploy.yaml --region $SERVICE_REGION
 
       - name: Deploy to Cloud Run
         run: |
