@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy import tuple_
 
 from datetime import datetime
-from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
 from src.services.org_scope import resource_predicate
 from src.db.models import Agent, VectorStore, Credential, AccessGrant, AccessGrantEvent
 from src.services import access
@@ -103,7 +103,6 @@ async def audit_resource(
     source documents (via /files/source-url), even with no grant on the index.
     """
     account_id = account_id_from_claims(jwt)
-    ensure_account(db, account_id)
     if resource_type not in (access.AGENT, access.VECTOR_STORE, access.CREDENTIAL):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown resource type")
     _require_owner(db, account_id, resource_type, resource_id)
@@ -151,7 +150,6 @@ async def my_access_report(
 ):
     """Reverse audit: everything the caller can reach via grants, and the path."""
     account_id = account_id_from_claims(jwt)
-    ensure_account(db, account_id)
 
     items = access.resources_for_account(db, account_id)
     out: List[ReverseAuditItem] = []
@@ -185,7 +183,6 @@ async def shared_by_me(
     appear here in the same pass, not on a page of its own.
     """
     account_id = account_id_from_claims(jwt)
-    ensure_account(db, account_id)
 
     # Map each owned resource (type, id) -> label.
     owned: dict = {}
@@ -253,7 +250,6 @@ async def access_activity(
     bases, and credentials — including revokes, which the live grant tables can't.
     """
     account_id = account_id_from_claims(jwt)
-    ensure_account(db, account_id)
     limit = max(1, min(limit, 500))
 
     # Resource keys the caller owns.

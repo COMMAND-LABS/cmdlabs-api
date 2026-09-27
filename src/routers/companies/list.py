@@ -3,7 +3,7 @@ List companies endpoint.
 """
 from fastapi import APIRouter, Request, Query
 from sqlalchemy import func as sqlfunc
-from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims
 from src.services.org_scope import tenant_predicate
 from src.db.models import Company, CompanyContact
 
@@ -30,7 +30,6 @@ async def list_companies(
     paginated envelope ({companies, total, limit, offset, has_more}).
     """
     account_id = account_id_from_claims(auth)
-    account = ensure_account(db, account_id)
 
     query = db.query(Company).filter(tenant_predicate(Company, org))
 

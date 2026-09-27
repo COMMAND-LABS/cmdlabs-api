@@ -6,7 +6,7 @@ fields the client sent, and treats an explicit null as "clear this field".
 """
 from fastapi import APIRouter, HTTPException, Request, status
 
-from src.deps import db_dependency, jwt_dependency, org_dependency, account_id_from_claims, ensure_account
+from src.deps import db_dependency, jwt_dependency, org_dependency, account_id_from_claims
 from src.db.models import AppSettings
 from src.services.agent_access import can_access_agent
 from src.rate_limit import limiter
@@ -32,7 +32,6 @@ async def update_app_settings(
     - elevenlabs_voice_id: the TTS voice (null clears it)
     """
     account_id = account_id_from_claims(jwt)
-    ensure_account(db, account_id)
 
     if not request_body.model_fields_set:
         raise HTTPException(

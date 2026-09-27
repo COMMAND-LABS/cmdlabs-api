@@ -8,7 +8,6 @@ from src.db.models import Skill
 from src.deps import (
     account_id_from_claims,
     db_dependency,
-    ensure_account,
     jwt_dependency,
     org_dependency,
 )
@@ -31,7 +30,6 @@ async def get_skill(
 ):
     """Get a specific skill by ID."""
     account_id = account_id_from_claims(jwt)
-    account = ensure_account(db, account_id)
 
     skill = get_resource_or_404(db, Skill, skill_id, org)
 

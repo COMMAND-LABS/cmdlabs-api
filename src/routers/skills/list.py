@@ -13,7 +13,6 @@ from src.db.models import Skill
 from src.deps import (
     account_id_from_claims,
     db_dependency,
-    ensure_account,
     jwt_dependency,
     org_dependency,
 )
@@ -35,7 +34,6 @@ async def list_skills(
 ):
     """List all skills the authenticated user can access."""
     account_id = account_id_from_claims(jwt)
-    account = ensure_account(db, account_id)
 
     skills = (
         scoped_resources(db, Skill, org, SKILL, granted_ids=None)

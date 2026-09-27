@@ -11,7 +11,6 @@ from src.db.models import Skill
 from src.deps import (
     account_id_from_claims,
     db_dependency,
-    ensure_account,
     jwt_dependency,
     org_dependency,
 )
@@ -41,7 +40,6 @@ async def create_skill(
 ):
     """Create a new skill in the caller's organization."""
     account_id = account_id_from_claims(jwt)
-    account = ensure_account(db, account_id)
 
     content = validate_skill_content(request_body.content)
     try:

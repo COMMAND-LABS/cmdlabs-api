@@ -2,7 +2,7 @@
 Create contact list endpoint.
 """
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims
 from src.db.models import ContactList
 
 from .models import CreateContactListRequest, ContactListSummaryResponse
@@ -20,7 +20,6 @@ async def create_contact_list(
     request: Request,
 ):
     account_id = account_id_from_claims(auth)
-    account = ensure_account(db, account_id)
 
     if not request_body.name or not request_body.name.strip():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="List name cannot be empty")

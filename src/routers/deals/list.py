@@ -3,7 +3,7 @@ List deals endpoint (account-scoped, server-side paginated).
 """
 from fastapi import APIRouter, Request, Query
 from sqlalchemy.orm import joinedload
-from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, auth_dependency
 from src.services.org_scope import tenant_predicate
 from src.db.models import Deal
 
@@ -33,9 +33,6 @@ async def list_deals(
     title/description. Returns a paginated envelope
     ({deals, total, limit, offset, has_more}).
     """
-    account_id = account_id_from_claims(auth)
-    account = ensure_account(db, account_id)
-
     # Eager-load the contact so DealResponse.contact_name doesn't N+1.
     query = (
         db.query(Deal)

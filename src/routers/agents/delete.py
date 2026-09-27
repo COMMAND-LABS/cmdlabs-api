@@ -2,7 +2,7 @@
 Delete agent endpoint.
 """
 from fastapi import APIRouter, status, Request
-from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
 from src.services.org_scope import get_resource_or_404
 from src.db.models import Agent
 from src.services import access
@@ -25,7 +25,6 @@ async def delete_agent(
     Only allows deleting agents belonging to the authenticated user.
     """
     account_id = account_id_from_claims(jwt)
-    account = ensure_account(db, account_id)
         
     agent = get_resource_or_404(db, Agent, agent_id, org)
 

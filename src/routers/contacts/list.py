@@ -3,7 +3,7 @@ List contacts endpoint.
 """
 from fastapi import APIRouter, Request, Query
 from sqlalchemy import func as sqlfunc
-from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, auth_dependency
 from src.services.org_scope import tenant_predicate
 from src.db.models import Contact
 
@@ -41,9 +41,6 @@ async def list_contacts(
     the original updated-desc order). Returns a paginated envelope
     ({contacts, total, limit, offset, has_more}).
     """
-    account_id = account_id_from_claims(auth)
-    account = ensure_account(db, account_id)
-
     query = db.query(Contact).filter(tenant_predicate(Contact, org))
 
     if status_filter:
