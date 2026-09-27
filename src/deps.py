@@ -22,9 +22,9 @@ def get_db():
     """
     Database session dependency.
     
-    The engine is configured with pool_pre_ping=True and a checkout
-    event listener that validates SSL connections, so stale connections
-    are automatically replaced before being handed out.
+    The engine is configured with pool_pre_ping=True, which validates each
+    connection on checkout, so stale connections are automatically replaced
+    before being handed out.
 
     The rollback is what lets routers stop writing `except Exception:
     db.rollback()` around every write. It is belt-and-braces — close()
