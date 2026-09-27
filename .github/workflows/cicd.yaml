@@ -169,13 +169,31 @@ jobs:
         run: |
           gcloud auth configure-docker us-central1-docker.pkg.dev
 
-      - name: Build and Push Container
-        # service.yaml references the image untagged, which Cloud Run resolves as
-        # :latest — so push that tag alongside the immutable :sha one.
+      - name: Build Container
         run: |-
           docker build -f Dockerfile.prod \
             -t "${{ env.ARTIFACTORY_URL }}:${{ github.sha }}" \
             -t "${{ env.ARTIFACTORY_URL }}:latest" ./
+
+      # Boot-check the image BEFORE it is pushed: import the whole app inside
+      # it, exactly as uvicorn will on Cloud Run. The tests run in CI's own
+      # environment, not this image, so a package missing from the image (the
+      # psycopg driver once was — every revision then crashed at boot while CI
+      # stayed green) is only caught here. POSTGRES_URL uses the production
+      # scheme (postgresql+psycopg) so the driver it needs is loaded;
+      # create_engine does not connect, and both values are dummies.
+      - name: Smoke-test the image
+        run: |-
+          docker run --rm \
+            -e POSTGRES_URL="postgresql+psycopg://smoke:smoke@localhost:1/smoke" \
+            -e PINECONE_API_KEY="smoke" \
+            "${{ env.ARTIFACTORY_URL }}:${{ github.sha }}" \
+            python -c "import src.main; print('image boots: ok')"
+
+      - name: Push Container
+        # service.yaml references the image untagged, which Cloud Run resolves as
+        # :latest — so push that tag alongside the immutable :sha one.
+        run: |-
           docker push "${{ env.ARTIFACTORY_URL }}:${{ github.sha }}"
           docker push "${{ env.ARTIFACTORY_URL }}:latest"
 
