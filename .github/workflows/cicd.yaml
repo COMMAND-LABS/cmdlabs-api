@@ -50,9 +50,14 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.12.3"  # same uv as the Dockerfiles
 
+      # --locked: fail if uv.lock is out of date with pyproject.toml, rather
+      # than silently re-resolving. The image installs from uv.lock, so a stale
+      # lock would mean testing one set of versions and shipping another.
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --locked
 
       # `python -m pytest`, not `pytest`. The module form puts the working
       # directory on sys.path; the console script does not, so `pytest` alone
@@ -103,9 +108,14 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.12.3"  # same uv as the Dockerfiles
 
+      # --locked: fail if uv.lock is out of date with pyproject.toml, rather
+      # than silently re-resolving. The image installs from uv.lock, so a stale
+      # lock would mean testing one set of versions and shipping another.
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --locked
 
       # Checked explicitly: an unset secret arrives as the empty string, and
       # alembic's env.py would hand that to set_main_option and fail with
@@ -182,7 +192,3 @@ jobs:
             --platform managed \
             --region $SERVICE_REGION \
             --allow-unauthenticated
-
-      # If required, use the Cloud Run url output in later steps
-      - name: Show Output
-        run: echo ${{ steps.deploy.outputs.url }}

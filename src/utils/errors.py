@@ -64,3 +64,38 @@ def handle_db_error(e: Exception, log_prefix: str) -> HTTPException:
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         detail="An unexpected error occurred. Please try again.",
     )
+
+
+def public_reason(exc: BaseException) -> str:
+    """A client-safe description of a third-party failure.
+
+    The raw text of an SDK / driver / crypto exception can carry secrets —
+    AWS signature errors echo the access key id, SQLAlchemy URL errors echo the
+    connection string, LLM SDKs echo (partly masked) API keys. So text from
+    those never reaches a response, an SSE frame, a tool result the model sees,
+    or a row the API later returns; log the exception and send this instead.
+
+    boto3/botocore ClientError -> its AWS error code (e.g. "MessageRejected",
+    "Throttling"), which is useful and never secret. Anything else -> the
+    exception class name.
+    """
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        code = (response.get("Error") or {}).get("Code")
+        if code:
+            return str(code)
+    return type(exc).__name__
+
+
+def own_message_or_reason(exc: BaseException) -> str:
+    """The message of a ValueError this codebase raised, else public_reason.
+
+    Our validation code raises PLAIN ValueErrors with messages written for the
+    user ("Unsupported LLM provider", "vectorSearch requires an index"), so
+    those are shown as-is. Library code raises ValueError SUBCLASSES — notably
+    pydantic's ValidationError, whose text echoes its inputs (an API key, a
+    connection string) — and those are reduced to a safe reason.
+    """
+    if type(exc) is ValueError:
+        return str(exc)
+    return public_reason(exc)

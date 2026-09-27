@@ -67,10 +67,10 @@ async def queue_tool_approval(
         approval_db.refresh(approval)
         approval_id = approval.id
         logger.info(f"[HITL EMAIL] Queued {tool_type} approval id={approval_id}")
-    except Exception as exc:
+    except Exception:
         approval_db.rollback()
         logger.exception(f"[HITL EMAIL] Failed to queue {tool_type} approval")
-        return json.dumps({"success": False, "error": f"Failed to queue email for approval: {exc}"})
+        return json.dumps({"success": False, "error": "Failed to queue email for approval."})
     finally:
         approval_db.close()
 
@@ -103,7 +103,7 @@ def verify_credential(
     try:
         data = decrypt_credential_data(credential.encrypted_data)
     except Exception as exc:
-        raise CredentialError(f"Failed to decrypt credential {credential_id}: {exc}") from exc
+        raise CredentialError(f"Failed to decrypt credential {credential_id}.") from exc
 
     missing = [k for k in required_fields if not data.get(k)]
     if missing:

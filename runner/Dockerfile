@@ -6,13 +6,17 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /usr/local/bin/uv
 
 ENV PYTHONUNBUFFERED=True
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
-RUN uv pip install --system --no-cache .
+# Exactly the locked, hash-verified versions (runner/uv.lock). The runner
+# package itself is copied below and imported from /app, not installed.
+COPY pyproject.toml uv.lock ./
+RUN uv export --frozen --no-emit-project -o /tmp/requirements.txt > /dev/null \
+    && uv pip install --system --no-cache --require-hashes -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
 
 COPY runner ./runner
 

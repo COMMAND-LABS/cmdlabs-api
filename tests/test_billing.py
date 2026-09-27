@@ -249,6 +249,41 @@ async def test_downgrade_cancels_immediately(
     assert test_account.has_active_subscription is False
 
 
+async def test_downgrade_records_the_lapse_so_the_webhook_is_a_no_op(
+    authed_client: AsyncClient, test_account: Account, db: Session
+):
+    """A self-service cancel is a lapse like any other.
+
+    It used to set only the status, leaving subscription_lapsed_at empty. The
+    customer.subscription.deleted webhook that follows then saw a lapsed
+    account with no timestamp and stamped one THEN — putting the account back
+    on (read-only) premium for 14 days after it had dropped to free, with no
+    org.suspend entry.
+    """
+    from src.routers.billing.webhook import apply_subscription_change
+
+    test_account.stripe_subscription_id = "sub_test1"
+    test_account.subscription_status = "active"
+    db.flush()
+
+    with patch(
+        "src.routers.billing.checkout.cancel_subscription_now",
+        return_value={"id": "sub_test1", "status": "canceled"},
+    ):
+        response = await authed_client.post("/api/billing/downgrade")
+
+    assert response.status_code == 200
+    db.refresh(test_account)
+    lapsed_at = test_account.subscription_lapsed_at
+    assert lapsed_at is not None, "the lapse is on record from the cancel itself"
+    assert plans.plan_for_account(test_account) == "free", "no grace for a voluntary cancel"
+
+    apply_subscription_change(db, test_account, {"id": "sub_test1", "status": "canceled"})
+    assert test_account.subscription_lapsed_at == lapsed_at, (
+        "the deleted webhook must not start a grace window")
+    assert plans.plan_for_account(test_account) == "free"
+
+
 async def test_downgrade_never_demotes_super_admin(
     authed_client: AsyncClient, test_account: Account, db: Session
 ):

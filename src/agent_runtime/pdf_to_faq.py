@@ -21,6 +21,7 @@ from src.agent_runtime.helpers.caller_llm import (
     create_caller_llm,
 )
 from src.utils.pdf_to_images import build_pdf_message
+from src.utils.errors import own_message_or_reason, public_reason
 
 logger = logging.getLogger(__name__)
 
@@ -66,14 +67,16 @@ async def generate_faq(
             detail=f"{provider.title()} API key required. Add it in account settings.",
         )
     except CredentialDecryptError as exc:
+        logger.warning("[PDF_TO_FAQ] could not read the %s API key", provider, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to retrieve API key: {exc}",
+            detail="Failed to retrieve API key.",
         ) from exc.__cause__
     except LlmInitError as exc:
+        logger.warning("[PDF_TO_FAQ] LLM initialization failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"LLM initialization failed: {exc}",
+            detail=f"LLM initialization failed: {own_message_or_reason(exc.__cause__ or exc)}",
         ) from exc.__cause__
 
     # Release the DB connection before the long-running LLM call (matches context.py).
@@ -101,7 +104,7 @@ async def generate_faq(
         logger.exception("[PDF_TO_FAQ] LLM structured-output call failed: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to generate FAQ: {exc}",
+            detail=f"Failed to generate FAQ: {public_reason(exc)}",
         ) from exc
 
     return {

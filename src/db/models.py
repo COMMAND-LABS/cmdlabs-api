@@ -394,10 +394,10 @@ class ChatSession(Base):
     # against this contact only. SET NULL on contact delete clears the scope
     # (the contact agent then fails closed rather than running unscoped).
     #
-    # Assumption: a contact never changes account. The contact<->account match
-    # is validated at session creation; the per-tool account_id filter is the
-    # runtime backstop. Revisit this binding if a "transfer contact" feature
-    # is ever added.
+    # Assumption: a contact never changes organization. The contact binding is
+    # validated at session creation; the per-tool org filter (tenant_predicate
+    # on org_id, in contact_crm) is the runtime backstop. Revisit this binding
+    # if a "transfer contact" feature is ever added.
     contact_id = Column(Integer, ForeignKey('contacts.id', ondelete='SET NULL'), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), default=func.now())
     title = Column(String)

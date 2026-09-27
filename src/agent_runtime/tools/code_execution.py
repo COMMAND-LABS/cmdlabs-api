@@ -22,6 +22,7 @@ from src.agent_runtime.runner_client import RunnerError, resolve_runner_client
 
 from .datasets import DatasetRef, fetch_dataset, parse_dataset_ref, require_gcs_credential
 from .sessions import resolve_session_factory
+from src.utils.errors import public_reason
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,7 @@ async def create_code_execution_tool(
             files = await _files()
         except Exception as exc:
             logger.error("[CODE EXECUTION] dataset unavailable: %s", exc)
-            return {"error": f"Could not read a dataset: {exc}"}
+            return {"error": f"Could not read a dataset ({public_reason(exc)})."}
         try:
             return await runner.execute(code, files, timeout_s)
         except RunnerError as exc:

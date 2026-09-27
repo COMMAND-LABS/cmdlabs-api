@@ -57,8 +57,10 @@ def run_migrations_offline() -> None:
     script output.
 
     """
-    # url = config.get_main_option("sqlalchemy.url")
-    url = config.set_main_option('sqlalchemy.url', os.getenv("POSTGRES_URL"))
+    # set_main_option returns None, so read the URL separately; offline mode
+    # (`alembic upgrade head --sql`) otherwise ran with url=None.
+    url = os.getenv("POSTGRES_URL")
+    config.set_main_option('sqlalchemy.url', url)
     context.configure(
         url=url,
         target_metadata=target_metadata,

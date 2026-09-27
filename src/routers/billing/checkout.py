@@ -7,10 +7,12 @@ Pay, 3DS, receipts and promo codes with it, and keeps us in PCI SAQ A.
 """
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request, status
 import stripe
 
+from src.config import plans_registry as plans
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
 from src.clients.stripe_client import (
     create_billing_portal_session,
@@ -20,6 +22,7 @@ from src.clients.stripe_client import (
 )
 from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
+from .webhook import apply_subscription_change
 from .models import CheckoutSessionResponse, PortalSessionResponse, SubscriptionResponse
 
 logger = logging.getLogger(__name__)
@@ -188,13 +191,14 @@ async def downgrade_to_free(
     request: Request,
 ):
     """
-    Cancel the membership and drop to Free immediately.
+    Cancel the membership immediately.
 
-    The role changes in this request rather than waiting for a webhook, so a
-    dropped or undelivered event can never leave someone on Premium for free.
-    Stripe also emits customer.subscription.deleted, which the webhook applies
-    on top — the same values, so it is a harmless second write and a safety net
-    if the write below failed.
+    The account stops being paid in this request rather than waiting for a
+    webhook, so a dropped or undelivered event can never leave someone on
+    Premium for free. It is audited like any lapse (org.suspend) but, unlike a
+    failed payment, gets no grace window. Stripe also emits
+    customer.subscription.deleted; by then a lapse is on record, so applying it
+    changes nothing — a safety net if the write below failed.
 
     Note: unused paid time is NOT refunded. Coming back is a fresh checkout.
     """
@@ -212,9 +216,19 @@ async def downgrade_to_free(
     except stripe.error.StripeError as e:
         raise handle_db_error(e, "[STRIPE ERROR CANCELLING SUBSCRIPTION]")
 
-    # Mirror what Stripe reports. Nothing else to update: this path and
-    # the webhook cannot disagree about paid-ness because neither stores it.
-    account.subscription_status = subscription.get("status") or "canceled"
+    # Apply what Stripe reports through the same path as the subscription
+    # webhooks, so the transition is audited (org.suspend) here and now.
+    apply_subscription_change(
+        db, account, {**subscription, "status": subscription.get("status") or "canceled"}
+    )
+    # A voluntary cancel gets no grace window — grace is a courtesy for a
+    # failed payment, and cancelling means free now. Record the lapse as one
+    # whose window has already closed: billing_state reads that as LAPSED, and
+    # because a lapse is now on record, the customer.subscription.deleted
+    # webhook that follows cannot stamp a fresh one and start a window late.
+    account.subscription_lapsed_at = (
+        datetime.now(timezone.utc) - timedelta(days=plans.GRACE_DAYS)
+    )
     db.commit()
     db.refresh(account)
 
