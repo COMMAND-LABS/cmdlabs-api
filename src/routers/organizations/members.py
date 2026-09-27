@@ -54,7 +54,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from src.config import roles_registry as roles
 from src.db.models import Account, Organization, OrganizationMember
-from src.deps import db_dependency, named_org_dependency, org_dependency
+from src.deps import db_dependency, named_org_dependency, org_dependency, require_org_owner
 from src.rate_limit import limiter
 from src.services import audit, invitations
 from src.services.invitation_mail import send_invitation
@@ -144,17 +144,6 @@ class RenameOrgRequest(BaseModel):
 
 class UpdateMemberRequest(BaseModel):
     role: str
-
-
-def _require_owner(org):
-    """Only an owner shapes their org's membership.
-
-    404 rather than 403, matching require_module: a
-    member who cannot manage the org should not have its admin endpoints
-    confirm they exist.
-    """
-    if not org.is_owner:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
 
 def _load_org(db, org_id: int) -> Organization:
@@ -269,7 +258,7 @@ def _rename(body: RenameOrgRequest, db, org) -> MembersPageResponse:
     identity, so renaming is free and the id is what anything durable points
     at.
     """
-    _require_owner(org)
+    require_org_owner(org)
     organization = _load_org(db, org.org_id)
 
     before = organization.name
@@ -325,7 +314,7 @@ async def _invite(body: InviteRequest, db, org,
     when they sign in. See this module's header for why that changed, and
     services/invitations for the rules.
     """
-    _require_owner(org)
+    require_org_owner(org)
     _load_org(db, org.org_id)
 
     # The role must be one this platform defines. Without this an invite
@@ -398,7 +387,7 @@ def _revoke_invitation(invitation_id: int, db, org) -> None:
     Scoped to org.org_id as well as the id, so a revoke cannot reach into
     another org's invitations by guessing a number.
     """
-    _require_owner(org)
+    require_org_owner(org)
 
     from src.db.models import OrganizationInvitation
     invitation = (db.query(OrganizationInvitation)
@@ -426,7 +415,7 @@ def _resend_invitation(invitation_id: int, db, org,
     clicks the dead one — and it is why this goes through the same function
     inviting does rather than just calling the mailer again.
     """
-    _require_owner(org)
+    require_org_owner(org)
 
     from src.db.models import OrganizationInvitation
     invitation = (db.query(OrganizationInvitation)
@@ -490,7 +479,7 @@ async def invite_member_for_org(
 
     NOTHING IS RELAXED BY NAMING THE ORG. named_org_dependency re-checks
     membership against organization_members exactly as the cookie path does,
-    and _require_owner inside _invite reads `is_owner` for THE ORG IN THE
+    and require_org_owner inside _invite reads `is_owner` for THE ORG IN THE
     CONTEXT — which _org_context_for derives from that org's owner column, not
     from whether the caller owns something somewhere. A member of this org who
     owns a different one gets the same 404 here as they would there.
@@ -546,7 +535,7 @@ async def resend_invitation_for_org(
 async def _update_role(account_id: int, body: UpdateMemberRequest,
                        db, org) -> MemberResponse:
     """Move a member to a different role, in ONE already-validated org."""
-    _require_owner(org)
+    require_org_owner(org)
 
     if not roles.is_valid(body.role):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -611,7 +600,7 @@ def _remove(account_id: int, db, org) -> None:
     reversible problem, and account_id has been attribution rather than
     ownership since org scoping landed.
     """
-    _require_owner(org)
+    require_org_owner(org)
 
     member = (db.query(OrganizationMember)
                 .filter(OrganizationMember.org_id == org.org_id,

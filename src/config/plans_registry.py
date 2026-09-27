@@ -105,7 +105,7 @@ ACTIVE_SUBSCRIPTION_STATUSES = ("active", "trialing")
 #                 (/api/billing in modules_registry.ALWAYS_ALLOWED_PREFIXES).
 #   organization  the owner's console. Gated on OWNERSHIP rather than on the
 #                 plan — routers/organizations/overview.py uses
-#                 _require_owner — so an owner whose plan happened to omit it
+#                 require_org_owner — so an owner whose plan happened to omit it
 #                 could not administer their own org while the API served
 #                 them perfectly well.
 #
