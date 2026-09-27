@@ -1,22 +1,22 @@
 # TLDR
 
-Documenting steps of setting up Kalygo on GCP
+Documenting steps of setting up Command Labs on GCP
 
 ## FRONTEND
 
 ### Setting up project
 
 - `gcloud config list`
-- `gcloud config set project kalygo`
+- `gcloud config set project command-labs`
 - `gcloud auth login`
-- `gcloud auth application-default set-quota-project kalygo-436411`
+- `gcloud auth application-default set-quota-project command-labs`
 - `gcloud config list`
 
 - `gcloud config configurations list`
 - `gcloud services enable compute.googleapis.com`
-- `gcloud config configurations create kalygo`
+- `gcloud config configurations create command-labs`
   - `gcloud config set account [YOUR_EMAIL]`
-  - `gcloud config set project kalygo-436411`
+  - `gcloud config set project command-labs`
   - `gcloud config set compute/zone us-east1-b`
   - `gcloud config set compute/region us-east1`
 
@@ -33,14 +33,14 @@ gcloud artifacts repositories create REPOSITORY \
   --async
 ```
 ``` ie:
-gcloud artifacts repositories create kalygo-nextjs \
+gcloud artifacts repositories create command-labs-nextjs \
   --repository-format=docker \
   --location=us-central1 \
-  --description="Docker repository for Kalygo web app" \
+  --description="Docker repository for Command Labs web app" \
   --immutable-tags \
   --async
 ```
-- CONFIRM ARTIFACT WAS CREATED: `https://console.cloud.google.com/artifacts?hl=en&project=kalygo-v3`
+- CONFIRM ARTIFACT WAS CREATED: `https://console.cloud.google.com/artifacts?hl=en&project=command-labs`
   - `gcloud artifacts repositories list`
 
 ### SIDETRACKED
@@ -65,32 +65,32 @@ gcloud artifacts repositories create kalygo-nextjs \
 - `gcloud services enable cloudbuild.googleapis.com`
 - `gcloud builds submit --region=us-central1 --config cloudbuild.yaml`
   - REFERENCE: https://cloud.google.com/build/docs/locations#restricted_regions_for_some_projects
-- CONFIRM IMAGE WAS STORED: `https://console.cloud.google.com/artifacts/docker/kalygo-v3/us-east1/kalygo3-nextjs?hl=en&project=kalygo-v3`
+- CONFIRM IMAGE WAS STORED: `https://console.cloud.google.com/artifacts/docker/command-labs/us-east1/command-labs-nextjs?hl=en&project=command-labs`
 
-### Copied the `kalygo3` UI project
+### Copied the `command-labs` UI project
 
-- Copied the `kalygo3` Next.js UI project to another project called `swarms-playground-ui`
-- Eventually will switch over kalygo3 code to power Kalygo's site when the `swarms-playground` repo is set up
+- Copied the `command-labs` Next.js UI project to another project called `swarms-playground-ui`
+- Eventually will switch over command-labs code to power Command Labs's site when the `swarms-playground` repo is set up
 - Then will have a repo for each project
 
-  - Created a Service Account called `swarms-playground-repos-cicd@kalygo-v3.iam.gserviceaccount.com` for the new `swarms-playground-ui` repo
+  - Created a Service Account called `swarms-playground-repos-cicd@command-labs.iam.gserviceaccount.com` for the new `swarms-playground-ui` repo
   - Add `GCP_SA_KEY` as a repository secret
   - Add the following permission to the newly created Service Account
   ```
-  1. gcloud projects add-iam-policy-binding kalygo-v3 \
-  --member="serviceAccount:swarms-playground-repos-cicd@kalygo-v3.iam.gserviceaccount.com" \
+  1. gcloud projects add-iam-policy-binding command-labs \
+  --member="serviceAccount:swarms-playground-repos-cicd@command-labs.iam.gserviceaccount.com" \
   --role="roles/artifactregistry.writer"
-  2. gcloud projects add-iam-policy-binding kalygo-v3 \
-  --member="serviceAccount:swarms-playground-repos-cicd@kalygo-v3.iam.gserviceaccount.com" \
+  2. gcloud projects add-iam-policy-binding command-labs \
+  --member="serviceAccount:swarms-playground-repos-cicd@command-labs.iam.gserviceaccount.com" \
   --role="roles/run.admin"
   3. gcloud iam service-accounts add-iam-policy-binding 137963986378-compute@developer.gserviceaccount.com \
-  --member="serviceAccount:swarms-playground-repos-cicd@kalygo-v3.iam.gserviceaccount.com" \
+  --member="serviceAccount:swarms-playground-repos-cicd@command-labs.iam.gserviceaccount.com" \
   --role="roles/iam.serviceAccountUser"
   ```
 
 ## BACKEND
 
-### Updating the GitHub action to use the new project `kalygo-436411`
+### Updating the GitHub action to use the new project `command-labs`
 
 ### Create Artifact Registry for api
 
@@ -104,10 +104,10 @@ gcloud artifacts repositories create REPOSITORY \
   --async
 ```
 ``` ie:
-gcloud artifacts repositories create kalygo-fastapi \
+gcloud artifacts repositories create command-labs-fastapi \
   --repository-format=docker \
   --location=us-central1 \
-  --description="Docker repository for Kalygo FastAPI" \
+  --description="Docker repository for Command Labs FastAPI" \
   --immutable-tags \
   --async
 ```
