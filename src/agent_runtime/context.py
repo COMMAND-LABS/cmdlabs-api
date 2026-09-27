@@ -21,10 +21,9 @@ from langchain_classic.memory import ConversationBufferMemory
 from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.tools import StructuredTool
 
 from src.db.database import SessionLocal
-from src.db.models import Account, Agent, ChatMessage, ChatSession, OrganizationMember
+from src.db.models import Account, ChatMessage, ChatSession, OrganizationMember
 from src.db.retry import db_retry_once
 from src.services.agent_access import load_agent_with_access_check
 from src.services.org_scope import OrgScope
@@ -119,20 +118,12 @@ def _resolve_org_scope(db, account_id: int, agent) -> OrgScope:
 class AgentContext:
     """Everything the streaming endpoints need after setup."""
 
-    agent: Agent | None  # None on the code-defined (override) path
-    account_id: int
-    provider: str
-    model_name: str
     llm: BaseChatModel
-    tools: list[StructuredTool]
     prompt_template: ChatPromptTemplate
-    memory: ConversationBufferMemory
     message_history: ChatMessageHistory
     agent_executor: AgentExecutor | None
     agent_input: Any
     chat_session_id: int
-    session_uuid: uuid.UUID
-    user_email: str
     prompt: str
     pdf_filename: str | None
     # GCS-backed attachment reference persisted onto the chat message, or None.
@@ -416,7 +407,7 @@ async def prepare_agent_context(
 
     user_email = auth.get("email", "unknown")
     agent_executor: AgentExecutor | None = None
-    if tools and agent_langchain:
+    if tools:
         agent_executor = AgentExecutor(
             agent=agent_langchain,
             tools=tools,
@@ -484,20 +475,12 @@ async def prepare_agent_context(
     db.close()
 
     return AgentContext(
-        agent=agent,
-        account_id=account_id,
-        provider=provider,
-        model_name=model_name,
         llm=llm,
-        tools=tools,
         prompt_template=prompt_template,
-        memory=memory,
         message_history=message_history,
         agent_executor=agent_executor,
         agent_input=agent_input,
         chat_session_id=chat_session_id,
-        session_uuid=session_uuid,
-        user_email=user_email,
         prompt=prompt,
         pdf_filename=pdf_filename,
         attachment_ref=attachment_ref,
