@@ -19,7 +19,7 @@
     {
       "name": "company_name",
       "label": "Company name",
-      "default": "Kalygo"
+      "default": "Command Labs"
     },
     {
       "name": "first_name",
@@ -34,7 +34,7 @@
     {
       "name": "cta_url",
       "label": "CTA button URL",
-      "default": "https://kalygo.io"
+      "default": "https://cmdlabs.io"
     },
     {
       "name": "cta_label",
