@@ -1,10 +1,10 @@
 """
 Get prompt endpoint.
 """
-from fastapi import APIRouter, HTTPException, status, Request
+from fastapi import APIRouter, Request
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
-from src.db.models import Prompt
 
+from ._shared import get_owned_prompt_or_404
 from .models import PromptResponse
 from src.rate_limit import limiter
 
@@ -26,15 +26,6 @@ async def get_prompt(
     account_id = account_id_from_claims(jwt)
     account = ensure_account(db, account_id)
         
-    prompt = db.query(Prompt).filter(
-        Prompt.id == prompt_id,
-        Prompt.account_id == account_id
-    ).first()
-        
-    if not prompt:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Prompt not found"
-        )
+    prompt = get_owned_prompt_or_404(db, prompt_id, account_id)
         
     return prompt

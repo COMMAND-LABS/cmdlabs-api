@@ -5,21 +5,14 @@ After updating the DB row, re-embeds the content and upserts the vector
 into the ``prompts`` namespace in Pinecone so search results stay fresh.
 """
 import logging
-import os
 from fastapi import APIRouter, HTTPException, status, Request
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
-from src.db.models import Prompt
-from src.services import fetch_embedding
-from src.services.crm_vector_service import extract_token
-from src.core.clients import pc
 
+from ._shared import get_owned_prompt_or_404, upsert_prompt_vector
 from .models import UpdatePromptRequest, PromptResponse
 from src.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
-
-PINECONE_INDEX = os.getenv("PINECONE_ALL_MINILM_L6_V2_INDEX")
-PROMPTS_NAMESPACE = "prompts"
 
 router = APIRouter()
 
@@ -41,16 +34,7 @@ async def update_prompt(
     account_id = account_id_from_claims(jwt)
     account = ensure_account(db, account_id)
         
-    prompt = db.query(Prompt).filter(
-        Prompt.id == prompt_id,
-        Prompt.account_id == account_id
-    ).first()
-        
-    if not prompt:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Prompt not found"
-        )
+    prompt = get_owned_prompt_or_404(db, prompt_id, account_id)
         
     needs_reembed = False
 
@@ -82,26 +66,7 @@ async def update_prompt(
     # ── Re-embed + upsert to Pinecone ────────────────────────────
     if needs_reembed:
         try:
-            token = extract_token(request)
-            embedding = await fetch_embedding(token, prompt.content)
-
-            if embedding and PINECONE_INDEX:
-                index = pc.Index(PINECONE_INDEX)
-                index.upsert(
-                    vectors=[(
-                        f"prompt_{prompt.id}",
-                        embedding,
-                        {
-                            "prompt_id": prompt.id,
-                            "account_id": account_id,
-                            "name": prompt.name,
-                            "description": prompt.description or "",
-                            "content": prompt.content,
-                            "type": "prompt",
-                        },
-                    )],
-                    namespace=PROMPTS_NAMESPACE,
-                )
+            if await upsert_prompt_vector(request, prompt, account_id):
                 logger.info("[UPDATE PROMPT] Re-embedded prompt %s into Pinecone", prompt.id)
         except Exception as embed_err:
             logger.warning("[UPDATE PROMPT] Re-embedding failed: %s", embed_err)

@@ -5,17 +5,14 @@ Also removes the corresponding vector from the ``prompts`` namespace in
 Pinecone so search results stay in sync.
 """
 import logging
-import os
-from fastapi import APIRouter, HTTPException, status, Request
+from fastapi import APIRouter, status, Request
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
-from src.db.models import Prompt
 from src.core.clients import pc
 from src.rate_limit import limiter
 
-logger = logging.getLogger(__name__)
+from ._shared import PINECONE_INDEX, PROMPTS_NAMESPACE, get_owned_prompt_or_404
 
-PINECONE_INDEX = os.getenv("PINECONE_ALL_MINILM_L6_V2_INDEX")
-PROMPTS_NAMESPACE = "prompts"
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -33,16 +30,7 @@ async def delete_prompt(
     account_id = account_id_from_claims(jwt)
     account = ensure_account(db, account_id)
         
-    prompt = db.query(Prompt).filter(
-        Prompt.id == prompt_id,
-        Prompt.account_id == account_id
-    ).first()
-        
-    if not prompt:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Prompt not found"
-        )
+    prompt = get_owned_prompt_or_404(db, prompt_id, account_id)
         
     db.delete(prompt)
     db.commit()
