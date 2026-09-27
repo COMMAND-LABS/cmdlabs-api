@@ -2,7 +2,7 @@
 Get single company endpoint (includes full list of associated contacts).
 """
 from fastapi import APIRouter, Request
-from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims
+from src.deps import org_dependency, db_dependency, auth_dependency
 from src.services.org_scope import get_scoped_or_404
 from src.db.models import Company
 
@@ -20,8 +20,6 @@ async def get_company(
     org: org_dependency,
     request: Request,
 ):
-    account_id = account_id_from_claims(auth)
-
     company = get_scoped_or_404(db, Company, company_id, org)
 
     # The ORM relationship is `contact_memberships` (CompanyContact join

@@ -47,8 +47,6 @@ async def list_skill_templates(
     request: Request,
 ):
     """Built-in templates an org can install as its own skills."""
-    account_id = account_id_from_claims(jwt)
-
     templates = load_skill_templates()
     existing_names = {
         name for (name,) in db.query(Skill.name).filter(
