@@ -11,7 +11,7 @@ from .helpers import get_pinecone_api_key_for_index
 from .models import DeleteVectorsResponse
 from src.services.vector_store_access import authorize_vector_store
 from src.services.ingestion_log import record_ingestion_log
-from src.utils.errors import handle_db_error
+from src.utils.errors import handle_db_error, public_reason
 from src.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
@@ -124,7 +124,7 @@ async def delete_vectors_in_namespace(
                 vectors_added=0,
                 vectors_deleted=0,
                 vectors_failed=0,
-                error_message=str(e),
+                error_message=public_reason(e),
                 operation_type="DELETE",
                 status="FAILED",
             )

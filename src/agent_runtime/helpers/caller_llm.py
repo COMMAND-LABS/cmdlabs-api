@@ -8,13 +8,15 @@ for the chosen provider, decrypts it and builds the LLM. The agent runtime
 owner-funded runs.
 
 Failures raise one of the LlmSetupError subclasses below, which the caller
-maps to an HTTPException. The exception message is the underlying error's
-text, so ``str(exc)`` is exactly what the caller surfaces.
+maps to an HTTPException. Their messages are safe to show: the underlying
+error (which can echo key material) stays on ``__cause__`` for the log.
 """
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from src.routers.credentials.encryption import get_credential_value
 from src.services.credential_access import resolve_default_credential
+
+from src.utils.errors import own_message_or_reason
 
 from .llm_factory import create_llm, get_required_credential_type
 
@@ -61,7 +63,7 @@ def create_caller_llm(
             credentials[provider] = get_credential_value(
                 credential, "api_key")
         except Exception as exc:
-            raise CredentialDecryptError(str(exc)) from exc
+            raise CredentialDecryptError("The saved API key could not be read.") from exc
 
     try:
         return create_llm(
@@ -70,4 +72,4 @@ def create_caller_llm(
             temperature=temperature,
         )
     except ValueError as exc:
-        raise LlmInitError(str(exc)) from exc
+        raise LlmInitError(own_message_or_reason(exc)) from exc

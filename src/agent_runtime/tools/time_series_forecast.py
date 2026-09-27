@@ -19,6 +19,7 @@ from src.agent_runtime.runner_client import RunnerError, resolve_runner_client
 
 from .datasets import fetch_dataset, parse_dataset_ref, require_gcs_credential
 from .sessions import resolve_session_factory
+from src.utils.errors import public_reason
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,7 @@ async def create_time_series_forecast_tool(
             csv_bytes = await fetch_dataset(session_factory, owner_account_id, dataset)
         except Exception as exc:
             logger.error("[FORECAST] dataset %s unavailable: %s", dataset.gcs_path, exc)
-            return {"error": f"Could not read dataset {dataset.filename}: {exc}"}
+            return {"error": f"Could not read dataset {dataset.filename} ({public_reason(exc)})."}
         try:
             result = await runner.forecast(csv_bytes, model=model, rate_override=rate, **spec)
         except RunnerError as exc:

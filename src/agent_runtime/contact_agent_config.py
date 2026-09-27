@@ -7,11 +7,12 @@ authority comes entirely from:
   - the session<->contact ownership gate (validated at session creation in
     command-labs-api), and
   - the structurally-scoped contact_crm tools (no contact-id parameter; every
-    query filters by the caller's account_id and the bound contact_id).
+    query filters by the caller's org (tenant_predicate on org_id) and the
+    bound contact_id).
 
 It carries no credentials and exposes no contact-id parameter, so it is the
 de-risked form of a "global" agent: a bad access decision still cannot reach
-another account's or another contact's data.
+another organization's or another contact's data.
 
 Single source of truth for the contact-scoped tool type names lives here so
 the fail-closed guard, the registry, and this config cannot drift.

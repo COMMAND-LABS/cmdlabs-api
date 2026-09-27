@@ -22,7 +22,7 @@ from sqlalchemy.pool import NullPool
 
 from src.services.credential_access import load_credential_for_use
 from src.routers.credentials.encryption import decrypt_credential_data
-from src.agent_runtime.tools.exceptions import CredentialError
+from src.agent_runtime.tools.exceptions import CredentialError, db_error_for_model
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +137,7 @@ def get_connection_string(credential_id: int, account_id: int, db: Session) -> s
     except CredentialError:
         raise
     except Exception as e:
-        raise CredentialError(f"Failed to decrypt credential {credential_id}: {e}") from e
+        raise CredentialError(f"Failed to decrypt credential {credential_id}") from e
 
 
 def _connect_and_reflect_read(
@@ -167,7 +167,8 @@ def _connect_and_reflect_read(
         logger.info(f"[DB READ TOOL] Created connection to external database for table: {table_name}")
     except Exception as e:
         raise CredentialError(
-            f"Failed to connect to database using credential {credential_id}: {e}"
+            f"Failed to connect to database using credential {credential_id}. "
+            "Check the connection string saved in that credential."
         ) from e
 
     # Validate the table exists and get its columns
@@ -204,7 +205,7 @@ def _connect_and_reflect_read(
     except (CredentialError, ValueError):
         raise
     except Exception as e:
-        raise ValueError(f"Failed to validate table '{table_name}': {e}") from e
+        raise ValueError(f"Failed to validate table '{table_name}': {db_error_for_model(e)}") from e
 
     return external_engine, selected_columns
 
@@ -283,7 +284,8 @@ async def create_db_read_tool(
             )
         except Exception as e:
             raise CredentialError(
-                f"Failed to connect to database using credential {credential_id}: {e}"
+                f"Failed to connect to database using credential {credential_id}. "
+            "Check the connection string saved in that credential."
             ) from e
         selected_columns = allowed_columns
     else:
@@ -375,7 +377,7 @@ async def create_db_read_tool(
             logger.exception("[DB READ TOOL] ❌❌❌ EXCEPTION CAUGHT ❌❌❌")
             logger.error(f"[DB READ TOOL] Error: {e}")
             logger.error(f"[DB READ TOOL] Type: {type(e).__name__}")
-            return {"error": str(e)}
+            return {"error": db_error_for_model(e)}
 
     # Define the Pydantic schema for the tool arguments
     class QueryInput(BaseModel):

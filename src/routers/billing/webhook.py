@@ -132,6 +132,29 @@ def _apply_subscription(db, account: Account, subscription) -> None:
         account.subscription_lapsed_at = datetime.now(timezone.utc)
 
 
+def apply_subscription_change(db, account: Account, subscription) -> None:
+    """Apply a subscription state from Stripe AND audit the edge it crosses.
+
+    The one path for a subscription changing under an existing account: the
+    subscription webhooks and the /downgrade endpoint both come through here,
+    so a self-service cancel records its lapse (and org.suspend) exactly as a
+    Stripe-initiated one does, instead of leaving it for the later
+    customer.subscription.deleted webhook to stamp as if it had just happened.
+    Caller commits.
+    """
+    was_entitled = account.subscription_status in ACTIVE_SUBSCRIPTION_STATUSES
+    _apply_subscription(db, account, subscription)
+    now_entitled = account.subscription_status in ACTIVE_SUBSCRIPTION_STATUSES
+
+    # The audit trail for the transition. Only the edges are logged: the grace
+    # window ENDING is a comparison against the lapse timestamp, not an event
+    # anything performs, so there is nothing to record when it does.
+    if was_entitled and not now_entitled:
+        _record_billing_transition(db, account, audit.ORG_SUSPEND)
+    elif now_entitled and not was_entitled:
+        _record_billing_transition(db, account, audit.ORG_RESTORE)
+
+
 @router.post("/webhook", status_code=status.HTTP_200_OK)
 async def stripe_webhook(
     request: Request,
@@ -225,20 +248,7 @@ async def stripe_webhook(
                 # is decided from the status we actually mean.
                 data = {**data, "status": "canceled"}
 
-            was_entitled = (account.subscription_status
-                            in ACTIVE_SUBSCRIPTION_STATUSES)
-            _apply_subscription(db, account, data)
-            now_entitled = (account.subscription_status
-                            in ACTIVE_SUBSCRIPTION_STATUSES)
-
-            # The audit trail for the transition. Only the edges are logged:
-            # the grace window ENDING is a comparison against the timestamp
-            # above, not an event anything performs, so there is nothing to
-            # record when it does.
-            if was_entitled and not now_entitled:
-                _record_billing_transition(db, account, audit.ORG_SUSPEND)
-            elif now_entitled and not was_entitled:
-                _record_billing_transition(db, account, audit.ORG_RESTORE)
+            apply_subscription_change(db, account, data)
 
             db.commit()
             logger.info(

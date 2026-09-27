@@ -51,6 +51,7 @@ from src.agent_runtime.tool_entitlement import effective_modules
 from src.agent_runtime.tools.sessions import default_session_factory
 from src.db.models import Skill
 from src.services.org_scope import OrgScope
+from src.utils.errors import public_reason
 
 logger = logging.getLogger(__name__)
 
@@ -380,7 +381,7 @@ def create_save_skill_tool(
         except Exception as exc:  # noqa: BLE001 — a tool must not end the turn
             db.rollback()
             logger.exception("[SKILLS] save_skill failed for %s", name)
-            return {"saved": False, "error": f"Could not save skill: {exc}"}
+            return {"saved": False, "error": f"Could not save skill ({public_reason(exc)})."}
         finally:
             db.close()
 

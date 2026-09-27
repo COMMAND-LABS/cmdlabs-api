@@ -3,16 +3,16 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y curl git build-essential net-tools iproute2 libpq-dev zlib1g-dev
 
 # Install uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /usr/local/bin/uv
 
 # set the working directory
 WORKDIR /code
 
-# install dependencies using uv
-# Copy README.md first since pyproject.toml references it
-COPY ./README.md ./
-COPY ./pyproject.toml ./
-RUN uv pip install --system --no-cache .
+# Same locked versions as production, plus the dev group (pytest, debugpy).
+COPY ./pyproject.toml ./uv.lock ./
+RUN uv export --frozen --group dev --no-emit-project -o /tmp/requirements.txt > /dev/null \
+    && uv pip install --system --no-cache --require-hashes -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
 
 # copy the src to the folder
 COPY .vscode/launch.json ./.vscode/launch.json

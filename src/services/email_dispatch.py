@@ -36,6 +36,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.db.models import Contact, EmailEvent, EmailTemplate
+from src.utils.errors import public_reason
 
 logger = logging.getLogger(__name__)
 
@@ -319,6 +320,9 @@ def dispatch_one(
         message_id = send_ses_html_email(credential_cfg, to_email, subject, html)
     except Exception as exc:  # noqa: BLE001 — record the reason then surface it
         db.rollback()
+        # The raw SES error can echo credential material; only the log gets it.
+        logger.warning("SES send to %s failed", recipient_lower, exc_info=True)
+        reason = public_reason(exc)
         try:
             db.add(EmailEvent(
                 account_id=account_id,
@@ -329,14 +333,14 @@ def dispatch_one(
                 provider="ses",
                 credential_id=credential_id,
                 sender_domain=sender_domain,
-                event_metadata={**base_meta, "reason": str(exc),
+                event_metadata={**base_meta, "reason": reason,
                                 "attempting_event_id": attempting.id},
             ))
             db.commit()
         except Exception:  # noqa: BLE001
             db.rollback()
             logger.exception("Failed to record 'failed' event for %s", recipient_lower)
-        raise SesSendError(str(exc)) from exc
+        raise SesSendError(reason) from exc
 
     # (3) send_to_ses — hand-off confirmed (SES accepted the SendEmail call). The
     #     partial unique index turns a lost race into a clean skipped_duplicate

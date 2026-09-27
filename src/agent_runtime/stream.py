@@ -84,7 +84,7 @@ async def generator(
                 yield event_data
     except Exception as e:
         logger.exception(f"[STREAM] Unhandled error during agent stream: {e!s}")
-        yield sse_error("Internal server error", str(e))
+        yield sse_error("Internal server error", "Something went wrong while running the agent. Please try again.")
 
 
 def _extract_text(content) -> str:
@@ -240,7 +240,7 @@ async def _stream_simple_chat(ctx: AgentContext):
 
     except Exception as e:
         logger.exception(f"[STREAM] Error during streaming: {e!s}")
-        yield sse_error("Streaming error", str(e))
+        yield sse_error("Streaming error", "The response stream failed. Please try again.")
         return
 
     if full_response:

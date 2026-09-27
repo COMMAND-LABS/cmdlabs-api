@@ -15,7 +15,7 @@ from pinecone import Pinecone
 from src.deps import org_dependency, account_id_from_claims, db_dependency, ensure_account, jwt_dependency
 from src.rate_limit import limiter
 from src.services.ingestion_log import record_ingestion_log
-from src.utils.errors import handle_db_error
+from src.utils.errors import handle_db_error, public_reason
 from .helpers import get_pinecone_api_key_for_index
 from .list_namespace_files import SCAN_CAP, collect_ids_for_filename
 from .models import DeleteFileVectorsResponse
@@ -168,7 +168,7 @@ async def delete_file_vectors_in_namespace(
                 vectors_added=0,
                 vectors_deleted=0,
                 vectors_failed=0,
-                error_message=str(e),
+                error_message=public_reason(e),
                 operation_type="DELETE",
                 status="FAILED",
             )

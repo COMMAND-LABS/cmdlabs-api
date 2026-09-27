@@ -1,0 +1,44 @@
+# Build context for Dockerfile.prod / Dockerfile.dev.
+#
+# The images COPY only pyproject.toml, uv.lock and src/ (plus
+# .vscode/launch.json for the dev image), so everything else is excluded.
+# Anything in the context is uploaded to the Docker daemon / build service on
+# every build, so secrets and local data must never be in it.
+
+# --- Secrets: credentials must never enter a build context ---
+.env
+.env.*
+**/.env
+**/.env.*
+*-sa.json
+**/*-sa.json
+*.pem
+*.key
+*.p12
+
+# --- Local data and scratch ---
+db_backups/
+scratchspace/
+data/
+
+# --- Environments, caches, VCS, tooling ---
+.git/
+.venv/
+**/__pycache__/
+**/*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+.claude/
+.devcontainer/
+node_modules/
+
+# --- Not needed at runtime ---
+tests/
+evals/
+scripts/
+READMEs/
+email-templates/
+runner/
+alembic/
+.github/

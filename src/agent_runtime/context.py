@@ -6,6 +6,7 @@ Extracts the common setup logic used by the streaming agent endpoints
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -65,7 +66,9 @@ from src.utils.template_variables import (
     build_variable_context,
     resolve_template_variables,
 )
+from src.utils.errors import own_message_or_reason
 
+logger = logging.getLogger(__name__)
 
 
 def _resolve_org_scope(db, account_id: int, agent) -> OrgScope:
@@ -170,7 +173,8 @@ async def prepare_agent_context(
         # Server-fixed agent (e.g. contact-chat). It is NOT user-selected, so
         # the generic per-account access check does not apply: authorization
         # for this path is the session<->contact ownership gate (validated at
-        # session creation in ai-api) plus the per-tool account_id filter.
+        # session creation) plus the per-tool org filter (tenant_predicate on
+        # org_id) in contact_crm.
         # We deliberately skip load_agent_with_access_check here.
         agent = None
         agent_config = agent_config_override
@@ -262,7 +266,11 @@ async def prepare_agent_context(
         try:
             credentials[provider] = get_credential_value(credential, "api_key")
         except Exception as exc:
-            raise AgentSetupError("Failed to retrieve API key", str(exc)) from exc
+            logger.warning("[AGENT SETUP] could not read the %s API key", provider, exc_info=True)
+            raise AgentSetupError(
+                "Failed to retrieve API key",
+                f"The saved {provider.title()} API key could not be read. Re-enter it in account settings.",
+            ) from exc
 
     # --- LLM ---
     try:
@@ -272,7 +280,8 @@ async def prepare_agent_context(
             temperature=0,
         )
     except ValueError as exc:
-        raise AgentSetupError("LLM initialization failed", str(exc)) from exc
+        logger.warning("[AGENT SETUP] LLM initialization failed", exc_info=True)
+        raise AgentSetupError("LLM initialization failed", own_message_or_reason(exc)) from exc
 
     # --- Session ---
     try:
@@ -300,7 +309,8 @@ async def prepare_agent_context(
             db.refresh(session)
         except Exception as exc:
             db.rollback()
-            raise AgentSetupError("Failed to create session", f"Could not create chat session: {exc}") from exc
+            logger.exception("[AGENT SETUP] could not create chat session %s", session_uuid)
+            raise AgentSetupError("Failed to create session", "Could not create chat session.") from exc
 
     # --- Contact scope (fail closed) ---
     # The session<->contact binding is the server-trusted scope. If the agent
@@ -341,7 +351,7 @@ async def prepare_agent_context(
     except CredentialError as exc:
         raise AgentSetupError("Tool configuration error", str(exc)) from exc
     except ValueError as exc:
-        raise AgentSetupError("Invalid tool configuration", str(exc)) from exc
+        raise AgentSetupError("Invalid tool configuration", own_message_or_reason(exc)) from exc
 
     # --- Skills (progressive disclosure) ---
     # Index in the prompt, body behind the load_skill tool — see

@@ -20,7 +20,7 @@ import logging
 import os
 import threading
 from collections import OrderedDict, defaultdict
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Optional
 
 from fastapi import APIRouter, HTTPException, Request, status
 from pinecone import Pinecone
@@ -202,6 +202,22 @@ def collect_ids_for_filename(
     Returns (ids, truncated). ``truncated`` is True if the cap was hit before the
     namespace was fully enumerated (the id list may then be incomplete).
     """
+    return collect_ids_where(
+        index, namespace, lambda meta: filename_of(meta) == target_filename, cap
+    )
+
+
+def collect_ids_where(
+    index, namespace: str, keep: Callable[[Optional[Dict[str, Any]]], bool],
+    cap: int = SCAN_CAP,
+) -> tuple:
+    """
+    Enumerate the namespace and collect the ids of vectors whose metadata
+    satisfies ``keep``.
+
+    Returns (ids, truncated). ``truncated`` is True if the cap was hit before the
+    namespace was fully enumerated (the id list may then be incomplete).
+    """
     ids: list = []
     scanned = 0
     buffer: list = []
@@ -229,7 +245,7 @@ def collect_ids_for_filename(
                 meta = getattr(vec, "metadata", None)
                 if meta is None and isinstance(vec, dict):
                     meta = vec.get("metadata")
-                if filename_of(meta) == target_filename:
+                if keep(meta):
                     ids.append(vid)
                 scanned += 1
             if scanned >= cap:

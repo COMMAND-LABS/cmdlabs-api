@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 from .db_read import get_connection_string, serialize_value
-from .exceptions import CredentialError
+from .exceptions import CredentialError, db_error_for_model
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +124,8 @@ async def create_db_write_tool(
         )
     except Exception as e:
         raise CredentialError(
-            f"Failed to connect to database using credential {credential_id}: {e}"
+            f"Failed to connect to database using credential {credential_id}. "
+            "Check the connection string saved in that credential."
         ) from e
 
     logger.info(f"[DB WRITE TOOL] Tool 'db_table_write' ready for table: {table_name}")
@@ -204,7 +205,7 @@ async def create_db_write_tool(
 
         except Exception as e:
             logger.exception(f"[DB WRITE TOOL] ❌ Insert failed: {e}")
-            return {"error": str(e)}
+            return {"error": db_error_for_model(e)}
 
     # Dynamically create a Pydantic model with each column as a direct field
     # This creates a flat schema that LLMs understand better than nested Dict fields

@@ -1,0 +1,12 @@
+# Build context for runner/Dockerfile. The image COPYs only pyproject.toml,
+# uv.lock and runner/; secrets and local state must never be in the context.
+.env
+.env.*
+*-sa.json
+*.pem
+*.key
+.venv/
+**/__pycache__/
+**/*.py[cod]
+.pytest_cache/
+tests/

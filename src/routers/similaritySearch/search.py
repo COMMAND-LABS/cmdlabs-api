@@ -3,9 +3,10 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 import os
 from src.core.clients import pc
-from src.deps import jwt_dependency
+from src.deps import jwt_dependency, account_id_from_claims
 from src.services import fetch_embedding
 from src.rate_limit import limiter
+from ._shared import SEARCHABLE_NAMESPACES, owner_filter
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +26,19 @@ async def similarity_search(
     request: Request = None
 ):
     """
-    Perform similarity search using vector embeddings.
+    Perform similarity search over the caller's OWN vectors in `namespace`.
+
+    Only the namespaces in SEARCHABLE_NAMESPACES may be searched, and results
+    are filtered to vectors the caller owns (see _shared.py) — a namespace is
+    shared by every account, so it is never an access boundary on its own.
     """
+    filter_ = owner_filter(namespace, account_id_from_claims(decoded_jwt))
+    if filter_ is None:
+        return {
+            "success": False,
+            "error": f"Unsupported namespace. Use one of: {', '.join(SEARCHABLE_NAMESPACES)}.",
+        }
+
     try:
         # Extract JWT from cookie or Authorization header
         token = None
@@ -58,7 +70,8 @@ async def similarity_search(
             top_k=query.top_k,
             include_values=False,
             include_metadata=True,
-            namespace=namespace
+            namespace=namespace,
+            filter=filter_,
         )
         
         # Filter results by similarity threshold if provided

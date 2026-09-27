@@ -22,6 +22,7 @@ from src.agent_runtime.tools.pinecone_helpers import (
     load_pinecone_index,
     query_pinecone,
 )
+from src.utils.errors import public_reason
 
 logger = logging.getLogger(__name__)
 
@@ -76,8 +77,8 @@ async def create_vector_search_tool(
                 query, matches, top_n, namespace, index_name, auth_token
             )
         except Exception as exc:
-            logger.error(f"[VECTOR SEARCH] Error: {exc}")
-            return {"error": str(exc)}
+            logger.exception("[VECTOR SEARCH] search failed")
+            return {"error": f"Knowledge base search failed ({public_reason(exc)})."}
 
     if reranking:
         class SearchQuery(BaseModel):

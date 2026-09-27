@@ -1,11 +1,13 @@
 """Contact-scoped CRM tools.
 
 These tools are *structurally* scoped: none of them expose a contact-id (or
-account-id) parameter, so the model literally cannot express "a different
-contact". The bound contact_id and the caller's account_id are closed over
-from the agent context and applied to every query. The account_id filter is
-defense-in-depth (the session<->contact ownership gate already validated the
-binding at creation; see contact_agent_config).
+org/account-id) parameter, so the model literally cannot express "a different
+contact". The bound contact_id and the caller's org scope are closed over
+from the agent context and applied to every query. Tenancy is enforced by
+tenant_predicate (the row's org_id must equal the caller's org) — account_id
+is only attribution on rows the tools write, never a filter. The org filter is
+defense-in-depth on top of the session<->contact binding, which was validated
+when the session was created (see contact_agent_config).
 
 Transaction/concurrency: the request DB session is closed by
 prepare_agent_context before the agent loop runs, so each tool opens its own
@@ -22,6 +24,7 @@ symmetrically — e.g. update_contact_event(event_id, ...) would still
 even an event_id argument could not escape the bound contact.
 """
 
+import logging
 from typing import Any
 
 from langchain_core.tools import StructuredTool
@@ -32,6 +35,9 @@ from src.services.org_scope import tenant_predicate
 
 from .db_read import serialize_value
 from .sessions import resolve_session_factory
+from src.utils.errors import public_reason
+
+logger = logging.getLogger(__name__)
 
 
 def _serialize_contact(c: Contact) -> dict[str, Any]:
@@ -235,7 +241,8 @@ async def create_contact_event_write_tool(
             return {"success": True, "event": _serialize_event(event)}
         except Exception as e:  # noqa: BLE001 - surface a tool-friendly error
             s.rollback()
-            return {"error": str(e)}
+            logger.exception("[CONTACT CRM] could not add event to contact %s", contact_id)
+            return {"error": f"Could not save the event ({public_reason(e)})."}
         finally:
             s.close()
 

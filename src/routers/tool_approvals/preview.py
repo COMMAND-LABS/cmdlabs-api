@@ -16,6 +16,7 @@ from src.routers.credentials.encryption import decrypt_credential_data
 from src.services.credential_access import load_credential_for_use
 from .models import ApproveToolApprovalResponse
 from src.services.email_dispatch import strip_html_tags
+from src.utils.errors import public_reason
 from ._shared import pending_approval_or_error
 from src.rate_limit import limiter
 
@@ -97,8 +98,9 @@ async def preview_tool_approval(
 
     try:
         cred_data = decrypt_credential_data(credential.encrypted_data)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to decrypt credential: {e}")
+    except Exception:
+        logger.exception("Preview: could not decrypt credential %s", credential_id)
+        raise HTTPException(status_code=500, detail="Failed to decrypt credential")
 
     required = ["aws_access_key_id", "aws_secret_access_key", "aws_region", "from_email"]
     missing = [k for k in required if not cred_data.get(k)]
@@ -133,8 +135,8 @@ async def preview_tool_approval(
         )
         logger.info("Preview email sent — approval_id=%s to=%s", approval_id, preview_recipient)
     except Exception as e:
-        logger.error("Preview send failed — approval_id=%s: %s", approval_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to send preview email: {e}")
+        logger.exception("Preview send failed — approval_id=%s", approval_id)
+        raise HTTPException(status_code=500, detail=f"Failed to send preview email: {public_reason(e)}")
 
     return ApproveToolApprovalResponse(
         id=approval.id,
