@@ -64,7 +64,7 @@ def test_tools_fail_safe_when_no_contact_bound():
 # --------------------------------------------------------------------------
 
 _PG_URL = os.environ.get(
-    "POSTGRES_TEST_URL", "postgresql://test:test@cmdlabs-test-pg:5432/kalygo_test"
+    "POSTGRES_TEST_URL", "postgresql://test:test@cmdlabs-test-pg:5432/command_labs_test"
 )
 
 try:
