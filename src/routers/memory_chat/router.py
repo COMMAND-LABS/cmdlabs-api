@@ -33,29 +33,26 @@ of truth for ids and window membership.
 """
 import logging
 import math
+from contextlib import aclosing
 
 from fastapi import APIRouter, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
-from src.agent_runtime.helpers import sse_error, sse_event
-from src.agent_runtime.helpers.llm_factory import (
-    create_llm,
-    get_required_credential_type,
+from src.agent_runtime.helpers.direct_chat import (
+    caller_llm_or_sse_error,
+    check_known_provider,
+    stream_completion,
 )
 from src.db.models import MemoryChatMessage
 from src.deps import db_dependency, jwt_dependency, org_dependency, account_id_from_claims
 from src.rate_limit import limiter
-from src.routers.credentials.encryption import get_credential_value
-from src.services.credential_access import resolve_default_credential
 from src.utils.langsmith import get_langsmith_callbacks
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 callbacks = get_langsmith_callbacks("memory-chat")
-
-SUPPORTED_PROVIDERS = ("openai", "anthropic", "google", "kimi", "ollama")
 
 # Toy context limits (total tokens). The model's usable budget is HALF of the
 # chosen limit — "once half of the context limit is reached, earlier content
@@ -186,9 +183,7 @@ class MemoryChatPrompt(BaseModel):
     @field_validator("provider")
     @classmethod
     def _known_provider(cls, v: str) -> str:
-        if v not in SUPPORTED_PROVIDERS:
-            raise ValueError(f"provider must be one of {SUPPORTED_PROVIDERS}")
-        return v
+        return check_known_provider(v)
 
     @field_validator("context_limit")
     @classmethod
@@ -215,36 +210,13 @@ async def _generator(body: MemoryChatPrompt, db, account_id: int, org_id: int):
     db.add(human)
     db.commit()
 
-    # --- Credential (always the caller's own) ---
-    credentials: dict[str, str] = {}
-    required_credential_type = get_required_credential_type(body.provider)
-    if required_credential_type:
-        credential = resolve_default_credential(
-            db, account_id, required_credential_type)
-        if not credential:
-            yield sse_error(
-                f"{body.provider.title()} API key required",
-                f"Please add your {body.provider.title()} API key in account "
-                f"settings to use {body.model}.",
-            )
-            return
-        try:
-            credentials[body.provider] = get_credential_value(
-                credential, "api_key")
-        except Exception as exc:
-            logger.exception("[MEMORY-CHAT] credential decryption failed")
-            yield sse_error("Failed to retrieve API key", str(exc))
-            return
-
-    # --- LLM ---
-    try:
-        llm, _ = create_llm(
-            model_config={"provider": body.provider, "model": body.model},
-            credentials=credentials,
-            temperature=body.temperature,
-        )
-    except ValueError as exc:
-        yield sse_error("LLM initialization failed", str(exc))
+    # --- Credential (always the caller's own) + LLM ---
+    llm, error = caller_llm_or_sse_error(
+        db, account_id, body.provider, body.model, body.temperature,
+        logger=logger, log_tag="MEMORY-CHAT",
+    )
+    if error:
+        yield error
         return
 
     # --- The window: newest turns that fit in half the context limit ---
@@ -255,40 +227,21 @@ async def _generator(body: MemoryChatPrompt, db, account_id: int, org_id: int):
     messages: list[tuple[str, str]] = [("system", SYSTEM_PROMPT)]
     messages.extend((m.role, m.content) for m in windowed)
 
-    yield sse_event("on_chat_model_start")
-    full_response = ""
-    config = {"callbacks": callbacks} if callbacks else {}
+    # --- Persist the completion (runs just before on_chain_end) ---
+    def _persist_completion(full_response: str) -> None:
+        if full_response:
+            db.add(MemoryChatMessage(
+                account_id=account_id, org_id=org_id,
+                role="ai", content=full_response,
+            ))
+            db.commit()
 
-    try:
-        async for event in llm.astream_events(messages, version="v1",
-                                              config=config):
-            if event["event"] == "on_chat_model_stream":
-                content = event["data"]["chunk"].content
-                if content:
-                    full_response += (
-                        content if isinstance(content, str)
-                        else "".join(
-                            block.get("text", "")
-                            for block in content
-                            if isinstance(block, dict)
-                            and block.get("type") == "text"
-                        )
-                    )
-                    yield sse_event("on_chat_model_stream", data=content)
-    except Exception as exc:
-        logger.exception("[MEMORY-CHAT] streaming error")
-        yield sse_error("Streaming error", str(exc))
-        return
-
-    # --- Persist the completion ---
-    if full_response:
-        db.add(MemoryChatMessage(
-            account_id=account_id, org_id=org_id,
-            role="ai", content=full_response,
-        ))
-        db.commit()
-
-    yield sse_event("on_chain_end", data=full_response)
+    async with aclosing(stream_completion(
+        llm, messages, callbacks=callbacks, logger=logger,
+        log_tag="MEMORY-CHAT", on_complete=_persist_completion,
+    )) as frames:
+        async for frame in frames:
+            yield frame
 
 
 @router.post("/stream")

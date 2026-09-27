@@ -35,28 +35,25 @@ on_chat_model_start, on_chat_model_stream, on_chain_end, error — so the UI's
 parser is shared, not forked.
 """
 import logging
+from contextlib import aclosing
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
-from src.agent_runtime.helpers import sse_error, sse_event
-from src.agent_runtime.helpers.llm_factory import (
-    create_llm,
-    get_required_credential_type,
+from src.agent_runtime.helpers.direct_chat import (
+    caller_llm_or_sse_error,
+    check_known_provider,
+    stream_completion,
 )
 from src.deps import auth_dependency, db_dependency
 from src.rate_limit import limiter
-from src.routers.credentials.encryption import get_credential_value
-from src.services.credential_access import resolve_default_credential
 from src.utils.langsmith import get_langsmith_callbacks
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 callbacks = get_langsmith_callbacks("llm-chat")
-
-SUPPORTED_PROVIDERS = ("openai", "anthropic", "google", "kimi", "ollama")
 
 
 class LlmChatPrompt(BaseModel):
@@ -69,10 +66,7 @@ class LlmChatPrompt(BaseModel):
     @field_validator("provider")
     @classmethod
     def _known_provider(cls, v: str) -> str:
-        if v not in SUPPORTED_PROVIDERS:
-            raise ValueError(
-                f"provider must be one of {SUPPORTED_PROVIDERS}")
-        return v
+        return check_known_provider(v)
 
 
 async def _generator(body: LlmChatPrompt, db, auth: dict):
@@ -81,36 +75,13 @@ async def _generator(body: LlmChatPrompt, db, auth: dict):
     and the chat UI renders error frames in-line where the reply would be."""
     account_id = auth["id"]
 
-    # --- Credential (always the caller's own) ---
-    credentials: dict[str, str] = {}
-    required_credential_type = get_required_credential_type(body.provider)
-    if required_credential_type:
-        credential = resolve_default_credential(
-            db, account_id, required_credential_type)
-        if not credential:
-            yield sse_error(
-                f"{body.provider.title()} API key required",
-                f"Please add your {body.provider.title()} API key in account "
-                f"settings to use {body.model}.",
-            )
-            return
-        try:
-            credentials[body.provider] = get_credential_value(
-                credential, "api_key")
-        except Exception as exc:
-            logger.exception("[LLM-CHAT] credential decryption failed")
-            yield sse_error("Failed to retrieve API key", str(exc))
-            return
-
-    # --- LLM ---
-    try:
-        llm, _ = create_llm(
-            model_config={"provider": body.provider, "model": body.model},
-            credentials=credentials,
-            temperature=body.temperature,
-        )
-    except ValueError as exc:
-        yield sse_error("LLM initialization failed", str(exc))
+    # --- Credential (always the caller's own) + LLM ---
+    llm, error = caller_llm_or_sse_error(
+        db, account_id, body.provider, body.model, body.temperature,
+        logger=logger, log_tag="LLM-CHAT",
+    )
+    if error:
+        yield error
         return
 
     # --- Messages: optional system + this turn. Nothing else, by contract:
@@ -120,35 +91,11 @@ async def _generator(body: LlmChatPrompt, db, auth: dict):
         messages.append(("system", body.systemPrompt))
     messages.append(("human", body.prompt))
 
-    yield sse_event("on_chat_model_start")
-    full_response = ""
-    config = {"callbacks": callbacks} if callbacks else {}
-
-    try:
-        async for event in llm.astream_events(messages, version="v1",
-                                              config=config):
-            if event["event"] == "on_chat_model_stream":
-                content = event["data"]["chunk"].content
-                if content:
-                    # Anthropic streams content-block lists, OpenAI plain
-                    # strings; the UI's extractTextContent handles both, so
-                    # forward verbatim — same as the agent stream.
-                    full_response += (
-                        content if isinstance(content, str)
-                        else "".join(
-                            block.get("text", "")
-                            for block in content
-                            if isinstance(block, dict)
-                            and block.get("type") == "text"
-                        )
-                    )
-                    yield sse_event("on_chat_model_stream", data=content)
-    except Exception as exc:
-        logger.exception("[LLM-CHAT] streaming error")
-        yield sse_error("Streaming error", str(exc))
-        return
-
-    yield sse_event("on_chain_end", data=full_response)
+    async with aclosing(stream_completion(
+        llm, messages, callbacks=callbacks, logger=logger, log_tag="LLM-CHAT",
+    )) as frames:
+        async for frame in frames:
+            yield frame
 
 
 @router.post("/stream")

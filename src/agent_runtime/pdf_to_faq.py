@@ -12,11 +12,14 @@ from fastapi.concurrency import run_in_threadpool
 from langchain_core.messages import SystemMessage
 
 from src.core.schemas.PdfToFaqRequest import FaqList, PdfToFaqRequest
-from src.services.credential_access import resolve_default_credential
 from src.deps import auth_dependency, db_dependency
 from src.rate_limit import limiter
-from src.agent_runtime.helpers import create_llm, get_required_credential_type
-from src.routers.credentials.encryption import get_credential_value
+from src.agent_runtime.helpers.caller_llm import (
+    CredentialDecryptError,
+    LlmInitError,
+    MissingCredentialError,
+    create_caller_llm,
+)
 from src.utils.pdf_to_images import build_pdf_message
 
 logger = logging.getLogger(__name__)
@@ -52,39 +55,26 @@ async def generate_faq(
 
     provider = request_body.model.provider
     model_name = request_body.model.model
-    model_config = {"provider": provider, "model": model_name}
 
-    # --- Credentials (mirrors src/routers/agents/context.py) ---
-    credentials: dict[str, str] = {}
-    required_credential_type = get_required_credential_type(provider)
-    if required_credential_type:
-        # Resolve the account's default provider credential (owned or shared).
-        credential = resolve_default_credential(db, account_id, required_credential_type)
-        if not credential:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"{provider.title()} API key required. Add it in account settings.",
-            )
-        try:
-            credentials[provider] = get_credential_value(credential, "api_key")
-        except Exception as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Failed to retrieve API key: {exc}",
-            ) from exc
-
-    # --- LLM (reuse existing factory; streaming flag does not block .ainvoke) ---
+    # --- Credentials + LLM (the caller's own key; see helpers/caller_llm.py).
+    # The streaming flag does not block .ainvoke. ---
     try:
-        llm, _ = create_llm(
-            model_config=model_config,
-            credentials=credentials,
-            temperature=0,
+        llm = create_caller_llm(db, account_id, provider, model_name, temperature=0)
+    except MissingCredentialError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{provider.title()} API key required. Add it in account settings.",
         )
-    except ValueError as exc:
+    except CredentialDecryptError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to retrieve API key: {exc}",
+        ) from exc.__cause__
+    except LlmInitError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"LLM initialization failed: {exc}",
-        ) from exc
+        ) from exc.__cause__
 
     # Release the DB connection before the long-running LLM call (matches context.py).
     db.close()
