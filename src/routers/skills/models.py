@@ -57,6 +57,21 @@ class SkillResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+    @classmethod
+    def from_skill(cls, skill, is_owner: bool) -> "SkillResponse":
+        """The one field-by-field mapping every skills route returns."""
+        return cls(
+            id=skill.id,
+            name=skill.name,
+            description=skill.description,
+            content=skill.content,
+            visibility=skill.visibility,
+            frontmatter=skill.frontmatter,
+            is_owner=is_owner,
+            created_at=skill.created_at,
+            updated_at=skill.updated_at,
+        )
+
 
 def _bad_request(detail: str) -> HTTPException:
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)

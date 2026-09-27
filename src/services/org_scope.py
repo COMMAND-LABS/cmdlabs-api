@@ -57,15 +57,6 @@ _CREATED_BY_COLUMN = {
     'vector_stores': 'owner_account_id',
 }
 
-# Resource types that are SHARABLE — the ones a grant may name. Deliberately
-# narrow, and it stays narrow: CRM rows are tenant data and may never become
-# something one account hands to another.
-AGENT = 'agent'
-VECTOR_STORE = 'vector_store'
-# Skills are resource-shaped (org_id + visibility) from day one so per-person
-# grants are an additive change; no AccessGrant names a skill yet.
-SKILL = 'skill'
-
 
 def created_by_column(model):
     """The column recording who created a row.
@@ -220,8 +211,7 @@ def resource_predicate(model, ctx):
     )
 
 
-def visible_resource_predicate(db: Session, model, ctx, resource_type: str,
-                               granted_ids=None):
+def visible_resource_predicate(model, ctx, granted_ids=None):
     """Everything a caller may reach for a publishable resource type.
 
     Two additive arms, neither of which crosses the tenant boundary:
@@ -240,9 +230,9 @@ def visible_resource_predicate(db: Session, model, ctx, resource_type: str,
     Deliberately not a flag on tenant_predicate: the CRM tables must never be
     able to acquire a sharing arm by someone passing the wrong argument.
 
-    `db` and `resource_type` are now unused. They are kept because they are the
-    parameters the sharing arm reads, and every call site already passes them —
-    threading them back through later should not be a signature change.
+    It used to take `db` and `resource_type` as well, kept unused after the
+    space arm went so that restoring it would not be a signature change. They
+    were dropped as dead parameters; a returning sharing arm adds them back.
     """
     arms = [resource_predicate(model, ctx)]
     if granted_ids:
@@ -250,8 +240,8 @@ def visible_resource_predicate(db: Session, model, ctx, resource_type: str,
     return or_(*arms)
 
 
-def scoped_resources(db: Session, model, ctx, resource_type: str, granted_ids=None):
+def scoped_resources(db: Session, model, ctx, granted_ids=None):
     """`db.query(model)` scoped to everything the caller may reach."""
     return db.query(model).filter(
-        visible_resource_predicate(db, model, ctx, resource_type, granted_ids)
+        visible_resource_predicate(model, ctx, granted_ids)
     )

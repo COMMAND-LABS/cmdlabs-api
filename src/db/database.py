@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 from dotenv import load_dotenv
 import os
@@ -57,22 +57,6 @@ engine = create_engine(
         "application_name": "cmdlabs",
     },
 )
-
-
-@event.listens_for(engine, "checkout")
-def check_connection(dbapi_connection, connection_record, connection_proxy):
-    """
-    Verify SSL connection is still alive on checkout.
-    If dead, the pool will invalidate it and create a new one.
-    """
-    try:
-        cursor = dbapi_connection.cursor()
-        cursor.execute("SELECT 1")
-        cursor.close()
-    except Exception:
-        # Connection is dead - raise DisconnectionError to force pool to reconnect
-        import sqlalchemy.exc
-        raise sqlalchemy.exc.DisconnectionError("SSL connection check failed")
 
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

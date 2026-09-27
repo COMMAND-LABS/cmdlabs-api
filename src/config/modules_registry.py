@@ -120,10 +120,6 @@ MODULE_KEYS = tuple(m.key for m in MODULES)
 BY_KEY = {m.key: m for m in MODULES}
 
 
-def is_valid(key: str) -> bool:
-    return key in BY_KEY
-
-
 def normalize(keys) -> list:
     """Drop unknown keys, de-duplicate, and return in registry order.
 

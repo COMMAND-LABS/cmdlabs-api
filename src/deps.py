@@ -22,9 +22,9 @@ def get_db():
     """
     Database session dependency.
     
-    The engine is configured with pool_pre_ping=True and a checkout
-    event listener that validates SSL connections, so stale connections
-    are automatically replaced before being handed out.
+    The engine is configured with pool_pre_ping=True, which validates each
+    connection on checkout, so stale connections are automatically replaced
+    before being handed out.
 
     The rollback is what lets routers stop writing `except Exception:
     db.rollback()` around every write. It is belt-and-braces — close()
@@ -518,6 +518,20 @@ def require_module(module_key: str):
         _refuse_writes_while_read_only(ctx, request)
 
     return _check
+
+
+def require_org_owner(org: "OrgContext") -> None:
+    """Only the owner of the org IN THE CONTEXT may proceed.
+
+    404 rather than 403, matching require_module and require_super_admin: a
+    member who cannot manage the org should not have its owner-only endpoints
+    confirm they exist.
+
+    `is_owner` is derived by _org_context_for from THAT org's owner column, so
+    owning some other org never satisfies this.
+    """
+    if not org.is_owner:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
 
 def _refuse_writes_while_read_only(ctx: "OrgContext", request: Request) -> None:

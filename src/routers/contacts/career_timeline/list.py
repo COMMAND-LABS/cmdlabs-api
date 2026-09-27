@@ -3,7 +3,7 @@ List career timeline entries for a contact.
 """
 from typing import List
 from fastapi import APIRouter, Request
-from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, auth_dependency
 from src.services.org_scope import get_scoped_or_404, tenant_predicate
 from src.db.models import Contact, CareerTimeline
 
@@ -21,9 +21,6 @@ async def list_career_timeline(
     org: org_dependency,
     request: Request,
 ):
-    account_id = account_id_from_claims(auth)
-    account = ensure_account(db, account_id)
-
     get_scoped_or_404(db, Contact, contact_id, org)
 
     entries = (

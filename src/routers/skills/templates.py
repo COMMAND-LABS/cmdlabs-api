@@ -18,7 +18,6 @@ from src.db.models import Skill
 from src.deps import (
     account_id_from_claims,
     db_dependency,
-    ensure_account,
     jwt_dependency,
     org_dependency,
 )
@@ -48,9 +47,6 @@ async def list_skill_templates(
     request: Request,
 ):
     """Built-in templates an org can install as its own skills."""
-    account_id = account_id_from_claims(jwt)
-    ensure_account(db, account_id)
-
     templates = load_skill_templates()
     existing_names = {
         name for (name,) in db.query(Skill.name).filter(
@@ -83,7 +79,6 @@ async def install_skill_template(
 ):
     """Copy a built-in template into the caller's org as a private skill."""
     account_id = account_id_from_claims(jwt)
-    ensure_account(db, account_id)
 
     template = get_skill_template(template_name)
     if template is None:
@@ -114,14 +109,4 @@ async def install_skill_template(
     db.commit()
     db.refresh(skill)
 
-    return SkillResponse(
-        id=skill.id,
-        name=skill.name,
-        description=skill.description,
-        content=skill.content,
-        visibility=skill.visibility,
-        frontmatter=skill.frontmatter,
-        is_owner=True,
-        created_at=skill.created_at,
-        updated_at=skill.updated_at,
-    )
+    return SkillResponse.from_skill(skill, is_owner=True)

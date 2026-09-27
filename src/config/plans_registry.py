@@ -105,7 +105,7 @@ ACTIVE_SUBSCRIPTION_STATUSES = ("active", "trialing")
 #                 (/api/billing in modules_registry.ALWAYS_ALLOWED_PREFIXES).
 #   organization  the owner's console. Gated on OWNERSHIP rather than on the
 #                 plan — routers/organizations/overview.py uses
-#                 _require_owner — so an owner whose plan happened to omit it
+#                 require_org_owner — so an owner whose plan happened to omit it
 #                 could not administer their own org while the API served
 #                 them perfectly well.
 #
@@ -182,6 +182,21 @@ def billing_state(subscription_status: str | None,
         return BILLING_LAPSED
 
     return BILLING_GRACE if (now or _utcnow()) < ends else BILLING_LAPSED
+
+
+def org_billing_state(pinned_plan: str | None, owner_billing) -> str:
+    """An ORG's billing state, as the admin surfaces report it.
+
+    `owner_billing` is the owner's (subscription_status, lapsed_at), or None
+    when the org has no owner or the owner row is gone.
+
+    Pinned orgs are always 'active': super admins gave them a plan, so a
+    payment says nothing about them in either direction. An org with no owner
+    has nobody who could pay, so it is not reported as lapsed either.
+    """
+    if pinned_plan is not None or owner_billing is None:
+        return BILLING_ACTIVE
+    return billing_state(owner_billing[0], owner_billing[1])
 
 
 def _utcnow() -> datetime:

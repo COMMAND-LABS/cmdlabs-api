@@ -32,7 +32,6 @@ from src.services import modules
 FREE_CEILING = plans.modules_for_plan(plans.PLAN_FREE)
 PREMIUM_CEILING = plans.modules_for_plan(plans.PLAN_PREMIUM)
 from src.services.organizations import (
-    ceiling_for_account,
     ensure_membership,
     own_org_for,
     pin_plan,

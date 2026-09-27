@@ -26,3 +26,16 @@ class AgentResponse(BaseModel):
     is_owner: Optional[bool] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+    @classmethod
+    def from_agent(cls, agent, is_owner: Optional[bool] = None) -> "AgentResponse":
+        """The one field-by-field mapping every agents route returns.
+
+        create/update leave is_owner unset (null), as they always have.
+        """
+        return cls(
+            id=agent.id,
+            name=agent.name,
+            config=agent.config,
+            is_owner=is_owner,
+        )

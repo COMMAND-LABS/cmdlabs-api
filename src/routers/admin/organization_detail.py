@@ -88,17 +88,14 @@ def _billing_state(db, org) -> str:
     """
     from src.config import plans_registry as plans
 
-    if org.pinned_plan is not None:
-        # Pinned. Billing has nothing to say about it in either direction.
-        return plans.BILLING_ACTIVE
-    if org.owner_account_id is None:
-        return plans.BILLING_ACTIVE
-    owner = (db.query(Account.subscription_status,
-                      Account.subscription_lapsed_at)
-               .filter(Account.id == org.owner_account_id).first())
-    if owner is None:
-        return plans.BILLING_ACTIVE
-    return plans.billing_state(owner[0], owner[1])
+    owner = None
+    # Pinned: billing has nothing to say about it in either direction, so the
+    # owner is not even looked up.
+    if org.pinned_plan is None and org.owner_account_id is not None:
+        owner = (db.query(Account.subscription_status,
+                          Account.subscription_lapsed_at)
+                   .filter(Account.id == org.owner_account_id).first())
+    return plans.org_billing_state(org.pinned_plan, owner)
 
 
 def _org_or_404(db, org_id: int) -> Organization:

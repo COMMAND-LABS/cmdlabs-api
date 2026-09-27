@@ -3,7 +3,7 @@ List contact events endpoint.
 """
 from typing import List
 from fastapi import APIRouter, Request
-from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, auth_dependency
 from src.services.org_scope import get_scoped_or_404, tenant_predicate
 from src.db.models import Contact, ContactEvent
 
@@ -22,9 +22,6 @@ async def list_contact_events(
     request: Request,
 ):
     """Return events for a contact ordered most-recent first."""
-    account_id = account_id_from_claims(auth)
-    account = ensure_account(db, account_id)
-
     get_scoped_or_404(db, Contact, contact_id, org)
 
     events = (

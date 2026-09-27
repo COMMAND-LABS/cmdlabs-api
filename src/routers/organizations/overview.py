@@ -25,7 +25,7 @@ administer an org by setting its ceiling, not by reading the owner's console.
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from sqlalchemy import func
 
@@ -36,7 +36,7 @@ from src.db.models import (
     Organization,
     OrganizationMember,
 )
-from src.deps import db_dependency, named_org_dependency
+from src.deps import db_dependency, named_org_dependency, require_org_owner
 from src.rate_limit import limiter
 from src.services import modules
 
@@ -105,18 +105,6 @@ class OrganizationOverviewResponse(BaseModel):
     # `owned_spaces` used to close this response: the spaces billed to this org,
     # and THE ONE PLACE Space.owner_org_id was read — for exactly what the column
     # was for, accountability. It was never an access list. It went with spaces.
-
-
-def _require_owner(org):
-    """Only an owner sees their org's console.
-
-    404 rather than 403, the same choice members.py and
-    require_super_admin all make: the surface does not confirm its own
-    existence to somebody who cannot use it.
-    """
-    if not org.is_owner:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                            detail="Not found")
 
 
 def _overview_payload(db, org) -> OrganizationOverviewResponse:
@@ -230,10 +218,10 @@ async def organization_overview(db: db_dependency, org: named_org_dependency,
 
     TWO GATES, BOTH UNCHANGED. named_org_dependency proves membership of the
     org in the path (deps._org_context_for, the same function the cookie goes
-    through); _require_owner then proves ownership OF THAT ORG, because
+    through); require_org_owner then proves ownership OF THAT ORG, because
     is_owner on the returned context describes the named org and not whichever
     one the caller happens to be acting in. Owning org A must not open the
     console of org B you are merely a member of.
     """
-    _require_owner(org)
+    require_org_owner(org)
     return _overview_payload(db, org)

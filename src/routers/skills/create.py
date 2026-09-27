@@ -11,7 +11,6 @@ from src.db.models import Skill
 from src.deps import (
     account_id_from_claims,
     db_dependency,
-    ensure_account,
     jwt_dependency,
     org_dependency,
 )
@@ -41,7 +40,6 @@ async def create_skill(
 ):
     """Create a new skill in the caller's organization."""
     account_id = account_id_from_claims(jwt)
-    account = ensure_account(db, account_id)
 
     content = validate_skill_content(request_body.content)
     try:
@@ -93,14 +91,4 @@ async def create_skill(
     db.commit()
     db.refresh(skill)
 
-    return SkillResponse(
-        id=skill.id,
-        name=skill.name,
-        description=skill.description,
-        content=skill.content,
-        visibility=skill.visibility,
-        frontmatter=skill.frontmatter,
-        is_owner=True,
-        created_at=skill.created_at,
-        updated_at=skill.updated_at,
-    )
+    return SkillResponse.from_skill(skill, is_owner=True)

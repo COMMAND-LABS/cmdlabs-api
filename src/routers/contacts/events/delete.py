@@ -3,7 +3,7 @@ Delete a contact event endpoint.
 """
 import logging
 from fastapi import APIRouter, status, Request
-from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, auth_dependency
 from src.services.org_scope import get_scoped_or_404
 from src.db.models import Contact, ContactEvent
 from src.services.crm_vector_service import delete_vector
@@ -22,9 +22,6 @@ async def delete_contact_event(
     org: org_dependency,
     request: Request,
 ):
-    account_id = account_id_from_claims(auth)
-    account = ensure_account(db, account_id)
-
     get_scoped_or_404(db, Contact, contact_id, org)
     event = get_scoped_or_404(db, ContactEvent, event_id, org,
                               ContactEvent.contact_id == contact_id,

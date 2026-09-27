@@ -50,7 +50,7 @@ from sqlalchemy import and_, or_
 
 from src.config import plans_registry as plans
 from src.db.models import Course
-from src.deps import db_dependency, org_dependency
+from src.deps import db_dependency, org_dependency, require_org_owner
 from src.rate_limit import limiter
 from src.services.org_scope import tenant_predicate
 
@@ -139,12 +139,6 @@ class UpdateCourseRequest(BaseModel):
         if v is not None and not plans.is_valid(v):
             raise ValueError(f"required_plan must be one of {plans.PLAN_KEYS}")
         return v
-
-
-def _require_owner(org):
-    """Only an owner decides which courses their org has."""
-    if not org.is_owner:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
 
 def _assert_may_publish(db, org, visibility: Optional[str]) -> None:
@@ -299,7 +293,7 @@ async def get_course(course_key: str, db: db_dependency, org: org_dependency,
 async def create_course(body: CreateCourseRequest, db: db_dependency,
                         org: org_dependency, request: Request):
     """Enable a course for this organization."""
-    _require_owner(org)
+    require_org_owner(org)
     _assert_may_publish(db, org, body.visibility)
 
     existing = (db.query(Course)
