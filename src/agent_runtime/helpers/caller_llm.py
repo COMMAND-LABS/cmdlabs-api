@@ -1,16 +1,15 @@
 """
 The caller's own provider credential -> a ready LLM.
 
-Shared by the endpoints that have no agent (and so no other principal whose
-key could apply): llm-chat, memory-chat and pdf-to-faq. Each of them resolves
-the CALLER's default credential for the chosen provider, decrypts it and
-builds the LLM. The agent runtime (context.py) does NOT use this — it also
-handles pinned credentials and owner-funded runs.
+For endpoints that have no agent (and so no other principal whose key could
+apply) — currently pdf-to-faq. It resolves the CALLER's default credential
+for the chosen provider, decrypts it and builds the LLM. The agent runtime
+(context.py) does NOT use this — it also handles pinned credentials and
+owner-funded runs.
 
-Failures raise one of the LlmSetupError subclasses below; each caller maps
-them to its own wire shape (an SSE error frame, or an HTTPException). The
-exception message is the underlying error's text, so ``str(exc)`` is exactly
-what the callers used to surface.
+Failures raise one of the LlmSetupError subclasses below, which the caller
+maps to an HTTPException. The exception message is the underlying error's
+text, so ``str(exc)`` is exactly what the caller surfaces.
 """
 from langchain_core.language_models.chat_models import BaseChatModel
 
