@@ -1,5 +1,5 @@
 """
-Migrate the legacy Kalygo user list (emails + newsletter signups) into the
+Migrate the legacy user list (emails + newsletter signups) into the
 new `accounts` table.
 
 Source: a `pg_dump` of the old platform schema (default:
@@ -216,7 +216,7 @@ def migrate_contacts(account_id: int, sql_file: str, dry_run: bool) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Migrate legacy Kalygo emails + newsletter signups into accounts"
+        description="Migrate legacy emails + newsletter signups into accounts"
     )
     parser.add_argument(
         "--sql-file", default=DEFAULT_SQL_FILE,

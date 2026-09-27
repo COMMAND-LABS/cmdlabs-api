@@ -10,7 +10,7 @@ Info regarding how the FastAPI was integrated with GCS (Google Cloud Storage)
 - Created a bucket called: `swarms`
 - Add more permissions to the GCS S.A. account
   - gcloud projects add-iam-policy-binding 137963986378 \
-    --member="serviceAccount:kalygo3-gcs-sa@kalygo-v3.iam.gserviceaccount.com" \
+    --member="serviceAccount:command-labs-gcs-sa@command-labs-v3.iam.gserviceaccount.com" \
     --role="roles/storage.admin"
 
 ## Permissions to CRUD to GCS
@@ -19,17 +19,17 @@ Info regarding how the FastAPI was integrated with GCS (Google Cloud Storage)
 
 ## Needed to give SA in GitHub action an additional permission for giving a non-default S.A. when deploying Cloud Run services
 
-- gcloud iam service-accounts add-iam-policy-binding kalygo3-gcs-sa@kalygo-v3.iam.gserviceaccount.com \
-  --member="serviceAccount:kalygo3-sa@kalygo-v3.iam.gserviceaccount.com" \
+- gcloud iam service-accounts add-iam-policy-binding command-labs-gcs-sa@command-labs-v3.iam.gserviceaccount.com \
+  --member="serviceAccount:command-labs-sa@command-labs-v3.iam.gserviceaccount.com" \
   --role="roles/iam.serviceAccountUser"
 
 - gcloud projects add-iam-policy-binding 137963986378 \
-  --member="serviceAccount:kalygo3-gcs-sa@kalygo-v3.iam.gserviceaccount.com" \
+  --member="serviceAccount:command-labs-gcs-sa@command-labs-v3.iam.gserviceaccount.com" \
   --role="roles/secretmanager.secretAccessor"
 
 ## WTF
 
---service-account kalygo3-gcs-sa@kalygo-v3.iam.gserviceaccount.com
+--service-account command-labs-gcs-sa@command-labs-v3.iam.gserviceaccount.com
 
 ##
 
@@ -51,7 +51,7 @@ gcloud projects get-iam-policy 137963986378 \
 gcloud projects get-iam-policy 137963986378 \
 --flatten="bindings[].members" \
 --format='table(bindings.role)' \
---filter="bindings.members:kalygo3-gcs-sa@kalygo-v3.iam.gserviceaccount.com"
+--filter="bindings.members:command-labs-gcs-sa@command-labs-v3.iam.gserviceaccount.com"
 
 ##
 
@@ -68,13 +68,13 @@ gcloud projects add-iam-policy-binding 137963986378 \
 ##
 
 gcloud projects add-iam-policy-binding 137963986378 \
-    --member="serviceAccount:kalygo3-gcs-sa@kalygo-v3.iam.gserviceaccount.com" \
+    --member="serviceAccount:command-labs-gcs-sa@command-labs.iam.gserviceaccount.com" \
     --role="roles/iam.serviceAccountTokenCreator"
 
 ##
 
 gcloud projects add-iam-policy-binding 137963986378 \
-    --member="serviceAccount:kalygo3-gcs-sa@kalygo-v3.iam.gserviceaccount.com" \
+    --member="serviceAccount:command-labs-gcs-sa@command-labs.iam.gserviceaccount.com" \
     --role="roles/storage.objectViewer"
 
 ## 

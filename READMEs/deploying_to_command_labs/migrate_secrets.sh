@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Copy every Secret Manager secret referenced by service.yaml from the old
-# Kalygo project into command-labs, then grant the Cloud Run runtime service
+# GCP project into command-labs, then grant the Cloud Run runtime service
 # account read access to them.
 #
 # Run locally, authenticated as a principal with:
@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-SRC_PROJECT="${SRC_PROJECT:-kalygo-436411}"
+SRC_PROJECT="${SRC_PROJECT:-<PREVIOUS_GCP_PROJECT_ID_HERE>}"
 DST_PROJECT="${DST_PROJECT:-command-labs}"
 RUNTIME_SA="${RUNTIME_SA:-382688591561-compute@developer.gserviceaccount.com}"
 DRY_RUN="${DRY_RUN:-0}"

@@ -9,7 +9,7 @@ Each template is written to:
 Running the script a second time overwrites files so your local copy stays
 in sync with whatever is in the DB.
 
-Usage (from kalygo3-ai-api directory):
+Usage (from command-labs-api directory):
     python -m scripts.download_email_templates
     python -m scripts.download_email_templates --out-dir ./my-templates
     python -m scripts.download_email_templates --account-id 2
@@ -99,7 +99,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--out-dir", type=Path,
         default=Path(__file__).parent.parent / "email-templates",
-        help="Output directory (default: <repo>/kalygo3-ai-api/email-templates/)",
+        help="Output directory (default: <repo>/command-labs-api/email-templates/)",
     )
     args = parser.parse_args()
     download(args.account_id, args.out_dir)

@@ -8,12 +8,12 @@ Follow the prompts to enable it
 
 Go to myaccount.google.com/apppasswords
 If you don't see this page, 2-Step Verification is not yet enabled
-In the "App name" field, type something descriptive like Kalygo SMTP
+In the "App name" field, type something descriptive like Command Labs SMTP
 Click Create
 Google shows you a 16-character password (formatted as xxxx xxxx xxxx xxxx)
 Copy it immediately — Google will never show it again
 
-## Step 3 — Add the credential in Kalygo
+## Step 3 — Add the credential in Command Labs
 
 In the Credentials page, create a new credential:
 Service Name: Google Gmail (SMTP)

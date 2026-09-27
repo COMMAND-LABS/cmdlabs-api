@@ -1,11 +1,11 @@
 """
-Import SES email templates into Kalygo's email_templates table.
+Import SES email templates into Command Labs's email_templates table.
 
 For each template name provided (or all templates listed in SES), this script:
   1. Calls ses.get_template() via boto3 to fetch TemplateName, SubjectPart, HtmlPart
   2. Inserts (or skips if already present) an EmailTemplate row for the given account
 
-Usage (from the kalygo3-ai-api directory):
+Usage (from the command-labs-api directory):
 
     # Import a specific set of templates
     python -m scripts.import_ses_templates \
@@ -105,7 +105,7 @@ def import_template(db, account_id: int, tpl: dict, dry_run: bool) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Import SES email templates into Kalygo"
+        description="Import SES email templates into Command Labs"
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
@@ -123,7 +123,7 @@ def main() -> None:
         "--account-id",
         type=int,
         default=1,
-        help="Kalygo account ID to attach templates to (default: 1)",
+        help="Command Labs account ID to attach templates to (default: 1)",
     )
     parser.add_argument(
         "--region",
