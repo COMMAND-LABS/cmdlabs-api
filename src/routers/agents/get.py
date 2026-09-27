@@ -41,9 +41,4 @@ async def get_agent(
             detail="Agent not found"
         )
         
-    return AgentResponse(
-        id=agent.id,
-        name=agent.name,
-        config=agent.config,
-        is_owner=(agent.account_id == account_id),
-    )
+    return AgentResponse.from_agent(agent, is_owner=(agent.account_id == account_id))

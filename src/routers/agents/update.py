@@ -71,8 +71,4 @@ async def update_agent(
     db.commit()
     db.refresh(agent)
 
-    return AgentResponse(
-        id=agent.id,
-        name=agent.name,
-        config=agent.config
-    )
+    return AgentResponse.from_agent(agent)

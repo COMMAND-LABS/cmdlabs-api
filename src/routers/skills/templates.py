@@ -109,14 +109,4 @@ async def install_skill_template(
     db.commit()
     db.refresh(skill)
 
-    return SkillResponse(
-        id=skill.id,
-        name=skill.name,
-        description=skill.description,
-        content=skill.content,
-        visibility=skill.visibility,
-        frontmatter=skill.frontmatter,
-        is_owner=True,
-        created_at=skill.created_at,
-        updated_at=skill.updated_at,
-    )
+    return SkillResponse.from_skill(skill, is_owner=True)

@@ -42,16 +42,6 @@ async def list_skills(
     )
 
     return [
-        SkillResponse(
-            id=skill.id,
-            name=skill.name,
-            description=skill.description,
-            content=skill.content,
-            visibility=skill.visibility,
-            frontmatter=skill.frontmatter,
-            is_owner=(skill.account_id == account_id),
-            created_at=skill.created_at,
-            updated_at=skill.updated_at,
-        )
+        SkillResponse.from_skill(skill, is_owner=(skill.account_id == account_id))
         for skill in skills
     ]
