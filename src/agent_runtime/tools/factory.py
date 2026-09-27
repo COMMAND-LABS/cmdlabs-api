@@ -9,7 +9,7 @@ from typing import Any
 
 from langchain_core.tools import StructuredTool
 
-from src.agent_runtime.tool_entitlement import allowed_tool_configs, effective_modules
+from src.agent_runtime.tool_entitlement import agent_tool_modules, allowed_tool_configs
 
 from .registry import ToolRegistry
 
@@ -83,7 +83,8 @@ async def create_tools_from_agent_config(
         granted: set = set()
         logger.warning("[TOOL FACTORY] No org scope — building ungated tools only.")
     else:
-        granted = effective_modules(db, org_scope.account_id, org_scope.org_id)
+        granted = agent_tool_modules(db, org_scope.account_id, org_scope.org_id,
+                                     kwargs.get("agent_owner_account_id"))
 
     requested = len(tool_configs)
     tool_configs = allowed_tool_configs(tool_configs, granted)

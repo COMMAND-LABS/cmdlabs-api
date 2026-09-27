@@ -63,7 +63,14 @@ MODULES = (
     # took chat file upload and citation links away from anybody with Agents
     # but not Knowledge Bases.
     Module("agents", "Agents", ("/api/agents", "/api/tool-approvals", "/api/files")),
-    Module("agent_chat", "Agent Chat", ("/api/chat-sessions",)),
+    # Agent Chat is USING agents someone configured, so it needs the same read
+    # and run surface as Agents: listing and reading the agents it may use,
+    # streaming a turn (/api/agents/{id}/stream), approving that agent's
+    # emails, attaching files. A prefix listed under two modules opens for
+    # EITHER (see modules_for_path). AUTHORING — create, edit, delete, share —
+    # stays Agents-only via an explicit gate in routers/agents/router.py.
+    Module("agent_chat", "Agent Chat",
+           ("/api/chat-sessions", "/api/agents", "/api/tool-approvals", "/api/files")),
     # /api/contact-chat is the contact-scoped CRM chat stream (agent runtime).
     # Its tools are contact CRM tools, so it is gated with Contacts. (In the
     # standalone agent-api it was route-ungated; tool entitlement was the only
@@ -121,6 +128,29 @@ def normalize(keys) -> list:
     """
     given = set(keys or ())
     return [k for k in MODULE_KEYS if k in given]
+
+
+def modules_for_path(path: str) -> tuple[str, ...]:
+    """Keys of every module that opens `path`; empty when always allowed.
+
+    A request passes when the caller may open ANY of them. Usually one; more
+    when a prefix is shared on purpose (Agents and Agent Chat both open
+    /api/agents). Longest prefix wins, as in module_for_path.
+    """
+    for prefix in ALWAYS_ALLOWED_PREFIXES:
+        if path.startswith(prefix):
+            return ()
+
+    best_len = 0
+    keys: list = []
+    for module in MODULES:
+        for prefix in module.route_prefixes:
+            if path.startswith(prefix):
+                if len(prefix) > best_len:
+                    best_len, keys = len(prefix), [module.key]
+                elif len(prefix) == best_len and module.key not in keys:
+                    keys.append(module.key)
+    return tuple(keys)
 
 
 def module_for_path(path: str) -> Module | None:

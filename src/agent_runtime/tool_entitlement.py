@@ -110,6 +110,34 @@ def effective_modules(db: Session, account_id: int, org_id: int) -> set[str]:
     return set(modules.effective_modules(db, ctx))
 
 
+# Modules whose tools work on the agent OWNER's own resources. On a shared
+# agent these are entitled by the owner, not by the person chatting: a shared
+# agent works on its owner's data with the owner's access
+# (READMEs/orgs_plans_and_sharing.md). A community member has no Knowledge
+# Bases module, yet the agent shared with them must still search its owner's
+# knowledge base. (knowledgeWrite additionally needs a write grant on that
+# knowledge base — checked by the tool itself.)
+#
+# Deliberately NOT here: `contacts` and `email_campaigns`. Their tools reach
+# OTHER people — the org's customer records, and outbound mail sent as the
+# owner — so they keep following the chatting person's own role.
+OWNER_ENTITLED_MODULES = frozenset({"knowledge_bases"})
+
+
+def agent_tool_modules(db: Session, account_id: int, org_id: int,
+                       agent_owner_account_id: int | None) -> set[str]:
+    """The modules that decide which of an agent's tools `account_id` gets.
+
+    The caller's own modules, plus — on an agent shared with them — the
+    OWNER_ENTITLED_MODULES the agent's owner has in this org.
+    """
+    granted = effective_modules(db, account_id, org_id)
+    if agent_owner_account_id is not None and agent_owner_account_id != account_id:
+        owner = effective_modules(db, agent_owner_account_id, org_id)
+        granted |= owner & OWNER_ENTITLED_MODULES
+    return granted
+
+
 def allowed_tool_configs(tool_configs: list, granted: set[str]) -> list:
     """Drop tool configs whose module the caller cannot open."""
     kept = []

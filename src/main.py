@@ -237,10 +237,10 @@ _ROUTERS = [
 # ungated endpoint.
 from fastapi import Depends
 
-from src.config.modules_registry import module_for_path
+from src.config.modules_registry import modules_for_path
 from src.deps import require_module
 
 for _router, _prefix, _tags in _ROUTERS:
-    _module = module_for_path(_prefix) if _prefix else None
-    _deps = [Depends(require_module(_module.key))] if _module else None
+    _modules = modules_for_path(_prefix) if _prefix else ()
+    _deps = [Depends(require_module(*_modules))] if _modules else None
     app.include_router(_router, prefix=_prefix, tags=_tags, dependencies=_deps)

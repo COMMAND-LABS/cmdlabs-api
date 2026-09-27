@@ -477,8 +477,9 @@ org_dependency = Annotated[OrgContext, Depends(get_org_context)]
 named_org_dependency = Annotated[OrgContext, Depends(get_named_org_context)]
 
 
-def require_module(module_key: str):
-    """Dependency factory: refuse the request unless `ctx` may open this module.
+def require_module(*module_keys: str):
+    """Dependency factory: refuse the request unless `ctx` may open ANY of
+    these modules (usually one; see modules_registry.modules_for_path).
 
     This is what makes a role an authorization boundary rather than a menu
     filter. Without it an account whose role excludes Deals still reaches
@@ -501,11 +502,11 @@ def require_module(module_key: str):
     ) -> None:
         from src.services import modules as modules_service
 
-        if not modules_service.can_open(db, ctx, module_key):
+        if not any(modules_service.can_open(db, ctx, k) for k in module_keys):
             logger.info(
                 "[MODULE] account %s (org %s, role %s) denied %s %s — %s not enabled",
                 ctx.account_id, ctx.org_id, ctx.role,
-                request.method, request.url.path, module_key,
+                request.method, request.url.path, " / ".join(module_keys),
             )
             # 404 rather than 403: a module the caller's role excludes should
             # look absent, not forbidden. Telling someone precisely which paid

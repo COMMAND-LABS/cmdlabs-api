@@ -25,6 +25,12 @@ disagree, one of them is a bug.
    only inside its org.
    `services/access.py`
 
+   **Agent Chat vs Agents.** Agent Chat is *using* agents: listing and opening
+   the ones you may use, chatting, approving their emails, attaching files.
+   Agents adds *authoring*: create, edit, delete, share. Both open `/api/agents`,
+   `/api/tool-approvals` and `/api/files`; the authoring routes also require
+   Agents. `config/modules_registry.py`, `routers/agents/router.py`
+
 ## Sharing an agent
 
 - Only the agent's **owner** can share it.
@@ -43,6 +49,7 @@ disagree, one of them is a bug.
 | | Uses |
 |---|---|
 | Knowledge bases, datasets, forecasting, Python, email, database read/write | always the **owner's** access |
+| Which tools a shared agent has | knowledge-base tools: the **owner's** plan; CRM and email tools: also the **chatter's** role (they reach other people — customer records, mail sent as the owner) |
 | The AI model (OpenAI / Anthropic / Google / Kimi) | the switch `shareOwnerCredentials` on the agent: **on** → owner's key, **off** → the key of the person chatting |
 
 With the switch off, the person chatting adds their own key under
