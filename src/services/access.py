@@ -78,11 +78,10 @@ def _resource_org(db: Session, resource_type: str, resource_id: int):
         row = db.query(Agent.org_id).filter(Agent.id == resource_id).first()
     elif resource_type == VECTOR_STORE:
         row = db.query(VectorStore.org_id).filter(VectorStore.id == resource_id).first()
-    elif resource_type == CREDENTIAL:
-        # Credentials are portable identity rather than tenant data: a personal
-        # key has org_id NULL and travels with its owner. Nothing to confine.
-        return None
     else:
+        # Including CREDENTIAL: credentials are portable identity rather than
+        # tenant data — a personal key has org_id NULL and travels with its
+        # owner. Nothing to confine.
         return None
     return row[0] if row else None
 
@@ -282,17 +281,18 @@ def effective_accounts(db: Session, resource_type: str, resource_id: int) -> lis
     if owner is not None:
         _consider(owner, "owner", "owner")
 
+    # Every grant names an account: ck_access_grant_principal_type admits
+    # nothing else since groups were removed.
     grants = (
-        db.query(AccessGrant.principal_type, AccessGrant.principal_id, AccessGrant.role)
+        db.query(AccessGrant.principal_id, AccessGrant.role)
         .filter(
             AccessGrant.resource_type == resource_type,
             AccessGrant.resource_id == resource_id,
         )
         .all()
     )
-    for principal_type, principal_id, role in grants:
-        if principal_type == ACCOUNT:
-            _consider(principal_id, role, "direct")
+    for principal_id, role in grants:
+        _consider(principal_id, role, "direct")
 
     if not best:
         return []
@@ -330,18 +330,9 @@ def resources_for_account(db: Session, account_id: int) -> list:
         .all()
     )
 
-    best: dict = {}  # (rtype, rid) -> {role, via}
-
-    def _consider(rtype, rid, role, via):
-        key = (rtype, rid)
-        cur = best.get(key)
-        if cur is None or _role_priority(role) > _role_priority(cur["role"]):
-            best[key] = {"role": role, "via": via}
-
-    for rtype, rid, role in grants:
-        _consider(rtype, rid, role, "direct")
-
+    # One row per resource: uq_access_grant_principal_resource allows a single
+    # grant per (principal, resource), so there is no "best role" to pick.
     return [
-        {"resource_type": rtype, "resource_id": rid, "role": info["role"], "via": info["via"]}
-        for (rtype, rid), info in best.items()
+        {"resource_type": rtype, "resource_id": rid, "role": role, "via": "direct"}
+        for rtype, rid, role in grants
     ]
