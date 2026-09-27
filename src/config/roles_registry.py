@@ -85,12 +85,16 @@ ROLE_LABELS = {
 #   agents      OUT — authoring them; an agent carries credentials and reaches
 #                     knowledge bases, so building one is a team activity
 #   courses     IN  — published material is what "serving people" means here
+#   credentials IN  — their OWN API keys (account-scoped: the credentials API
+#                     only ever lists a person's own keys and ones explicitly
+#                     shared with them, never the org's). A shared agent that
+#                     does not run on its owner's key asks for the member's.
 #   home        IN  — there has to be somewhere to land
 #
 # Everything else is out, and adding to this tuple is a decision about who sees
 # your customers' data. `contacts`, `contact_lists`, `companies`, `deals`,
-# `credentials`, `access`, `analytics`, `email_*` may not appear here.
-COMMUNITY_MODULES = ("home", "courses", "agent_chat")
+# `access`, `analytics`, `email_*` may not appear here.
+COMMUNITY_MODULES = ("home", "courses", "agent_chat", "credentials")
 
 
 def is_valid(role: str) -> bool:

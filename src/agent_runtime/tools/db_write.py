@@ -52,7 +52,7 @@ async def create_db_write_tool(
             - requiredColumns: List of columns that must be provided
             - injectAccountId: If true, automatically inject the account_id column
             - injectChatSessionId: If true, automatically inject the chat_session_id column
-        account_id: Account ID for credential lookup and auto-injection
+        account_id: The caller's account id, written by injectAccountId
         db: Database session (for credential lookup)
         auth_token: Authentication token (unused)
         **kwargs: Additional context including:
@@ -107,8 +107,12 @@ async def create_db_write_tool(
     if invalid_required:
         raise ValueError(f"requiredColumns contains columns not in allowed columns: {invalid_required}")
 
-    # Get the connection string from the credential (raises CredentialError if fails).
-    connection_string = get_connection_string(credential_id, account_id, db)
+    # The database belongs to the agent's OWNER, like every other tool's data:
+    # a shared agent writes with the owner's credential (the person chatting
+    # would not have it). account_id stays the CALLER for injectAccountId,
+    # which records who created the row. Raises CredentialError on failure.
+    credential_account_id = kwargs.get("agent_owner_account_id", account_id)
+    connection_string = get_connection_string(credential_id, credential_account_id, db)
 
     # Config-trust path: dbTableWrite always declares its writable columns (see
     # the validation above), fixed when the agent was configured. We skip the

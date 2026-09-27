@@ -197,18 +197,15 @@ async def prepare_agent_context(
 
     config_data = agent_config.get("data", {})
 
-    # --- Turn-completion credential principal ---
-    # Which account's stored LLM provider credential funds this run's turn
-    # completions. The owner always runs on their own. A non-owner (group member
-    # accessing via an access-group grant) runs on the owner's credential only
-    # when the owner opted in via `shareOwnerCredentials`; otherwise the member
-    # uses their own. When the caller IS the owner, owner == caller so the flag
-    # is a no-op.
-    #
-    # Tool credentials are resolved separately, inside the tool builders, which
-    # already apply a deliberate per-tool policy (read/pinecone/email use the
-    # owner's credentials so shared members can use them; db_write uses the
-    # caller's). That policy is intentionally NOT governed by this flag.
+    # --- Who pays for the model ---
+    # THE RULE FOR SHARED AGENTS: a shared agent always works on its owner's
+    # data with the owner's access — every tool builder resolves credentials
+    # through agent_owner_account_id. ONE switch, `shareOwnerCredentials`,
+    # decides only whose LLM provider key pays for the model's turns:
+    #   on  -> the owner's key
+    #   off -> the key of the person chatting (they add it under Credentials,
+    #          which every plan and role can open)
+    # For the owner, owner == caller, so the switch changes nothing.
     share_owner_credentials = bool(config_data.get("shareOwnerCredentials", False))
     completion_credential_account_id = (
         agent_owner_account_id if share_owner_credentials else account_id

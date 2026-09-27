@@ -112,7 +112,10 @@ ACTIVE_SUBSCRIPTION_STATUSES = ("active", "trialing")
 # Neither has any route_prefixes in modules_registry, so nothing on the API
 # consults them at all.
 PLAN_MODULES = {
-    PLAN_FREE: ("home", "courses", "prompts", "settings"),
+    # `credentials` is on every plan: a person's own API keys belong to their
+    # account, not to an org, and storing them costs nothing. Without it a free
+    # user could never add the key a shared agent may ask them for.
+    PLAN_FREE: ("home", "courses", "prompts", "credentials", "settings"),
     PLAN_PREMIUM: ("home", "agents", "agent_chat", "contacts", "contact_lists",
                    "companies", "deals", "prompts", "skills", "knowledge_bases", "access",
                    "credentials", "email_templates", "email_campaigns",

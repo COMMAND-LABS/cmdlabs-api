@@ -1,11 +1,16 @@
 """
-Share an agent with one named person (agent owner only).
+Share an agent with one named person.
 
-Writes a unified AccessGrant (resource_type='agent', role='use'). Sharing with
-a group of people was putting the agent in a space instead; spaces are gone.
+Only the agent's OWNER may share it, and only in an org on the premium plan:
+sharing is a premium feature, and on the free plan the person shared with
+could not open agent chat anyway (see config/plans_registry). The person must
+already be a member of this org (resolve_grantee / assert_same_org).
+
+Writes a unified AccessGrant (resource_type='agent', role='use').
 """
 from fastapi import APIRouter, HTTPException, status, Request
 from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
+from src.config import plans_registry as plans
 from src.services.org_scope import get_resource_or_404
 from src.db.models import Agent, AccessGrant
 from src.services import access
@@ -29,6 +34,18 @@ async def create_grant(
     account_id = account_id_from_claims(jwt)
 
     agent = get_resource_or_404(db, Agent, agent_id, org)
+    # Same check and wording as revoke_grant: seeing an org-visible agent is
+    # not owning it.
+    if agent.account_id != account_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the agent's owner can share it",
+        )
+    if org.plan != plans.PLAN_PREMIUM:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sharing agents requires the premium plan",
+        )
 
     principal_type, principal_id, label = resolve_grantee(
         db,

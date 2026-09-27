@@ -43,7 +43,7 @@
         "shareOwnerCredentials": {
           "type": "boolean",
           "default": false,
-          "description": "When true, members who access this agent via an access group run it on the OWNER's stored credentials (for both LLM turn completions and tools) instead of their own. When false or omitted, each member uses their own credentials. Has no effect for the owner, who always uses their own credentials."
+          "description": "Who pays for the AI model when someone this agent is shared with uses it. true: the owner's LLM provider key. false or omitted: the key of the person chatting. Tools are NOT affected: a shared agent always uses its owner's access for tools and data (knowledge bases, datasets, databases, email). Has no effect for the owner."
         },
         "tools": {
           "type": "array",

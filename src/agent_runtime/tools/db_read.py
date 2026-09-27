@@ -259,9 +259,8 @@ async def create_db_read_tool(
     if not table_name:
         raise ValueError("Missing required field 'table' in dbTableRead tool configuration")
 
-    # For shared agents, use the agent owner's credentials so shared users
-    # can read from the owner's database.  Write tools (db_write) intentionally
-    # do NOT do this — write access requires the caller's own credentials.
+    # A shared agent works on its OWNER's data with the owner's access, so this
+    # reads with the owner's credential (db_write does the same).
     credential_account_id = kwargs.get('agent_owner_account_id', account_id)
 
     # Get the connection string from the credential (raises CredentialError if fails).

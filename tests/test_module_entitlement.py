@@ -117,8 +117,10 @@ async def test_a_community_member_reaches_no_crm_module(
     async with client_for(member) as c:
         body = (await c.get(ENTITLEMENTS)).json()
 
+    # `credentials` is deliberately absent: it lists only the member's OWN
+    # keys, never the org's (see config/roles_registry COMMUNITY_MODULES).
     for key in ("contacts", "contact_lists", "companies", "deals",
-                "credentials", "access", "analytics", "email_campaigns"):
+                "access", "analytics", "email_campaigns"):
         assert key not in body["modules"], (
             f"a community member must not reach {key}")
 
