@@ -6,7 +6,7 @@ How to create an OAuth cred
 
 Go to `APIs & Services` > `Credentials` >
 
-https://console.cloud.google.com/apis/credentials?project=kalygo-436411
+https://console.cloud.google.com/apis/credentials?project=command-labs
 
 ##
 

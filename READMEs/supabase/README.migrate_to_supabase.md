@@ -23,5 +23,5 @@ Documenting steps of moving Postgres DB from Render.com
 
 ## Phase 4
 
-- Run the FRONTEND Next.js web app in the `kalygo-436411` project
-- Run the BACKEND FastAPI application in the `kalygo-436411` project
+- Run the FRONTEND Next.js web app in the `command-labs` project
+- Run the BACKEND FastAPI application in the `command-labs` project
