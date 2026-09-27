@@ -3,7 +3,7 @@ Migrate the legacy user list (emails + newsletter signups) into the
 new `accounts` table.
 
 Source: a `pg_dump` of the old platform schema (default:
-`scratchspace/kalygo_9_21_2024.sql`). Two tables are read from the dump's
+`scratchspace/9_21_2024.sql`). Two tables are read from the dump's
 COPY blocks:
 
   * "Account"     -> every email that ever signed on to the old platform
@@ -53,7 +53,7 @@ from src.db.models import Account, Contact
 DEFAULT_SQL_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "scratchspace",
-    "kalygo_9_21_2024.sql",
+    "9_21_2024.sql",
 )
 
 

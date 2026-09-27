@@ -1,6 +1,6 @@
 # TLDR
 
-Documenting process of migrating Kalygo into the cmdlabs project in GCP 
+Documenting process of migrating into the cmdlabs project in GCP 
 
 ##
 
@@ -61,4 +61,4 @@ gcloud iam service-accounts add-iam-policy-binding 382688591561-compute@develope
 ## Enable Google Secret Manager
 
 - `gcloud services enable secretmanager.googleapis.com --project=command-labs`
-- `./READMEs/deploying_to_command_labs/migrate_secrets.sh` <!-- Moved the secrets from the `kalygo` GCP project to the `command-labs` GCP project -->
+- `./READMEs/deploying_to_command_labs/migrate_secrets.sh` <!-- Moved the secrets from the previous GCP project to the `command-labs` GCP project -->

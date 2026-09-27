@@ -4,7 +4,7 @@ Revision ID: f3a4b5c6d7e8
 Revises: e2f3a4b5c6d7
 Create Date: 2026-06-28
 
-Stores user feedback submitted from branded front-ends (e.g. bolay.kalygo.io).
+Stores user feedback submitted from branded front-ends (e.g. bolay.cmdlabs.io).
 Submissions are public and account-less; `client` records which branded UI the
 feedback originated from so a single table can serve multiple front-ends.
 """

@@ -1,6 +1,6 @@
 # TLDR
 
-Documenting process of migrating Kalygo into the cmdlabs project in GCP 
+Documenting process of migrating into the cmdlabs project in GCP 
 
 ## Setting up DNS (ie: point api.cmdlabs.io -> the Cloud Run service for the `cmdlabs-api`)
 
