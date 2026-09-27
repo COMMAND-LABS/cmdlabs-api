@@ -24,8 +24,9 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from src.db.models import PendingToolApproval, VectorDbIngestionLog
+from src.db.models import PendingToolApproval
 from src.services import account_gcs_service
+from src.services.ingestion_log import record_ingestion_log
 from src.services.vector_store_access import authorize_vector_store
 from src.services.vector_stores_upload_service import TXT_INGEST_TOPIC, VectorStoresUploadService
 
@@ -112,27 +113,23 @@ async def execute_knowledge_write(
     # Logged after the approval commits: the note is already stored and queued,
     # so a logging failure must not leave the approval pending (a retry would
     # upload a duplicate). Same best-effort policy as the upload routes.
-    try:
-        db.add(VectorDbIngestionLog(
-            account_id=owner_account_id,
-            provider="pinecone",
-            index_name=index_name,
-            namespace=namespace,
-            filenames=[filename],
-            comment=comment,
-            gcs_bucket=result.get("gcs_bucket"),
-            gcs_file_path=result.get("gcs_file_path"),
-            operation_type="INGEST",
-            status="PENDING",
-            vectors_added=0,
-            vectors_deleted=0,
-            vectors_failed=0,
-            batch_number=batch_number,
-        ))
-        db.commit()
-    except Exception as e:
-        logger.warning("knowledgeWrite approval %s: failed to create ingestion log entry: %s: %s",
-                       approval.id, type(e).__name__, e)
-        db.rollback()
+    record_ingestion_log(
+        db,
+        log_prefix=f"knowledgeWrite approval {approval.id}:",
+        account_id=owner_account_id,
+        provider="pinecone",
+        index_name=index_name,
+        namespace=namespace,
+        filenames=[filename],
+        comment=comment,
+        gcs_bucket=result.get("gcs_bucket"),
+        gcs_file_path=result.get("gcs_file_path"),
+        operation_type="INGEST",
+        status="PENDING",
+        vectors_added=0,
+        vectors_deleted=0,
+        vectors_failed=0,
+        batch_number=batch_number,
+    )
 
     return f"Note saved under '{topic}' and queued for ingestion into {index_name}/{namespace}."

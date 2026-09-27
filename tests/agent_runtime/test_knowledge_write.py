@@ -22,6 +22,7 @@ from src.agent_runtime.tools import knowledge_write as tool_mod
 from src.agent_runtime.tools.hitl_email_base import HITL_SENTINEL_KEY
 from src.agent_runtime.tools.knowledge_write import create_knowledge_write_tool
 from src.agent_runtime.tools.registry import ToolRegistry
+from src.db.models import VectorDbIngestionLog
 from src.routers.tool_approvals import knowledge_write as exec_mod
 from src.routers.tool_approvals.knowledge_write import execute_knowledge_write, render_note
 from src.schemas import validate_against_schema
@@ -157,7 +158,7 @@ async def test_approval_logs_a_pending_ingest_with_the_source_pointer(upload):
     await execute_knowledge_write(db, approval, account_id=2, user_email="ops@co.io", jwt=None)
 
     row = db.add.call_args.args[0]
-    assert isinstance(row, exec_mod.VectorDbIngestionLog)
+    assert isinstance(row, VectorDbIngestionLog)
     assert row.account_id == 1, "logged under the KB OWNER so the detail page and source links find it"
     assert (row.index_name, row.namespace) == ("team-kb", "logistics")
     assert (row.operation_type, row.status) == ("INGEST", "PENDING")
