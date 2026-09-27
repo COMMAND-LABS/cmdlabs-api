@@ -61,14 +61,14 @@ class DynamicCORSMiddleware(BaseHTTPMiddleware):
         """Handle CORS headers based on authentication method."""
         origin = request.headers.get("origin")
         has_api_key = self._has_api_key(request)
+        # Computed once and used by both the debug line and the header logic
+        # below. False when there is no origin.
+        is_allowed = self._is_allowed_origin(origin)
         
-        # Debug logging - also log the request URL to detect HTTPS->HTTP issues
-        request_url = str(request.url) if hasattr(request, 'url') else 'unknown'
+        # Read for the redirect fix-up below.
         forwarded_proto = request.headers.get("X-Forwarded-Proto", "not-set")
-        forwarded_host = request.headers.get("X-Forwarded-Host", "not-set")
         
         if origin:
-            is_allowed = self._is_allowed_origin(origin)
             logger.debug("[CORS] %s from origin: %s, has_api_key: %s, is_allowed: %s", request.method, origin, has_api_key, is_allowed)
         
         # Handle preflight OPTIONS requests
@@ -88,7 +88,7 @@ class DynamicCORSMiddleware(BaseHTTPMiddleware):
                     response.headers["Access-Control-Allow-Origin"] = "*"
                 response.headers["Access-Control-Allow-Credentials"] = "false"
             elif origin:
-                if self._is_allowed_origin(origin):
+                if is_allowed:
                     # Allowed origin for JWT requests
                     response.headers["Access-Control-Allow-Origin"] = origin
                     response.headers["Access-Control-Allow-Credentials"] = "true" if self.allow_credentials else "false"
@@ -142,7 +142,7 @@ class DynamicCORSMiddleware(BaseHTTPMiddleware):
                 response.headers["Access-Control-Allow-Origin"] = "*"
             response.headers["Access-Control-Allow-Credentials"] = "false"
         elif origin:
-            if self._is_allowed_origin(origin):
+            if is_allowed:
                 # Allowed origin for JWT requests
                 response.headers["Access-Control-Allow-Origin"] = origin
                 response.headers["Access-Control-Allow-Credentials"] = "true" if self.allow_credentials else "false"
