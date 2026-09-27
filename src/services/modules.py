@@ -38,7 +38,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from src.config import plans_registry as plans
-from src.config.modules_registry import MODULE_KEYS, normalize
+from src.config.modules_registry import MODULE_KEYS
 from src.config import roles_registry as roles
 from src.db.models import Account, Organization
 
@@ -172,23 +172,3 @@ def effective_modules(db: Session, ctx) -> list:
 def can_open(db: Session, ctx, module_key: str) -> bool:
     return module_key in set(effective_modules(db, ctx))
 
-
-def clamp_to_ceiling(db: Session, org_id: int, requested) -> list:
-    """Restrict a set of module keys to what the org's ceiling allows.
-
-    Written for the tier matrix, whose saves it silently trimmed rather than
-    rejected so an owner's save could not exceed what they had been given. The
-    matrix is gone — roles are constants now — and roles_registry.modules_for
-    applies the same cap on the read path. Kept because it is the one place
-    that expresses "these keys, capped by this org", which any future
-    module-granting surface will want.
-    """
-    ceiling = set(ceiling_for(db, org_id))
-    asked = set(normalize(requested))
-    dropped = asked - ceiling
-    if dropped:
-        logger.info(
-            "[MODULES] org %s: dropped %s from a tier — outside the org ceiling",
-            org_id, sorted(dropped),
-        )
-    return [k for k in MODULE_KEYS if k in asked and k in ceiling]

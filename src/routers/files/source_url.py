@@ -21,12 +21,11 @@ import logging
 
 from fastapi import APIRouter, Request, Query, HTTPException, status
 
-from src.deps import jwt_dependency, db_dependency, org_dependency, account_id_from_claims, ensure_account
+from src.deps import jwt_dependency, db_dependency, org_dependency, account_id_from_claims
 from src.db.models import Agent, VectorDbIngestionLog
 from src.services.agent_access import can_access_agent
 from src.services import account_gcs_service
 from src.services.account_gcs_service import AccountGcsCredentialMissing
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
@@ -62,58 +61,50 @@ async def get_source_url(
     org: org_dependency = None,
 ):
     """Return a short-lived signed GET URL for an agent's source document."""
-    try:
-        account_id = account_id_from_claims(decoded_jwt)
-        ensure_account(db, account_id)
+    account_id = account_id_from_claims(decoded_jwt)
 
-        if not path or not path.strip():
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A path is required")
-        path = path.strip()
+    if not path or not path.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A path is required")
+    path = path.strip()
 
-        # 1. Access check (owner or shared-via-group both pass here).
-        if not can_access_agent(db, account_id, agent_id, org_id=org.org_id):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    # 1. Access check (owner or shared-via-group both pass here).
+    if not can_access_agent(db, account_id, agent_id, org_id=org.org_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
-        agent = db.query(Agent).filter(Agent.id == agent_id).first()
-        if not agent:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    agent = db.query(Agent).filter(Agent.id == agent_id).first()
+    if not agent:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
-        owner_account_id = agent.account_id
-        index_names = _agent_index_names(agent)
-        if not index_names:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source document not found")
+    owner_account_id = agent.account_id
+    index_names = _agent_index_names(agent)
+    if not index_names:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source document not found")
 
-        # 3. Path validation: the object must have been ingested into one of the
-        #    agent's indexes by the owner. Also yields the recorded bucket (4).
-        row = (
-            db.query(VectorDbIngestionLog)
-            .filter(
-                VectorDbIngestionLog.account_id == owner_account_id,
-                VectorDbIngestionLog.gcs_file_path == path,
-                VectorDbIngestionLog.index_name.in_(index_names),
-                VectorDbIngestionLog.gcs_bucket.isnot(None),
-            )
-            .order_by(VectorDbIngestionLog.created_at.desc())
-            .first()
+    # 3. Path validation: the object must have been ingested into one of the
+    #    agent's indexes by the owner. Also yields the recorded bucket (4).
+    row = (
+        db.query(VectorDbIngestionLog)
+        .filter(
+            VectorDbIngestionLog.account_id == owner_account_id,
+            VectorDbIngestionLog.gcs_file_path == path,
+            VectorDbIngestionLog.index_name.in_(index_names),
+            VectorDbIngestionLog.gcs_bucket.isnot(None),
         )
-        if not row:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source document not found")
+        .order_by(VectorDbIngestionLog.created_at.desc())
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source document not found")
 
-        try:
-            url = account_gcs_service.generate_signed_url_for(
-                db,
-                owner_account_id,
-                gcs_bucket=row.gcs_bucket,
-                gcs_file_path=path,
-                expiration_seconds=expires,
-            )
-        except AccountGcsCredentialMissing as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    try:
+        url = account_gcs_service.generate_signed_url_for(
+            db,
+            owner_account_id,
+            gcs_bucket=row.gcs_bucket,
+            gcs_file_path=path,
+            expiration_seconds=expires,
+        )
+    except AccountGcsCredentialMissing as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-        return {"url": url, "expires_in": expires}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("[FILES SOURCE URL] Unexpected error")
-        raise handle_db_error(e, "[FILES SOURCE URL]")
+    return {"url": url, "expires_in": expires}

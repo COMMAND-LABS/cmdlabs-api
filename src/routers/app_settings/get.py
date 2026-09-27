@@ -7,7 +7,7 @@ settings yet" and "everything at its default" are the same state to a client.
 """
 from fastapi import APIRouter, Request
 
-from src.deps import db_dependency, jwt_dependency, org_dependency, account_id_from_claims, ensure_account
+from src.deps import db_dependency, jwt_dependency, org_dependency, account_id_from_claims
 from src.db.models import AppSettings
 from src.services.agent_access import can_access_agent
 from src.rate_limit import limiter
@@ -28,7 +28,6 @@ async def get_app_settings(
     Get the authenticated user's app settings for the current org.
     """
     account_id = account_id_from_claims(jwt)
-    ensure_account(db, account_id)
 
     settings = db.query(AppSettings).filter(
         AppSettings.account_id == account_id,

@@ -6,7 +6,7 @@ retrieve agent details.  Returns 404 when access is denied to avoid
 leaking existence.
 """
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import db_dependency, jwt_dependency, org_dependency, account_id_from_claims, ensure_account
+from src.deps import db_dependency, jwt_dependency, org_dependency, account_id_from_claims
 from src.db.models import Agent
 from src.services.agent_access import can_access_agent
 from .models import AgentResponse
@@ -31,7 +31,6 @@ async def get_agent(
     user has no access (to avoid leaking existence).
     """
     account_id = account_id_from_claims(jwt)
-    account = ensure_account(db, account_id)
         
     # Load agent by ID (no ownership filter – access check follows)
     agent = db.query(Agent).filter(Agent.id == agent_id).first()
@@ -42,9 +41,4 @@ async def get_agent(
             detail="Agent not found"
         )
         
-    return AgentResponse(
-        id=agent.id,
-        name=agent.name,
-        config=agent.config,
-        is_owner=(agent.account_id == account_id),
-    )
+    return AgentResponse.from_agent(agent, is_owner=(agent.account_id == account_id))

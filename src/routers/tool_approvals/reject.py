@@ -1,8 +1,7 @@
-from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException, Request
-from src.deps import db_dependency, auth_dependency
-from src.db.models import PendingToolApproval
+from fastapi import APIRouter, Request
+from src.deps import db_dependency, auth_dependency, account_id_from_claims
 from .models import RejectToolApprovalResponse
+from ._shared import pending_approval_or_error
 from src.rate_limit import limiter
 
 router = APIRouter()
@@ -16,27 +15,12 @@ async def reject_tool_approval(
     request: Request,
 ):
     """Reject a pending tool action — no execution occurs."""
-    account_id = int(auth["id"]) if isinstance(auth["id"], str) else auth["id"]
-    now = datetime.now(timezone.utc)
-
-    approval = db.query(PendingToolApproval).filter(
-        PendingToolApproval.id == approval_id,
-        PendingToolApproval.account_id == account_id,
-    ).first()
-
-    if not approval:
-        raise HTTPException(status_code=404, detail="Tool approval request not found")
-
-    if approval.status != "pending":
-        raise HTTPException(
-            status_code=409,
-            detail=f"Cannot reject a request with status '{approval.status}'",
-        )
-
-    if approval.expires_at < now:
-        approval.status = "expired"
-        db.commit()
-        raise HTTPException(status_code=410, detail="This approval request has already expired")
+    account_id = account_id_from_claims(auth)
+    approval = pending_approval_or_error(
+        db, approval_id, account_id,
+        action="reject",
+        expired_detail="This approval request has already expired",
+    )
 
     approval.status = "rejected"
     db.commit()

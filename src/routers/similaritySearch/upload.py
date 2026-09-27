@@ -1,6 +1,6 @@
 import logging
 from fastapi import APIRouter, Request, UploadFile, File, HTTPException
-from src.deps import jwt_dependency, db_dependency
+from src.deps import jwt_dependency, db_dependency, account_id_from_claims
 from src.services.file_upload_service import FileUploadService
 from src.services.account_gcs_service import AccountGcsCredentialMissing
 from src.rate_limit import limiter
@@ -29,7 +29,7 @@ async def upload_single_file(
                 "error": "Only .csv files are supported"
             }
 
-        account_id = int(decoded_jwt['id']) if isinstance(decoded_jwt['id'], str) else decoded_jwt['id']
+        account_id = account_id_from_claims(decoded_jwt)
 
         # Initialize upload service
         upload_service = FileUploadService()

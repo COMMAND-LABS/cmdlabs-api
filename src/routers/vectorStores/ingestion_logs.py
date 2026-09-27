@@ -190,7 +190,6 @@ async def get_ingestion_log(
     Only returns logs belonging to the authenticated user.
     """
     account_id = account_id_from_claims(jwt)
-    account = ensure_account(db, account_id)
         
     # Query log by ID and account_id
     log = db.query(VectorDbIngestionLog).filter(
@@ -242,7 +241,6 @@ async def get_ingestion_logs_summary(
     Returns aggregated counts and totals for the authenticated user's logs.
     """
     account_id = account_id_from_claims(jwt)
-    account = ensure_account(db, account_id)
         
     # Base query
     query = db.query(VectorDbIngestionLog).filter(

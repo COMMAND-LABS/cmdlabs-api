@@ -15,15 +15,15 @@ import logging
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
-from src.deps import db_dependency, auth_dependency
-from src.db.models import PendingToolApproval, EmailEvent
+from src.deps import db_dependency, auth_dependency, account_id_from_claims
+from src.db.models import EmailEvent
 from src.services.credential_access import load_credential_for_use
 from src.routers.credentials.encryption import decrypt_credential_data
 from .models import ApproveToolApprovalResponse
-from .email_html import inject_tracking_pixel, strip_html_tags
+from src.services.email_dispatch import inject_tracking_pixel, send_ses_html_email
 from .knowledge_write import execute_knowledge_write
+from ._shared import pending_approval_or_error
 
 logger = logging.getLogger(__name__)
 
@@ -79,33 +79,6 @@ def _send_ses_email(ses_cfg: dict, to_email: str, subject: str, body: str) -> st
         Message={
             "Subject": {"Data": subject, "Charset": "UTF-8"},
             "Body": {"Text": {"Data": body, "Charset": "UTF-8"}},
-        },
-    )
-    return response.get("MessageId", "unknown")
-
-def _send_ses_html_email(ses_cfg: dict, to_email: str, subject: str, html_body: str) -> str:
-    """Send an agent-authored HTML email via boto3/SES.
-    html_body is delivered verbatim as the HTML part; a stripped plain-text
-    fallback is generated automatically for non-HTML mail clients.
-    Returns the SES MessageId."""
-    import boto3
-
-    plain_fallback = strip_html_tags(html_body)
-    client = boto3.client(
-        "ses",
-        region_name=ses_cfg["aws_region"],
-        aws_access_key_id=ses_cfg["aws_access_key_id"],
-        aws_secret_access_key=ses_cfg["aws_secret_access_key"],
-    )
-    response = client.send_email(
-        Source=ses_cfg["from_email"],
-        Destination={"ToAddresses": [to_email]},
-        Message={
-            "Subject": {"Data": subject, "Charset": "UTF-8"},
-            "Body": {
-                "Html": {"Data": html_body, "Charset": "UTF-8"},
-                "Text": {"Data": plain_fallback, "Charset": "UTF-8"},
-            },
         },
     )
     return response.get("MessageId", "unknown")
@@ -199,27 +172,9 @@ async def approve_tool_approval(
     An optional JSON body may supply overrides for to_email / subject / body,
     allowing the user to edit the agent-composed email before sending.
     """
-    account_id = int(auth["id"]) if isinstance(auth["id"], str) else auth["id"]
-    now = datetime.now(timezone.utc)
+    account_id = account_id_from_claims(auth)
 
-    approval = db.query(PendingToolApproval).filter(
-        PendingToolApproval.id == approval_id,
-        PendingToolApproval.account_id == account_id,
-    ).first()
-
-    if not approval:
-        raise HTTPException(status_code=404, detail="Tool approval request not found")
-
-    if approval.status != "pending":
-        raise HTTPException(
-            status_code=409,
-            detail=f"Cannot approve a request with status '{approval.status}'",
-        )
-
-    if approval.expires_at < now:
-        approval.status = "expired"
-        db.commit()
-        raise HTTPException(status_code=410, detail="This approval request has expired")
+    approval = pending_approval_or_error(db, approval_id, account_id, action="approve")
 
     # ── Non-email tools ─────────────────────────────────────────────────────
     # Each has its own executor module; the email flow below is untouched.
@@ -254,7 +209,7 @@ async def approve_tool_approval(
         "sendHtmlEmailWithSes": {
             "required": ["aws_access_key_id", "aws_secret_access_key", "aws_region", "from_email"],
             "provider": "ses",
-            "send": lambda cred, to, subj, body: _send_ses_html_email(cred, to, subj, body),
+            "send": lambda cred, to, subj, body: send_ses_html_email(cred, to, subj, body),
             "label": "AWS SES",
         },
         "sendTxtEmailWithGoogleOAuth": {

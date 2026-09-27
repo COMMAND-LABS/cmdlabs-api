@@ -53,7 +53,7 @@ def create_llm(
     model_config: dict[str, str],
     credentials: dict[str, str],
     temperature: float = 0,
-) -> tuple[BaseChatModel, str]:
+) -> BaseChatModel:
     """
     Create a streaming LangChain LLM instance based on model configuration.
 
@@ -64,7 +64,7 @@ def create_llm(
         temperature: Model temperature (0-1)
 
     Returns:
-        Tuple of (LLM instance, provider name)
+        LLM instance
 
     Raises:
         ValueError: If provider is not supported or credentials are missing
@@ -73,15 +73,15 @@ def create_llm(
     model = model_config.get('model', 'gpt-4o-mini')
 
     if provider == 'openai':
-        return _create_openai_llm(model, credentials, temperature), provider
+        return _create_openai_llm(model, credentials, temperature)
     if provider == 'anthropic':
-        return _create_anthropic_llm(model, credentials, temperature), provider
+        return _create_anthropic_llm(model, credentials, temperature)
     if provider == 'google':
-        return _create_google_llm(model, credentials, temperature), provider
+        return _create_google_llm(model, credentials, temperature)
     if provider == 'kimi':
-        return _create_kimi_llm(model, credentials), provider
+        return _create_kimi_llm(model, credentials)
     if provider == 'ollama':
-        return _create_ollama_llm(model, temperature), provider
+        return _create_ollama_llm(model, temperature)
     raise ValueError(f"Unsupported LLM provider: {provider}")
 
 

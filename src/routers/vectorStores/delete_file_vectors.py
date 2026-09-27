@@ -12,9 +12,9 @@ import logging
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from pinecone import Pinecone
 
-from src.db.models import VectorDbIngestionLog
 from src.deps import org_dependency, account_id_from_claims, db_dependency, ensure_account, jwt_dependency
 from src.rate_limit import limiter
+from src.services.ingestion_log import record_ingestion_log
 from src.utils.errors import handle_db_error
 from .helpers import get_pinecone_api_key_for_index
 from .list_namespace_files import SCAN_CAP, collect_ids_for_filename
@@ -52,6 +52,7 @@ async def delete_file_vectors_in_namespace(
     the ingestion-log fallback can account for it without treating it as a
     whole-namespace reset.
     """
+    account_id = None
     try:
         caller_account_id = account_id_from_claims(jwt)
         # Deleting a file's vectors is a write — resolve the KB owner, require write.
@@ -119,29 +120,22 @@ async def delete_file_vectors_in_namespace(
         )
 
         # ── Log to VectorDbIngestionLog ───────────────────────────────
-        log_id = None
-        try:
-            ingestion_log = VectorDbIngestionLog(
-                account_id=account_id,
-                provider="pinecone",
-                index_name=index_name,
-                namespace=namespace,
-                filenames=[filename],
-                comment=f"Deleted {deleted} vectors for file '{filename}' in namespace '{namespace}'",
-                vectors_added=0,
-                vectors_deleted=deleted,
-                vectors_failed=0,
-            )
-            ingestion_log.operation_type = "DELETE"
-            ingestion_log.status = "SUCCESS"
-
-            db.add(ingestion_log)
-            db.commit()
-            db.refresh(ingestion_log)
-            log_id = str(ingestion_log.id)
-        except Exception as log_err:
-            logger.warning("Failed to create ingestion log: %s", log_err)
-            db.rollback()
+        log_id = record_ingestion_log(
+            db,
+            log_prefix="[DELETE FILE VECTORS]",
+            refresh=True,
+            account_id=account_id,
+            provider="pinecone",
+            index_name=index_name,
+            namespace=namespace,
+            filenames=[filename],
+            comment=f"Deleted {deleted} vectors for file '{filename}' in namespace '{namespace}'",
+            vectors_added=0,
+            vectors_deleted=deleted,
+            vectors_failed=0,
+            operation_type="DELETE",
+            status="SUCCESS",
+        )
 
         return DeleteFileVectorsResponse(
             success=True,
@@ -158,8 +152,13 @@ async def delete_file_vectors_in_namespace(
     except Exception as e:
         logger.error("Error deleting file vectors: %s", e)
 
-        try:
-            ingestion_log = VectorDbIngestionLog(
+        if account_id is None:
+            # Failed before the KB owner was resolved; nothing to log against.
+            db.rollback()
+        else:
+            record_ingestion_log(
+                db,
+                log_prefix="[DELETE FILE VECTORS]",
                 account_id=account_id,
                 provider="pinecone",
                 index_name=index_name,
@@ -170,13 +169,8 @@ async def delete_file_vectors_in_namespace(
                 vectors_deleted=0,
                 vectors_failed=0,
                 error_message=str(e),
+                operation_type="DELETE",
+                status="FAILED",
             )
-            ingestion_log.operation_type = "DELETE"
-            ingestion_log.status = "FAILED"
-
-            db.add(ingestion_log)
-            db.commit()
-        except Exception:
-            db.rollback()
 
         raise handle_db_error(e, "[DELETE FILE VECTORS]")

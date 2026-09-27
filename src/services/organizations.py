@@ -63,21 +63,7 @@ logger = logging.getLogger(__name__)
 # Membership provenance. Unrelated to the org's PLAN, which is now a single
 # nullable column (Organization.pinned_plan) rather than a flag over a stored
 # module list.
-GRANTED_BY_SUBSCRIPTION = "subscription"
 GRANTED_BY_GRANT = "grant"
-
-ACTIVE_SUBSCRIPTION_STATUSES = plans.ACTIVE_SUBSCRIPTION_STATUSES
-
-def ceiling_for_account(account: Account) -> list:
-    """The modules this account's plan opens, right now.
-
-    A thin read of config/plans_registry — the one answer to "what does premium
-    include?". Two module-set constants used to live here instead, named after
-    the COLUMN they were written to rather than the thing they were; the column
-    is gone and so are they.
-    """
-    return plans.modules_for_plan(plans.plan_for_account(account))
-
 
 
 def pin_plan(db: Session, org: Organization) -> None:
@@ -143,9 +129,6 @@ def own_org_for(db: Session, account_id: int) -> Organization | None:
         .first()
     )
 
-
-# Old name, kept briefly for readers. Prefer own_org_for.
-personal_org_for = own_org_for
 
 
 def ensure_membership(db: Session, account: Account,
@@ -213,7 +196,7 @@ def ensure_membership(db: Session, account: Account,
         # 2. An org they own but are somehow not a member of. Historically this
         #    drift existed and left owners unable to open their own org, so it
         #    is repaired rather than papered over with a second workspace.
-        org = personal_org_for(db, account.id)
+        org = own_org_for(db, account.id)
 
         if org is None:
             # 3. Imported here rather than at module scope: services/

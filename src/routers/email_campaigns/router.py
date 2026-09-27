@@ -1,15 +1,17 @@
 """Email campaigns CRUD router."""
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, status, Request, Query
-from src.deps import org_dependency, db_dependency, auth_dependency
+from fastapi import APIRouter, status, Request, Query
+from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims
 from src.services.org_scope import get_scoped_or_404
-from src.db.models import EmailCampaign, EmailTemplate, ContactList
+from src.db.models import EmailCampaign, ContactList
+from src.routers.email_templates._shared import owned_template_or_404
 
 from .models import (
     CreateEmailCampaignRequest,
     UpdateEmailCampaignRequest,
     EmailCampaignResponse,
 )
+from ._shared import owned_campaign_or_404
 from .send import router as send_router
 from .ratings import router as ratings_router
 from src.rate_limit import limiter
@@ -31,7 +33,7 @@ async def list_email_campaigns(
         default=None, alias="status",
         description="Filter by campaign status (draft, active, paused, completed)"),
 ):
-    account_id = int(auth["id"]) if isinstance(auth["id"], str) else auth["id"]
+    account_id = account_id_from_claims(auth)
     q = db.query(EmailCampaign).filter(EmailCampaign.account_id == account_id)
     if search:
         q = q.filter(EmailCampaign.name.ilike(f"%{search}%"))
@@ -49,13 +51,8 @@ async def get_email_campaign(
     org: org_dependency,
     request: Request,
 ):
-    account_id = int(auth["id"]) if isinstance(auth["id"], str) else auth["id"]
-    campaign = db.query(EmailCampaign).filter(
-        EmailCampaign.id == campaign_id,
-        EmailCampaign.account_id == account_id,
-    ).first()
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Email campaign not found")
+    account_id = account_id_from_claims(auth)
+    campaign = owned_campaign_or_404(db, campaign_id, account_id)
     return campaign
 
 
@@ -68,15 +65,10 @@ async def create_email_campaign(
     org: org_dependency,
     request: Request,
 ):
-    account_id = int(auth["id"]) if isinstance(auth["id"], str) else auth["id"]
+    account_id = account_id_from_claims(auth)
 
     if body.email_template_id is not None:
-        tmpl = db.query(EmailTemplate).filter(
-            EmailTemplate.id == body.email_template_id,
-            EmailTemplate.account_id == account_id,
-        ).first()
-        if not tmpl:
-            raise HTTPException(status_code=404, detail="Email template not found")
+        owned_template_or_404(db, body.email_template_id, account_id)
 
     if body.contact_list_id is not None:
         get_scoped_or_404(db, ContactList, body.contact_list_id, org)
@@ -105,21 +97,11 @@ async def update_email_campaign(
     org: org_dependency,
     request: Request,
 ):
-    account_id = int(auth["id"]) if isinstance(auth["id"], str) else auth["id"]
-    campaign = db.query(EmailCampaign).filter(
-        EmailCampaign.id == campaign_id,
-        EmailCampaign.account_id == account_id,
-    ).first()
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Email campaign not found")
+    account_id = account_id_from_claims(auth)
+    campaign = owned_campaign_or_404(db, campaign_id, account_id)
 
     if body.email_template_id is not None:
-        tmpl = db.query(EmailTemplate).filter(
-            EmailTemplate.id == body.email_template_id,
-            EmailTemplate.account_id == account_id,
-        ).first()
-        if not tmpl:
-            raise HTTPException(status_code=404, detail="Email template not found")
+        owned_template_or_404(db, body.email_template_id, account_id)
 
     if body.contact_list_id is not None:
         get_scoped_or_404(db, ContactList, body.contact_list_id, org)
@@ -149,12 +131,7 @@ async def delete_email_campaign(
     org: org_dependency,
     request: Request,
 ):
-    account_id = int(auth["id"]) if isinstance(auth["id"], str) else auth["id"]
-    campaign = db.query(EmailCampaign).filter(
-        EmailCampaign.id == campaign_id,
-        EmailCampaign.account_id == account_id,
-    ).first()
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Email campaign not found")
+    account_id = account_id_from_claims(auth)
+    campaign = owned_campaign_or_404(db, campaign_id, account_id)
     db.delete(campaign)
     db.commit()

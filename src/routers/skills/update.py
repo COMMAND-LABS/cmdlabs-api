@@ -15,7 +15,6 @@ from src.db.models import Skill
 from src.deps import (
     account_id_from_claims,
     db_dependency,
-    ensure_account,
     jwt_dependency,
     org_dependency,
 )
@@ -47,7 +46,6 @@ async def update_skill(
 ):
     """Update an existing skill."""
     account_id = account_id_from_claims(jwt)
-    account = ensure_account(db, account_id)
 
     skill = get_resource_or_404(db, Skill, skill_id, org)
 
@@ -101,14 +99,4 @@ async def update_skill(
     db.commit()
     db.refresh(skill)
 
-    return SkillResponse(
-        id=skill.id,
-        name=skill.name,
-        description=skill.description,
-        content=skill.content,
-        visibility=skill.visibility,
-        frontmatter=skill.frontmatter,
-        is_owner=(skill.account_id == account_id),
-        created_at=skill.created_at,
-        updated_at=skill.updated_at,
-    )
+    return SkillResponse.from_skill(skill, is_owner=(skill.account_id == account_id))

@@ -11,10 +11,9 @@ import logging
 
 from fastapi import APIRouter, Request, Query, HTTPException, status
 
-from src.deps import jwt_dependency, db_dependency, ensure_account
+from src.deps import jwt_dependency, db_dependency, ensure_account, account_id_from_claims
 from src.services import account_gcs_service
 from src.services.account_gcs_service import AccountGcsCredentialMissing
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
@@ -32,31 +31,24 @@ async def get_signed_url(
     decoded_jwt: jwt_dependency = None,
 ):
     """Return a short-lived signed GET URL for an object in the account's bucket."""
+    if not decoded_jwt:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+
+    account_id = account_id_from_claims(decoded_jwt)
+
+    account = ensure_account(db, account_id)
+
+    if not path or not path.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A path is required")
+
     try:
-        if not decoded_jwt:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+        url = account_gcs_service.generate_signed_url(
+            db,
+            account_id,
+            gcs_file_path=path,
+            expiration_seconds=expires,
+        )
+    except AccountGcsCredentialMissing as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-        account_id = int(decoded_jwt['id']) if isinstance(decoded_jwt['id'], str) else decoded_jwt['id']
-
-        account = ensure_account(db, account_id)
-
-        if not path or not path.strip():
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A path is required")
-
-        try:
-            url = account_gcs_service.generate_signed_url(
-                db,
-                account_id,
-                gcs_file_path=path,
-                expiration_seconds=expires,
-            )
-        except AccountGcsCredentialMissing as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-
-        return {"url": url, "expires_in": expires}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("[FILES SIGNED URL] Unexpected error")
-        raise handle_db_error(e, "[FILES SIGNED URL]")
+    return {"url": url, "expires_in": expires}

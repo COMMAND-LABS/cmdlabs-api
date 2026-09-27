@@ -3,7 +3,7 @@ List contact lists endpoint.
 """
 from typing import List
 from fastapi import APIRouter, Request
-from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, auth_dependency
 from src.services.org_scope import tenant_predicate
 from src.db.models import ContactList, ContactListMember
 
@@ -21,9 +21,6 @@ async def list_contact_lists(
     request: Request,
 ):
     """List all contact lists for the authenticated account."""
-    account_id = account_id_from_claims(auth)
-    account = ensure_account(db, account_id)
-
     contact_lists = (
         db.query(ContactList)
         .filter(tenant_predicate(ContactList, org))

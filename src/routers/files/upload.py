@@ -12,10 +12,9 @@ from typing import Optional
 
 from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException, status
 
-from src.deps import jwt_dependency, db_dependency, ensure_account
+from src.deps import jwt_dependency, db_dependency, ensure_account, account_id_from_claims
 from src.services import account_gcs_service
 from src.services.account_gcs_service import AccountGcsCredentialMissing
-from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
@@ -43,59 +42,52 @@ async def upload_file(
 
     Path layout: chat_uploads/{account_id}/{session_id?}/{uuid}/{filename}
     """
+    if not decoded_jwt:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+
+    account_id = account_id_from_claims(decoded_jwt)
+
+    account = ensure_account(db, account_id)
+
+    if not file.filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A filename is required")
+
+    if not file.filename.lower().endswith(ALLOWED_EXTENSIONS):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file type. Allowed: {', '.join(ALLOWED_EXTENSIONS)}",
+        )
+
+    file_bytes = await file.read()
+    if len(file_bytes) == 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is empty")
+    if len(file_bytes) > MAX_FILE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File exceeds the {MAX_FILE_BYTES // (1024 * 1024)} MB limit",
+        )
+
+    file_id = str(uuid.uuid4())
+    session_segment = f"{session_id}/" if session_id else ""
+    gcs_file_path = f"chat_uploads/{account_id}/{session_segment}{file_id}/{file.filename}"
+
     try:
-        if not decoded_jwt:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+        ref = account_gcs_service.upload_bytes(
+            db,
+            account_id,
+            file_bytes=file_bytes,
+            gcs_file_path=gcs_file_path,
+            content_type=file.content_type,
+        )
+    except AccountGcsCredentialMissing as e:
+        # The single "uploads blocked until credentials configured" gate.
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-        account_id = int(decoded_jwt['id']) if isinstance(decoded_jwt['id'], str) else decoded_jwt['id']
-
-        account = ensure_account(db, account_id)
-
-        if not file.filename:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A filename is required")
-
-        if not file.filename.lower().endswith(ALLOWED_EXTENSIONS):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Unsupported file type. Allowed: {', '.join(ALLOWED_EXTENSIONS)}",
-            )
-
-        file_bytes = await file.read()
-        if len(file_bytes) == 0:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is empty")
-        if len(file_bytes) > MAX_FILE_BYTES:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"File exceeds the {MAX_FILE_BYTES // (1024 * 1024)} MB limit",
-            )
-
-        file_id = str(uuid.uuid4())
-        session_segment = f"{session_id}/" if session_id else ""
-        gcs_file_path = f"chat_uploads/{account_id}/{session_segment}{file_id}/{file.filename}"
-
-        try:
-            ref = account_gcs_service.upload_bytes(
-                db,
-                account_id,
-                file_bytes=file_bytes,
-                gcs_file_path=gcs_file_path,
-                content_type=file.content_type,
-            )
-        except AccountGcsCredentialMissing as e:
-            # The single "uploads blocked until credentials configured" gate.
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-
-        return {
-            "success": True,
-            "gcs_bucket": ref["gcs_bucket"],
-            "gcs_file_path": ref["gcs_file_path"],
-            "filename": file.filename,
-            "content_type": file.content_type,
-            "size": len(file_bytes),
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("[FILES UPLOAD] Unexpected error")
-        raise handle_db_error(e, "[FILES UPLOAD]")
+    return {
+        "success": True,
+        "gcs_bucket": ref["gcs_bucket"],
+        "gcs_file_path": ref["gcs_file_path"],
+        "filename": file.filename,
+        "content_type": file.content_type,
+        "size": len(file_bytes),
+    }

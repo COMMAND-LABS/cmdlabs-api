@@ -6,21 +6,15 @@ vector into the ``prompts`` namespace in Pinecone so it is searchable via
 similarity search.
 """
 import logging
-import os
 from fastapi import APIRouter, HTTPException, status, Request
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
 from src.db.models import Prompt
-from src.services import fetch_embedding
-from src.services.crm_vector_service import extract_token
-from src.core.clients import pc
 
+from ._shared import upsert_prompt_vector
 from .models import CreatePromptRequest, PromptResponse
 from src.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
-
-PINECONE_INDEX = os.getenv("PINECONE_ALL_MINILM_L6_V2_INDEX")
-PROMPTS_NAMESPACE = "prompts"
 
 router = APIRouter()
 
@@ -66,26 +60,7 @@ async def create_prompt(
 
     # ── Embed + upsert to Pinecone ───────────────────────────────
     try:
-        token = extract_token(request)
-        embedding = await fetch_embedding(token, prompt.content)
-
-        if embedding and PINECONE_INDEX:
-            index = pc.Index(PINECONE_INDEX)
-            index.upsert(
-                vectors=[(
-                    f"prompt_{prompt.id}",
-                    embedding,
-                    {
-                        "prompt_id": prompt.id,
-                        "account_id": account_id,
-                        "name": prompt.name,
-                        "description": prompt.description or "",
-                        "content": prompt.content,
-                        "type": "prompt",
-                    },
-                )],
-                namespace=PROMPTS_NAMESPACE,
-            )
+        if await upsert_prompt_vector(request, prompt, account_id):
             logger.info("[CREATE PROMPT] Embedded prompt %s into Pinecone", prompt.id)
     except Exception as embed_err:
         logger.warning("[CREATE PROMPT] Embedding failed: %s", embed_err)

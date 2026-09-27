@@ -8,16 +8,15 @@ The approval status is left unchanged — it remains pending.
 import logging
 import re as _re
 
-from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from src.deps import db_dependency, auth_dependency
-from src.db.models import PendingToolApproval
+from src.deps import db_dependency, auth_dependency, account_id_from_claims
 from src.routers.credentials.encryption import decrypt_credential_data
 from src.services.credential_access import load_credential_for_use
 from .models import ApproveToolApprovalResponse
-from .email_html import strip_html_tags
+from src.services.email_dispatch import strip_html_tags
+from ._shared import pending_approval_or_error
 from src.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
@@ -59,26 +58,15 @@ async def preview_tool_approval(
     The approval is NOT marked as approved — it stays pending so the user
     can still approve (sending to the real recipient) or reject afterwards.
     """
-    account_id = int(auth["id"]) if isinstance(auth["id"], str) else auth["id"]
+    account_id = account_id_from_claims(auth)
     preview_recipient = auth["email"]
-    now = datetime.now(timezone.utc)
 
-    approval = db.query(PendingToolApproval).filter(
-        PendingToolApproval.id == approval_id,
-        PendingToolApproval.account_id == account_id,
-    ).first()
-
-    if not approval:
-        raise HTTPException(status_code=404, detail="Tool approval request not found")
-
-    if approval.status != "pending":
-        raise HTTPException(
-            status_code=409,
-            detail=f"Cannot preview a request with status '{approval.status}'",
-        )
-
-    if approval.expires_at < now:
-        raise HTTPException(status_code=410, detail="This approval request has expired")
+    # Previewing leaves an expired row as it is; only approve/reject mark it.
+    approval = pending_approval_or_error(
+        db, approval_id, account_id,
+        action="preview",
+        mark_expired=False,
+    )
 
     if approval.tool_type != "sendHtmlEmailWithSes":
         raise HTTPException(

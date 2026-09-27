@@ -84,6 +84,45 @@ class ChatSessionWithMessagesResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True, alias_generator=to_camel)
 
+def _session_to_dict(session: ChatSession) -> dict:
+    """The camelCase session fields every session response carries."""
+    return {
+        "id": session.id,
+        "sessionId": session.session_id,
+        "agentId": session.agent_id,
+        "accountId": session.account_id,
+        "createdAt": session.created_at,
+        "title": session.title,
+        "contactId": session.contact_id
+    }
+
+def _get_owned_session_or_404(db, session_id: str, account_id: int) -> ChatSession:
+    """Parse ``session_id`` and load the caller's session.
+
+    400 "Invalid session ID format" for a non-UUID, 404 "Session not found"
+    when no session with that id belongs to ``account_id``.
+    """
+    try:
+        session_uuid = uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid session ID format"
+        )
+
+    session = db.query(ChatSession).filter(
+        ChatSession.session_id == session_uuid,
+        ChatSession.account_id == account_id
+    ).first()
+
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found"
+        )
+
+    return session
+
 # CRUD Operations for ChatSession
 
 @router.post("/sessions", response_model=ChatSessionResponse, status_code=status.HTTP_201_CREATED)
@@ -130,15 +169,7 @@ async def create_session(
     db.commit()
     db.refresh(new_session)
 
-    return {
-        "id": new_session.id,
-        "sessionId": new_session.session_id,
-        "agentId": new_session.agent_id,
-        "accountId": new_session.account_id,
-        "createdAt": new_session.created_at,
-        "title": new_session.title,
-        "contactId": new_session.contact_id
-    }
+    return _session_to_dict(new_session)
 
 @router.get("/sessions", response_model=ChatSessionListResponse)
 @limiter.limit("30/minute")
@@ -178,15 +209,7 @@ async def get_sessions(
     total = query.count()
     rows = query.order_by(ChatSession.created_at.desc()).offset(offset).limit(limit).all()
 
-    sessions = [{
-        "id": s.id,
-        "sessionId": s.session_id,
-        "agentId": s.agent_id,
-        "accountId": s.account_id,
-        "createdAt": s.created_at,
-        "title": s.title,
-        "contactId": s.contact_id
-    } for s in rows]
+    sessions = [_session_to_dict(s) for s in rows]
 
     return {
         "sessions": sessions,
@@ -207,16 +230,7 @@ async def get_session(
 ):
     """Get a specific session by session_id with its messages"""
     try:
-        # Convert string to UUID for database query
-        session_uuid = uuid.UUID(session_id)
-        
-        session = db.query(ChatSession).filter(
-            ChatSession.session_id == session_uuid,
-            ChatSession.account_id == jwt['id']
-        ).first()
-        
-        if not session:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+        session = _get_owned_session_or_404(db, session_id, jwt['id'])
         
         # Get all messages for this session
         messages = db.query(ChatMessage).filter(
@@ -257,13 +271,7 @@ async def get_session(
         
         # Create response with session and messages
         response_data = {
-            "id": session.id,
-            "sessionId": session.session_id,
-            "agentId": session.agent_id,
-            "accountId": session.account_id,
-            "createdAt": session.created_at,
-            "title": session.title,
-            "contactId": session.contact_id,
+            **_session_to_dict(session),
             "messages": messages
         }
         
@@ -294,24 +302,7 @@ async def update_session(
     Rate-limited above the other mutations (30/min vs 10/min) because renaming
     is a title-only UPDATE and the sessions list invites several in a row.
     """
-    try:
-        session_uuid = uuid.UUID(session_id)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid session ID format"
-        )
-
-    session = db.query(ChatSession).filter(
-        ChatSession.session_id == session_uuid,
-        ChatSession.account_id == jwt['id']
-    ).first()
-
-    if not session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Session not found"
-        )
+    session = _get_owned_session_or_404(db, session_id, jwt['id'])
 
     if 'agentId' in payload.model_fields_set:
         if payload.agentId is None:
@@ -343,15 +334,7 @@ async def update_session(
     db.commit()
     db.refresh(session)
 
-    return {
-        "id": session.id,
-        "sessionId": session.session_id,
-        "agentId": session.agent_id,
-        "accountId": session.account_id,
-        "createdAt": session.created_at,
-        "title": session.title,
-        "contactId": session.contact_id
-    }
+    return _session_to_dict(session)
 
 @router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
 @limiter.limit("10/minute")
@@ -364,16 +347,7 @@ async def delete_session(
 ):
     """Delete a session and all its messages"""
     try:
-        # Convert string to UUID for database query
-        session_uuid = uuid.UUID(session_id)
-        
-        session = db.query(ChatSession).filter(
-            ChatSession.session_id == session_uuid,
-            ChatSession.account_id == jwt['id']
-        ).first()
-        
-        if not session:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+        session = _get_owned_session_or_404(db, session_id, jwt['id'])
         
         db.delete(session)
         db.commit()
@@ -391,24 +365,7 @@ async def clear_session_messages(
     request: Request
 ):
     """Clear all messages from a session without deleting the session itself"""
-    try:
-        session_uuid = uuid.UUID(session_id)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="Invalid session ID format"
-        )
-        
-    session = db.query(ChatSession).filter(
-        ChatSession.session_id == session_uuid,
-        ChatSession.account_id == jwt['id']
-    ).first()
-        
-    if not session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
-            detail="Session not found"
-        )
+    session = _get_owned_session_or_404(db, session_id, jwt['id'])
         
     deleted_count = db.query(ChatMessage).filter(
         ChatMessage.chat_session_id == session.id

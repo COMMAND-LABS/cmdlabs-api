@@ -2,7 +2,7 @@
 Create agent endpoint.
 """
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
 from src.db.models import Agent
 from src.schemas import validate_against_schema
 from jsonschema import ValidationError as JsonSchemaValidationError
@@ -36,7 +36,6 @@ async def create_agent(
     Supported model providers: openai, anthropic, google, kimi, ollama
     """
     account_id = account_id_from_claims(jwt)
-    account = ensure_account(db, account_id)
 
     agent_name = request_body.name.strip()
     if not agent_name:
@@ -76,8 +75,4 @@ async def create_agent(
     db.commit()
     db.refresh(agent)
 
-    return AgentResponse(
-        id=agent.id,
-        name=agent.name,
-        config=agent.config
-    )
+    return AgentResponse.from_agent(agent)

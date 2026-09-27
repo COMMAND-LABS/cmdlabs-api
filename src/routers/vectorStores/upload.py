@@ -5,8 +5,8 @@ Handles file uploads to cloud storage and triggers async processing via Pub/Sub.
 import json
 import logging
 from fastapi import APIRouter, Request, UploadFile, File, HTTPException, Form
-from typing import Optional
-from src.deps import org_dependency, jwt_dependency, db_dependency, ensure_account
+from typing import Any, Dict, Optional
+from src.deps import org_dependency, jwt_dependency, db_dependency, ensure_account, account_id_from_claims
 from src.services.vector_stores_upload_service import (
     QNA_INGEST_TOPIC,
     TXT_INGEST_TOPIC,
@@ -14,14 +14,120 @@ from src.services.vector_stores_upload_service import (
 )
 from src.services.vector_store_access import authorize_vector_store
 from src.services.account_gcs_service import AccountGcsCredentialMissing
-from src.db.models import VectorDbIngestionLog
-from src.utils.errors import handle_db_error
+from src.services.ingestion_log import record_ingestion_log
 import uuid
 from src.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _authorize_upload(db, decoded_jwt, org, index_name: str, owner_account_id: Optional[int]) -> int:
+    """Authenticate the caller and resolve the knowledge base owner to write as."""
+    if not decoded_jwt:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    caller_account_id = account_id_from_claims(decoded_jwt)
+    # Ingesting into a shared knowledge base requires write (admin) access; for
+    # your own KB this returns you unchanged. All GCS/Pinecone/log writes use the owner.
+    account_id = authorize_vector_store(db, caller_account_id, index_name, owner_account_id, require_write=True, org_id=org.org_id)
+
+    # Validate account exists
+    ensure_account(db, account_id)
+    return account_id
+
+
+def _require_index_and_namespace(index_name: str, namespace: str) -> None:
+    """Validate index_name and namespace are provided."""
+    if not index_name or not index_name.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="index_name is required"
+        )
+
+    if not namespace or not namespace.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="namespace is required"
+        )
+
+
+async def _upload_and_log(
+    *,
+    file: UploadFile,
+    account_id: int,
+    decoded_jwt: dict,
+    index_name: str,
+    namespace: str,
+    comment: Optional[str],
+    batch_number: Optional[str],
+    db,
+    request: Optional[Request],
+    topic_name: str,
+    log_prefix: str,
+    extra_message_fields: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Store the file in the account's GCS bucket, publish it to ``topic_name``
+    and record a PENDING ingestion log entry. Shared by every upload route."""
+    # Generate batch number if not provided
+    if batch_number is None:
+        batch_number = str(uuid.uuid4())
+
+    # Initialize upload service
+    upload_service = VectorStoresUploadService()
+
+    # Upload file to the account's GCS bucket and publish to Pub/Sub
+    try:
+        result = await upload_service.upload_file_and_publish(
+            file=file,
+            user_id=str(account_id),
+            user_email=str(decoded_jwt.get('email', '')),
+            index_name=index_name.strip(),
+            namespace=namespace.strip(),
+            jwt=request.cookies.get("jwt") if request else None,
+            db=db,
+            account_id=account_id,
+            topic_name=topic_name,
+            batch_number=batch_number,
+            comment=comment,
+            extra_message_fields=extra_message_fields,
+        )
+    except AccountGcsCredentialMissing as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if not result.get("success"):
+        raise HTTPException(
+            status_code=500,
+            detail=result.get("error", "Failed to upload file")
+        )
+
+    # Create ingestion log entry with PENDING status. Best-effort: don't fail
+    # the upload if logging fails.
+    log_id = record_ingestion_log(
+        db,
+        log_prefix=log_prefix,
+        refresh=True,
+        account_id=account_id,
+        provider="pinecone",  # Default to pinecone, could be made configurable
+        index_name=index_name.strip(),
+        namespace=namespace.strip(),
+        filenames=[file.filename],
+        comment=comment,
+        gcs_bucket=result.get("gcs_bucket"),
+        gcs_file_path=result.get("gcs_file_path"),
+        operation_type='INGEST',  # Direct string assignment for PostgreSQL enum
+        status='PENDING',  # Direct string assignment for PostgreSQL enum
+        vectors_added=0,
+        vectors_deleted=0,
+        vectors_failed=0,
+        batch_number=batch_number
+    )
+    if log_id is not None:
+        result["log_id"] = log_id
+
+    return result
+
 
 @router.post("/upload-csv")
 @limiter.limit("100/minute")
@@ -40,111 +146,33 @@ async def upload_csv_file(
     """
     Upload a CSV file to Google Cloud Storage and queue it for async processing.
     The file will be processed (chunked and uploaded to Pinecone) asynchronously via cloud function.
-    
+
     Creates an ingestion log entry with PENDING status that will be updated when processing completes.
     """
-    try:
-        if not decoded_jwt:
-            raise HTTPException(status_code=401, detail="Authentication required")
-        
-        caller_account_id = int(decoded_jwt['id']) if isinstance(decoded_jwt['id'], str) else decoded_jwt['id']
-        # Ingesting into a shared knowledge base requires write (admin) access; for
-        # your own KB this returns you unchanged. All GCS/log writes use the owner.
-        account_id = authorize_vector_store(db, caller_account_id, index_name, owner_account_id, require_write=True, org_id=org.org_id)
+    account_id = _authorize_upload(db, decoded_jwt, org, index_name, owner_account_id)
 
-        # Validate account exists
-        account = ensure_account(db, account_id)
-        
-        # Validate file type
-        if not file.filename or not file.filename.endswith('.csv'):
-            raise HTTPException(
-                status_code=400,
-                detail="Only .csv files are supported"
-            )
-        
-        # Validate index_name and namespace are provided
-        if not index_name or not index_name.strip():
-            raise HTTPException(
-                status_code=400,
-                detail="index_name is required"
-            )
-        
-        if not namespace or not namespace.strip():
-            raise HTTPException(
-                status_code=400,
-                detail="namespace is required"
-            )
-        
-        # Generate batch number if not provided
-        if batch_number is None:
-            batch_number = str(uuid.uuid4())
-        
-        # Initialize upload service
-        upload_service = VectorStoresUploadService()
-        
-        # Upload file to the account's GCS bucket and publish to Pub/Sub
-        try:
-            result = await upload_service.upload_file_and_publish(
-                file=file,
-                user_id=str(account_id),
-                user_email=str(decoded_jwt.get('email', '')),
-                index_name=index_name.strip(),
-                namespace=namespace.strip(),
-                jwt=request.cookies.get("jwt") if request else None,
-                db=db,
-                account_id=account_id,
-                topic_name=QNA_INGEST_TOPIC,
-                batch_number=batch_number,
-                comment=comment
-            )
-        except AccountGcsCredentialMissing as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        
-        if not result.get("success"):
-            raise HTTPException(
-                status_code=500,
-                detail=result.get("error", "Failed to upload file")
-            )
-        
-        # Create ingestion log entry with PENDING status
-        try:
-            ingestion_log = VectorDbIngestionLog(
-                account_id=account_id,
-                provider="pinecone",  # Default to pinecone, could be made configurable
-                index_name=index_name.strip(),
-                namespace=namespace.strip(),
-                filenames=[file.filename],
-                comment=comment,
-                gcs_bucket=result.get("gcs_bucket"),
-                gcs_file_path=result.get("gcs_file_path"),
-                vectors_added=0,
-                vectors_deleted=0,
-                vectors_failed=0,
-                batch_number=batch_number
-            )
+    # Validate file type
+    if not file.filename or not file.filename.endswith('.csv'):
+        raise HTTPException(
+            status_code=400,
+            detail="Only .csv files are supported"
+        )
 
-            # Set enum values directly as strings (PostgreSQL enums accept string values)
-            ingestion_log.operation_type = 'INGEST'
-            ingestion_log.status = 'PENDING'
-            
-            db.add(ingestion_log)
-            db.commit()
-            db.refresh(ingestion_log)
-            
-            result["log_id"] = str(ingestion_log.id)
-            
-        except Exception as e:
-            logger.warning("[UPLOAD CSV] Failed to create ingestion log entry: %s: %s", type(e).__name__, e)
-            # Don't fail the upload if logging fails
-            db.rollback()
-        
-        return result
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("[UPLOAD CSV] Unexpected error")
-        raise handle_db_error(e, "[UPLOAD CSV]")
+    _require_index_and_namespace(index_name, namespace)
+
+    return await _upload_and_log(
+        file=file,
+        account_id=account_id,
+        decoded_jwt=decoded_jwt,
+        index_name=index_name,
+        namespace=namespace,
+        comment=comment,
+        batch_number=batch_number,
+        db=db,
+        request=request,
+        topic_name=QNA_INGEST_TOPIC,
+        log_prefix="[UPLOAD CSV]",
+    )
 
 @router.post("/upload-pdf-faq")
 @limiter.limit("100/minute")
@@ -171,119 +199,54 @@ async def upload_pdf_faq(
     (storage_bucket / storage_path / filename) to the PDF, so every FAQ entry can
     be traced back to its original source.
     """
+    account_id = _authorize_upload(db, decoded_jwt, org, index_name, owner_account_id)
+
+    # Validate file type
+    if not file.filename or not file.filename.lower().endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="Only .pdf files are supported")
+
+    _require_index_and_namespace(index_name, namespace)
+
+    # Validate and normalize the Q&A pairs
     try:
-        if not decoded_jwt:
-            raise HTTPException(status_code=401, detail="Authentication required")
+        parsed_pairs = json.loads(qna_pairs)
+    except (json.JSONDecodeError, TypeError) as e:
+        raise HTTPException(status_code=400, detail=f"qna_pairs must be valid JSON: {e}")
 
-        caller_account_id = int(decoded_jwt['id']) if isinstance(decoded_jwt['id'], str) else decoded_jwt['id']
-        # Ingesting into a shared knowledge base requires write (admin) access; for
-        # your own KB this returns you unchanged. GCS/Pinecone/log writes use the owner.
-        account_id = authorize_vector_store(db, caller_account_id, index_name, owner_account_id, require_write=True, org_id=org.org_id)
+    if not isinstance(parsed_pairs, list) or len(parsed_pairs) == 0:
+        raise HTTPException(status_code=400, detail="qna_pairs must be a non-empty array")
 
-        # Validate account exists
-        account = ensure_account(db, account_id)
+    normalized_pairs = []
+    for pair in parsed_pairs:
+        if not isinstance(pair, dict):
+            continue
+        q = str(pair.get("q", "")).strip()
+        a = str(pair.get("a", "")).strip()
+        if q and a:
+            normalized_pairs.append({"q": q, "a": a})
 
-        # Validate file type
-        if not file.filename or not file.filename.lower().endswith('.pdf'):
-            raise HTTPException(status_code=400, detail="Only .pdf files are supported")
+    if not normalized_pairs:
+        raise HTTPException(status_code=400, detail="qna_pairs contained no valid {q, a} entries")
 
-        # Validate index_name and namespace are provided
-        if not index_name or not index_name.strip():
-            raise HTTPException(status_code=400, detail="index_name is required")
-
-        if not namespace or not namespace.strip():
-            raise HTTPException(status_code=400, detail="namespace is required")
-
-        # Validate and normalize the Q&A pairs
-        try:
-            parsed_pairs = json.loads(qna_pairs)
-        except (json.JSONDecodeError, TypeError) as e:
-            raise HTTPException(status_code=400, detail=f"qna_pairs must be valid JSON: {e}")
-
-        if not isinstance(parsed_pairs, list) or len(parsed_pairs) == 0:
-            raise HTTPException(status_code=400, detail="qna_pairs must be a non-empty array")
-
-        normalized_pairs = []
-        for pair in parsed_pairs:
-            if not isinstance(pair, dict):
-                continue
-            q = str(pair.get("q", "")).strip()
-            a = str(pair.get("a", "")).strip()
-            if q and a:
-                normalized_pairs.append({"q": q, "a": a})
-
-        if not normalized_pairs:
-            raise HTTPException(status_code=400, detail="qna_pairs contained no valid {q, a} entries")
-
-        # Generate batch number if not provided
-        if batch_number is None:
-            batch_number = str(uuid.uuid4())
-
-        # Initialize upload service
-        upload_service = VectorStoresUploadService()
-
-        # Store the PDF in the account's GCS bucket and publish to Pub/Sub. The
-        # reviewed Q&A pairs ride along in the message via extra_message_fields.
-        try:
-            result = await upload_service.upload_file_and_publish(
-                file=file,
-                user_id=str(account_id),
-                user_email=str(decoded_jwt.get('email', '')),
-                index_name=index_name.strip(),
-                namespace=namespace.strip(),
-                jwt=request.cookies.get("jwt") if request else None,
-                db=db,
-                account_id=account_id,
-                topic_name=QNA_INGEST_TOPIC,
-                batch_number=batch_number,
-                comment=comment,
-                extra_message_fields={
-                    "source_type": "pdf_faq",
-                    "qna_pairs": normalized_pairs,
-                },
-            )
-        except AccountGcsCredentialMissing as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-        if not result.get("success"):
-            raise HTTPException(status_code=500, detail=result.get("error", "Failed to upload file"))
-
-        # Create ingestion log entry with PENDING status
-        try:
-            ingestion_log = VectorDbIngestionLog(
-                account_id=account_id,
-                provider="pinecone",
-                index_name=index_name.strip(),
-                namespace=namespace.strip(),
-                filenames=[file.filename],
-                comment=comment,
-                gcs_bucket=result.get("gcs_bucket"),
-                gcs_file_path=result.get("gcs_file_path"),
-                operation_type='INGEST',
-                status='PENDING',
-                vectors_added=0,
-                vectors_deleted=0,
-                vectors_failed=0,
-                batch_number=batch_number
-            )
-
-            db.add(ingestion_log)
-            db.commit()
-            db.refresh(ingestion_log)
-
-            result["log_id"] = str(ingestion_log.id)
-
-        except Exception as e:
-            logger.warning("[UPLOAD PDF FAQ] Failed to create ingestion log entry: %s: %s", type(e).__name__, e)
-            db.rollback()
-
-        return result
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("[UPLOAD PDF FAQ] Unexpected error")
-        raise handle_db_error(e, "[UPLOAD PDF FAQ]")
+    # Store the PDF in the account's GCS bucket and publish to Pub/Sub. The
+    # reviewed Q&A pairs ride along in the message via extra_message_fields.
+    return await _upload_and_log(
+        file=file,
+        account_id=account_id,
+        decoded_jwt=decoded_jwt,
+        index_name=index_name,
+        namespace=namespace,
+        comment=comment,
+        batch_number=batch_number,
+        db=db,
+        request=request,
+        topic_name=QNA_INGEST_TOPIC,
+        log_prefix="[UPLOAD PDF FAQ]",
+        extra_message_fields={
+            "source_type": "pdf_faq",
+            "qna_pairs": normalized_pairs,
+        },
+    )
 
 
 @router.post("/upload-text")
@@ -303,110 +266,33 @@ async def upload_text_file(
     """
     Upload a text file (.txt or .md) to Google Cloud Storage and queue it for async processing.
     The file will be processed (chunked and uploaded to Pinecone) asynchronously via cloud function.
-    
+
     Creates an ingestion log entry with PENDING status that will be updated when processing completes.
     """
-    try:
-        if not decoded_jwt:
-            raise HTTPException(status_code=401, detail="Authentication required")
-        
-        caller_account_id = int(decoded_jwt['id']) if isinstance(decoded_jwt['id'], str) else decoded_jwt['id']
-        # Ingesting into a shared knowledge base requires write (admin) access; for
-        # your own KB this returns you unchanged. All GCS/log writes use the owner.
-        account_id = authorize_vector_store(db, caller_account_id, index_name, owner_account_id, require_write=True, org_id=org.org_id)
+    account_id = _authorize_upload(db, decoded_jwt, org, index_name, owner_account_id)
 
-        # Validate account exists
-        account = ensure_account(db, account_id)
-        
-        # Validate file type
-        if not file.filename or not file.filename.endswith(('.txt', '.md')):
-            raise HTTPException(
-                status_code=400,
-                detail="Only .txt and .md files are supported"
-            )
-        
-        # Validate index_name and namespace are provided
-        if not index_name or not index_name.strip():
-            raise HTTPException(
-                status_code=400,
-                detail="index_name is required"
-            )
-        
-        if not namespace or not namespace.strip():
-            raise HTTPException(
-                status_code=400,
-                detail="namespace is required"
-            )
-        
-        # Generate batch number if not provided
-        if batch_number is None:
-            batch_number = str(uuid.uuid4())
-        
-        # Initialize upload service
-        upload_service = VectorStoresUploadService()
-        
-        # Upload file to the account's GCS bucket and publish to Pub/Sub
-        try:
-            result = await upload_service.upload_file_and_publish(
-                file=file,
-                user_id=str(account_id),
-                user_email=str(decoded_jwt.get('email', '')),
-                index_name=index_name.strip(),
-                namespace=namespace.strip(),
-                jwt=request.cookies.get("jwt") if request else None,
-                db=db,
-                account_id=account_id,
-                # Free text goes to the TXT ingest function, which chunks the
-                # document and reads YAML front matter. The Q&A function would
-                # not recognise this file at all.
-                topic_name=TXT_INGEST_TOPIC,
-                batch_number=batch_number,
-                comment=comment
-            )
-        except AccountGcsCredentialMissing as e:
-            raise HTTPException(status_code=400, detail=str(e))
+    # Validate file type
+    if not file.filename or not file.filename.endswith(('.txt', '.md')):
+        raise HTTPException(
+            status_code=400,
+            detail="Only .txt and .md files are supported"
+        )
 
-        if not result.get("success"):
-            raise HTTPException(
-                status_code=500,
-                detail=result.get("error", "Failed to upload file")
-            )
+    _require_index_and_namespace(index_name, namespace)
 
-        # Create ingestion log entry with PENDING status
-        try:
-            ingestion_log = VectorDbIngestionLog(
-                account_id=account_id,
-                provider="pinecone",  # Default to pinecone, could be made configurable
-                index_name=index_name.strip(),
-                namespace=namespace.strip(),
-                filenames=[file.filename],
-                comment=comment,
-                gcs_bucket=result.get("gcs_bucket"),
-                gcs_file_path=result.get("gcs_file_path"),
-                operation_type='INGEST',  # Direct string assignment for PostgreSQL enum
-                status='PENDING',  # Direct string assignment for PostgreSQL enum
-                vectors_added=0,
-                vectors_deleted=0,
-                vectors_failed=0,
-                batch_number=batch_number
-            )
-            
-            db.add(ingestion_log)
-            db.commit()
-            db.refresh(ingestion_log)
-            
-            result["log_id"] = str(ingestion_log.id)
-            
-        except Exception as e:
-            logger.warning("[UPLOAD TEXT] Failed to create ingestion log entry: %s: %s", type(e).__name__, e)
-            # Don't fail the upload if logging fails
-            db.rollback()
-        
-        return result
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("[UPLOAD TEXT] Unexpected error")
-        raise handle_db_error(e, "[UPLOAD TEXT]")
-
+    return await _upload_and_log(
+        file=file,
+        account_id=account_id,
+        decoded_jwt=decoded_jwt,
+        index_name=index_name,
+        namespace=namespace,
+        comment=comment,
+        batch_number=batch_number,
+        db=db,
+        request=request,
+        # Free text goes to the TXT ingest function, which chunks the
+        # document and reads YAML front matter. The Q&A function would
+        # not recognise this file at all.
+        topic_name=TXT_INGEST_TOPIC,
+        log_prefix="[UPLOAD TEXT]",
+    )

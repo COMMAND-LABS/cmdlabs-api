@@ -2,7 +2,7 @@
 Update agent endpoint.
 """
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, jwt_dependency
 from src.services.org_scope import get_resource_or_404
 from src.db.models import Agent
 from src.schemas import validate_against_schema
@@ -28,9 +28,6 @@ async def update_agent(
     Config must be version 4 if provided.
     Only allows updating agents belonging to the authenticated user.
     """
-    account_id = account_id_from_claims(jwt)
-    account = ensure_account(db, account_id)
-
     agent = get_resource_or_404(db, Agent, agent_id, org)
 
     if request_body.name is None and request_body.config is None:
@@ -74,8 +71,4 @@ async def update_agent(
     db.commit()
     db.refresh(agent)
 
-    return AgentResponse(
-        id=agent.id,
-        name=agent.name,
-        config=agent.config
-    )
+    return AgentResponse.from_agent(agent)

@@ -28,13 +28,12 @@ from src.db.models import AccessGrantEvent, Account, Organization
 logger = logging.getLogger(__name__)
 
 # ── vocabulary ───────────────────────────────────────────────────────────────
-# Kept in step with the CHECK constraint on access_grant_events (migration
-# c1d2e3f4a5b6). The original three are unprefixed because rows written before
-# the log was widened still hold them.
-
-GRANT_CREATE = "create"
-GRANT_REVOKE = "revoke"
-GRANT_ROLE_CHANGE = "role_change"
+# A subset of the CHECK constraint on access_grant_events (migration
+# c1d2e3f4a5b6, widened since): only the event types callers of this module
+# emit. The unprefixed grant types ('create', 'revoke', 'role_change') are
+# written by services/access_admin.py, and the retired ones
+# (member.tier_change, tier.modules_change, catalog.*) stay legal in that
+# constraint so historical rows keep loading; none has a constant here.
 
 MEMBER_ADD = "member.add"
 MEMBER_REMOVE = "member.remove"
@@ -50,24 +49,12 @@ MEMBER_INVITE = "member.invite"
 MEMBER_INVITE_RESEND = "member.invite_resend"
 MEMBER_INVITE_REVOKE = "member.invite_revoke"
 MEMBER_INVITE_DECLINE = "member.invite_decline"
-# Retained for the rows already written under it. Nothing emits it now:
-# tiers became roles, and relabelling history is not this log's job.
-MEMBER_TIER_CHANGE = "member.tier_change"
 
 ORG_CREATE = "org.create"
 ORG_SUSPEND = "org.suspend"
 ORG_RESTORE = "org.restore"
 ORG_CEILING_CHANGE = "org.ceiling_change"
 ORG_RENAME = "org.rename"
-
-# Emitted by the tier matrix, which is gone with organization_tiers. Kept
-# only so historical rows stay readable.
-TIER_MODULES_CHANGE = "tier.modules_change"
-
-CATALOG_PUBLISH = "catalog.publish"
-CATALOG_UNPUBLISH = "catalog.unpublish"
-CATALOG_GRANT = "catalog.grant"
-CATALOG_REVOKE = "catalog.revoke"
 
 # Platform super admins joining a tenant in order to read its data. This is
 # what makes "our super admins cannot read your data without appearing in your
@@ -83,9 +70,6 @@ SUPER_ADMIN_JOIN = "super_admin.join"
 
 # Resource types beyond the original agent | vector_store | credential.
 RESOURCE_ORGANIZATION = "organization"
-RESOURCE_MEMBERSHIP = "membership"
-RESOURCE_TIER = "tier"
-RESOURCE_CATALOG_ITEM = "catalog_item"
 
 
 def _actor_email(db: Session, actor_account_id: int | None) -> str | None:

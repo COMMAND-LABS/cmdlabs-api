@@ -4,7 +4,7 @@ Create index endpoint.
 import logging
 
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims, ensure_account
+from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
 from src.services.org_scope import resource_predicate
 from pinecone import Pinecone
 
@@ -34,7 +34,6 @@ async def create_index(
     Note: Index creation is asynchronous. The index may take some time to be ready.
     """
     account_id = account_id_from_claims(jwt)
-    account = ensure_account(db, account_id)
 
     # Resolve the Pinecone credential to create with: an explicit pick if
     # provided (and usable by the caller), else the account default. The

@@ -23,16 +23,16 @@ import uuid as _uuid
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from src.deps import org_dependency, db_dependency, auth_dependency
+from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims
 from src.services.org_scope import tenant_predicate
 from src.db.models import (
     Contact,
     ContactListMember,
-    EmailCampaign,
     EmailEvent,
-    EmailTemplate,
 )
+from src.routers.email_templates._shared import owned_template_or_404
 from src.rate_limit import limiter
+from ._shared import owned_campaign_or_404
 from src.services.email_dispatch import (
     CredentialError,
     MissingVariablesError,
@@ -81,7 +81,7 @@ class UnsentResponse(BaseModel):
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _load_list_contacts(db, account_id: int, contact_list_id: int, org) -> list[Contact]:
+def _load_list_contacts(db, contact_list_id: int, org) -> list[Contact]:
     members = (
         db.query(ContactListMember)
         .filter(
@@ -117,14 +117,9 @@ async def send_campaign(
     Each recipient goes through the shared idempotent ``dispatch_one`` path, so a
     crashed/re-run send only mails the remaining contacts — zero duplicates.
     """
-    account_id = int(auth["id"]) if isinstance(auth["id"], str) else auth["id"]
+    account_id = account_id_from_claims(auth)
 
-    campaign = db.query(EmailCampaign).filter(
-        EmailCampaign.id == campaign_id,
-        EmailCampaign.account_id == account_id,
-    ).first()
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Email campaign not found")
+    campaign = owned_campaign_or_404(db, campaign_id, account_id)
 
     # Legacy endpoint still derives the template from the campaign link.
     if not campaign.email_template_id:
@@ -132,14 +127,9 @@ async def send_campaign(
     if not campaign.contact_list_id:
         raise HTTPException(status_code=422, detail="Campaign has no contact list linked")
 
-    template = db.query(EmailTemplate).filter(
-        EmailTemplate.id == campaign.email_template_id,
-        EmailTemplate.account_id == account_id,
-    ).first()
-    if not template:
-        raise HTTPException(status_code=404, detail="Linked email template not found")
+    template = owned_template_or_404(db, campaign.email_template_id, account_id, detail="Linked email template not found")
 
-    contacts = _load_list_contacts(db, account_id, campaign.contact_list_id, org)
+    contacts = _load_list_contacts(db, campaign.contact_list_id, org)
     if not contacts:
         raise HTTPException(status_code=422, detail="Contact list has no members")
 
@@ -215,14 +205,9 @@ async def campaign_unsent(
     Convenience over ``list members − {contact_id with a send event}`` so clients
     don't compute resume sets by hand.
     """
-    account_id = int(auth["id"]) if isinstance(auth["id"], str) else auth["id"]
+    account_id = account_id_from_claims(auth)
 
-    campaign = db.query(EmailCampaign).filter(
-        EmailCampaign.id == campaign_id,
-        EmailCampaign.account_id == account_id,
-    ).first()
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Email campaign not found")
+    campaign = owned_campaign_or_404(db, campaign_id, account_id)
 
     list_id = contact_list_id or campaign.contact_list_id
     if not list_id:
@@ -230,7 +215,7 @@ async def campaign_unsent(
             status_code=422,
             detail="No contact_list_id provided and campaign has none linked")
 
-    contacts = _load_list_contacts(db, account_id, list_id, org)
+    contacts = _load_list_contacts(db, list_id, org)
 
     already_sent = {
         row.contact_id
