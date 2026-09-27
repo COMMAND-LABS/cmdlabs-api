@@ -4,8 +4,8 @@ List access grants for an agent (agent owner only). Reads unified AccessGrant.
 from fastapi import APIRouter, Request
 from typing import List
 from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
-from src.services.org_scope import get_resource_or_404
-from src.db.models import Agent, AccessGrant
+from src.routers.agents._shared import owned_agent_or_404
+from src.db.models import AccessGrant
 from src.services import access
 from src.services.access_admin import grant_label
 from .models import AgentAccessGrantResponse
@@ -29,7 +29,7 @@ async def list_grants(
     """
     account_id = account_id_from_claims(jwt)
 
-    get_resource_or_404(db, Agent, agent_id, org)
+    owned_agent_or_404(db, agent_id, org)
 
     grants = (
         db.query(AccessGrant)

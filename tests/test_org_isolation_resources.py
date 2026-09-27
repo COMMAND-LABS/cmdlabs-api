@@ -81,40 +81,32 @@ async def test_private_agent_is_hidden_from_colleagues(db: Session, _override_db
     assert private.id not in await _visible_ids(colleague)
 
 
-async def test_org_visible_agent_is_shared_with_colleagues(db: Session, _override_db, acme):
-    colleague = make_tenant(db, slug="acme-res", account_id=5304, data_scope="shared")
-    shared = _agent(acme, "Team Agent", visibility="org")
-    db.add(shared); db.flush()
+async def test_org_visibility_does_not_expose_an_agent(db: Session, _override_db, acme):
+    """An agent reaches another person only when its owner SHARES it.
 
-    assert shared.id in await _visible_ids(colleague)
-
-
-async def test_org_visibility_reaches_colleagues_and_stops_at_the_org(
-    db: Session, _override_db
-):
-    """visibility='org' means THIS org, and it is checked at the boundary.
-
-    This test used to assert that visibility='org' did nothing at all inside
-    the root org — the guard that stopped one person marking an agent shared
-    from exposing it to every signup on the platform. That hazard is gone with
-    the lobby: an org now only ever contains people who belong together.
-
-    What still has to hold, and is the easier thing to get wrong, is that
-    'org' does not mean 'everyone'. So: a colleague sees it, an outsider never
-    does.
+    visibility='org' used to add it to colleagues' lists, while opening and
+    chatting (access.can_access: owner or grant) ignored it — so the agent
+    listed and then 404'd. Nothing in the product sets the column for agents,
+    and sharing is owner-only, premium, and to named people
+    (READMEs/orgs_plans_and_sharing.md). One rule: you see an agent exactly
+    when you can use it.
     """
+    colleague = make_tenant(db, slug="acme-res", account_id=5304, data_scope="shared")
+    marked = _agent(acme, "Team Agent", visibility="org")
+    db.add(marked); db.flush()
+
+    assert marked.id in await _visible_ids(acme), "the owner still sees it"
+    assert marked.id not in await _visible_ids(colleague), "org visibility is not a share"
+
+
+async def test_an_agent_never_reaches_another_org(db: Session, _override_db):
+    """Whatever its visibility, an agent never appears outside its org."""
     mine = make_tenant(db, slug="vis-team", account_id=5305)
-    colleague = make_tenant(db, slug="vis-team", account_id=5306)
     outsider = make_tenant(db, slug="vis-outsider", account_id=5313)
-    assert mine.org_id == colleague.org_id != outsider.org_id
+    assert mine.org_id != outsider.org_id
 
-    shared = _agent(mine, "Marked Shared", visibility="org")
-    private = _agent(mine, "Still Mine", visibility="private")
-    db.add_all([shared, private]); db.flush()
+    marked = _agent(mine, "Marked Shared", visibility="org")
+    db.add(marked); db.flush()
 
-    seen_by_colleague = await _visible_ids(colleague)
-    assert shared.id in seen_by_colleague, "'org' must reach the team"
-    assert private.id not in seen_by_colleague, "private stays private"
-
-    assert shared.id not in await _visible_ids(outsider), \
+    assert marked.id not in await _visible_ids(outsider), \
         "'org' means this org, never another tenant"

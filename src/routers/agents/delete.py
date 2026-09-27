@@ -3,8 +3,7 @@ Delete agent endpoint.
 """
 from fastapi import APIRouter, status, Request
 from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
-from src.services.org_scope import get_resource_or_404
-from src.db.models import Agent
+from src.routers.agents._shared import owned_agent_or_404
 from src.services import access
 from src.services.access_admin import revoke_resource_grants_logged
 from src.rate_limit import limiter
@@ -26,7 +25,7 @@ async def delete_agent(
     """
     account_id = account_id_from_claims(jwt)
         
-    agent = get_resource_or_404(db, Agent, agent_id, org)
+    agent = owned_agent_or_404(db, agent_id, org)
 
     # Remove sharing grants on this agent (polymorphic grants have no FK
     # cascade), logging a revoke event for each before the agent is gone.

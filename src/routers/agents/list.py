@@ -1,13 +1,15 @@
 """
 List agents endpoint.
 
-Returns agents the authenticated user owns as well as agents shared
-with them via access groups.
+THE RULE: you see an agent exactly when you can use it — you own it, or its
+owner shared it with you — and only in the org you are acting in. This is the
+same rule GET /api/agents/{id} and the chat stream apply (access.can_access),
+so nothing appears in the list that then 404s when opened.
 """
 from fastapi import APIRouter, Request
 from typing import List
 from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
-from src.services.org_scope import scoped_resources
+from sqlalchemy import or_
 from src.db.models import Agent
 from src.services.agent_access import get_accessible_agent_ids
 from .models import AgentResponse
@@ -24,27 +26,23 @@ async def list_agents(
     request: Request
 ):
     """
-    List all agents the authenticated user can access.
-
-    This includes agents the user owns as well as agents shared with
-    them via access groups.  Each response item includes ``is_owner``
-    so the UI can distinguish owned vs. shared agents.
+    Agents the caller owns or that were shared with them, in this org.
+    Each item carries ``is_owner`` so the UI can offer edit/delete/share on
+    owned agents only.
     """
     account_id = account_id_from_claims(jwt)
-        
-    # IDs the user can access via group grants (excludes owned)
-    granted_ids = get_accessible_agent_ids(db, account_id, org_id=org.org_id)
+    shared_ids = get_accessible_agent_ids(db, account_id, org_id=org.org_id)
 
-    # Own org (honouring visibility) OR explicitly granted OR published to
-    # this org through the catalog. The branch on `granted_ids` is gone:
-    # scoped_resources composes the arms, so there is one query shape
-    # rather than two that could drift apart.
     agents = (
-        scoped_resources(db, Agent, org, granted_ids)
+        db.query(Agent)
+        .filter(
+            Agent.org_id == org.org_id,
+            or_(Agent.account_id == account_id, Agent.id.in_(shared_ids)),
+        )
         .order_by(Agent.id.desc())
         .all()
     )
-        
+
     return [
         AgentResponse.from_agent(agent, is_owner=(agent.account_id == account_id))
         for agent in agents

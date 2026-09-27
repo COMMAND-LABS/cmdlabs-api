@@ -41,6 +41,24 @@ disagree, one of them is a bug.
 
 `routers/agents/grants/create_grant.py`
 
+## Who can do what with an agent
+
+You **see** an agent exactly when you can **use** it: you own it, or its owner
+shared it with you — in the org you are acting in. Managing it is the owner's
+alone.
+
+| Action | Who |
+|---|---|
+| See it in the list, open it, chat with it | owner, and the people it is shared with |
+| Create an agent | anyone with the **Agents** module (managers, owners — premium) |
+| Edit, delete, share, see who it is shared with | its **owner** only |
+
+A community member therefore sees the Agents page as a read-only list of the
+agents shared with them. The UI shows Create only with the Agents module, and
+edit/delete/share only where `is_owner` is true.
+
+`routers/agents/list.py`, `routers/agents/_shared.py`, `services/access.can_access`
+
 ## Whose credentials a shared agent uses
 
 > A shared agent always works on its **owner's data with the owner's access**.

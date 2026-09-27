@@ -90,3 +90,43 @@ def test_a_shared_agent_keeps_its_owners_knowledge_base_tools(db: Session, owner
     assert "knowledge_bases" in shared, "but the owner's agent keeps its KB tools"
     for key in ("contacts", "email_campaigns"):
         assert key not in shared, f"{key} tools must still follow the member's role"
+
+
+@pytest.fixture()
+def teammate(db: Session, owner):
+    """A manager in the same org: holds the Agents module, owns nothing here."""
+    return make_tenant(db, slug="shared-chat", account_id=9203, is_owner=False)
+
+
+def _org_visible_agent(db: Session, owner):
+    agent = Agent(org_id=owner.org_id, account_id=owner.account_id,
+                  name="Team agent", visibility="org", config=CONFIG)
+    db.add(agent)
+    db.flush()
+    return agent
+
+
+async def test_you_see_an_agent_exactly_when_you_can_use_it(
+    db: Session, _override_db, owner, teammate
+):
+    """Org visibility is not a share: listing it would show an agent that then
+    404s when opened, because opening and chatting require owner-or-grant."""
+    agent = _org_visible_agent(db, owner)
+    async with client_for(teammate) as c:
+        listed = await c.get("/api/agents/")
+        opened = await c.get(f"/api/agents/{agent.id}")
+    assert agent.id not in [a["id"] for a in listed.json()]
+    assert opened.status_code == 404
+
+
+async def test_only_the_owner_manages_an_agent(db: Session, _override_db, owner, teammate):
+    agent = _org_visible_agent(db, owner)
+    async with client_for(teammate) as c:
+        responses = [
+            await c.put(f"/api/agents/{agent.id}", json={"name": "Mine now"}),
+            await c.get(f"/api/agents/{agent.id}/access-grants"),
+            await c.delete(f"/api/agents/{agent.id}"),
+        ]
+    assert [r.status_code for r in responses] == [404, 404, 404]
+    db.refresh(agent)
+    assert agent.name == "Team agent"

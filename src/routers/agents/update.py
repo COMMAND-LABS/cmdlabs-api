@@ -3,8 +3,7 @@ Update agent endpoint.
 """
 from fastapi import APIRouter, HTTPException, status, Request
 from src.deps import org_dependency, db_dependency, jwt_dependency
-from src.services.org_scope import get_resource_or_404
-from src.db.models import Agent
+from src.routers.agents._shared import owned_agent_or_404
 from src.schemas import validate_against_schema
 from jsonschema import ValidationError as JsonSchemaValidationError
 from .models import UpdateAgentRequest, AgentResponse
@@ -28,7 +27,7 @@ async def update_agent(
     Config must be version 4 if provided.
     Only allows updating agents belonging to the authenticated user.
     """
-    agent = get_resource_or_404(db, Agent, agent_id, org)
+    agent = owned_agent_or_404(db, agent_id, org)
 
     if request_body.name is None and request_body.config is None:
         raise HTTPException(
