@@ -7,7 +7,7 @@ with them via access groups.
 from fastapi import APIRouter, Request
 from typing import List
 from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
-from src.services.org_scope import AGENT, scoped_resources
+from src.services.org_scope import scoped_resources
 from src.db.models import Agent
 from src.services.agent_access import get_accessible_agent_ids
 from .models import AgentResponse
@@ -40,7 +40,7 @@ async def list_agents(
     # scoped_resources composes the arms, so there is one query shape
     # rather than two that could drift apart.
     agents = (
-        scoped_resources(db, Agent, org, AGENT, granted_ids)
+        scoped_resources(db, Agent, org, granted_ids)
         .order_by(Agent.id.desc())
         .all()
     )

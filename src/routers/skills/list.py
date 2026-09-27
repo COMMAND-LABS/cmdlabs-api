@@ -17,7 +17,7 @@ from src.deps import (
     org_dependency,
 )
 from src.rate_limit import limiter
-from src.services.org_scope import SKILL, scoped_resources
+from src.services.org_scope import scoped_resources
 
 from .models import SkillResponse
 
@@ -36,7 +36,7 @@ async def list_skills(
     account_id = account_id_from_claims(jwt)
 
     skills = (
-        scoped_resources(db, Skill, org, SKILL, granted_ids=None)
+        scoped_resources(db, Skill, org, granted_ids=None)
         .order_by(Skill.updated_at.desc())
         .all()
     )
