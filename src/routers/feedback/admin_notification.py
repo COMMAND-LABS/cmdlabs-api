@@ -58,7 +58,7 @@ def send_feedback_notification_to_admin(
         )
 
         send_kwargs = {
-            "Source": "noreply@kalygo.io",
+            "Source": "noreply@cmdlabs.io",
             "Destination": {"ToAddresses": [ADMIN_EMAIL]},
             "Message": {
                 "Subject": {"Data": subject},

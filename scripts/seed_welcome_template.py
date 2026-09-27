@@ -1,7 +1,7 @@
 """
 Seed script — inserts one "Welcome Email" template for account_id=1.
 
-Usage (from kalygo3-ai-api directory):
+Usage (from cmdlabs-api directory):
     python -m scripts.seed_welcome_template
     python -m scripts.seed_welcome_template --account-id 2
 """
@@ -134,7 +134,7 @@ VARIABLES = [
     {"name": "company_name",  "label": "Company name",       "default": "COMMAND"},
     {"name": "first_name",    "label": "Recipient first name","default": "there"},
     {"name": "body",          "label": "Main body copy",     "default": "We're thrilled to have you with us. Click the button below to get started and explore everything we have to offer."},
-    {"name": "cta_url",       "label": "CTA button URL",     "default": "https://kalygo.io"},
+    {"name": "cta_url",       "label": "CTA button URL",     "default": "https://cmdlabs.io"},
     {"name": "cta_label",     "label": "CTA button label",   "default": "Get Started →"},
 ]
 

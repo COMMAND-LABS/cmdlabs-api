@@ -5,7 +5,7 @@ version-controlled config used by the dedicated contact-chat endpoint. Its
 authority comes entirely from:
 
   - the session<->contact ownership gate (validated at session creation in
-    kalygo3-ai-api), and
+    command-labs-api), and
   - the structurally-scoped contact_crm tools (no contact-id parameter; every
     query filters by the caller's account_id and the bound contact_id).
 

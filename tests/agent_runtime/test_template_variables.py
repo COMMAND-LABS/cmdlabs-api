@@ -14,9 +14,9 @@ def test_supported_variables_populated():
 
 
 def test_resolve_known_variable():
-    ctx = {"agent_name": "Kalygo"}
+    ctx = {"agent_name": "Command Labs"}
     result = resolve_template_variables("Hello {{ agent_name }}!", ctx)
-    assert result == "Hello Kalygo!"
+    assert result == "Hello Command Labs!"
 
 
 def test_resolve_preserves_unknown_variables():

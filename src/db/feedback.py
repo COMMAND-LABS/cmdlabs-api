@@ -3,7 +3,7 @@ from .database import Base
 
 
 class Feedback(Base):
-    """User-submitted feedback from a branded UI (e.g. bolay.kalygo.io).
+    """User-submitted feedback from a branded UI
 
     Public, account-less submissions. `client` records which branded UI the
     feedback came from so a single table can serve multiple branded front-ends.

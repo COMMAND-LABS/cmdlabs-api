@@ -1493,7 +1493,7 @@ _email_event_type_pg = PG_ENUM(
 
 class EmailEvent(Base):
     """
-    Records a single event in the lifecycle of an email sent through Kalygo.
+    Records a single event in the lifecycle of an email sent through Command Labs.
 
     One email send typically produces multiple events:
       attempting → send_to_ses → [send → delivery] → open (if tracking enabled)

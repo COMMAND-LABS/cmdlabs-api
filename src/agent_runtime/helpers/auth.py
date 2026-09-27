@@ -56,7 +56,7 @@ def _extract_api_key(request: Request) -> str | None:
     """Extract API key from Authorization header or X-API-Key header."""
     api_key = None
 
-    # Check Authorization header: "Bearer kalygo_live_..."
+    # Check Authorization header: "Bearer cmdlabs_live_..."
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         api_key = auth_header.replace("Bearer ", "").strip()

@@ -28,7 +28,7 @@ from fastapi.testclient import TestClient
 # Service name, not localhost — these run inside the container, where
 # localhost is the container itself.
 os.environ["POSTGRES_URL"] = os.environ.get(
-    "POSTGRES_TEST_URL", "postgresql://test:test@cmdlabs-test-pg:5432/kalygo_test"
+    "POSTGRES_TEST_URL", "postgresql://test:test@cmdlabs-test-pg:5432/command_labs_test"
 )
 os.environ.setdefault("AUTH_SECRET_KEY", "test-secret-key-for-tests")
 os.environ.setdefault("AUTH_ALGORITHM", "HS256")

@@ -1,5 +1,5 @@
 """
-JSON Schema validation utilities for the Kalygo platform.
+JSON Schema validation utilities for the Command Labs platform.
 """
 import json
 from pathlib import Path
@@ -41,7 +41,7 @@ def validate_against_schema(
     """
     Validate data against a JSON schema.
 
-    All Kalygo schemas resolve their ``$ref``s internally (``#/$defs/...``
+    All Command Labs schemas resolve their ``$ref``s internally (``#/$defs/...``
     within the same document), which Draft202012Validator handles natively —
     no external resolver/registry is required.
 

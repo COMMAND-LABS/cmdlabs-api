@@ -19,15 +19,15 @@ def test_extracts_jwt_from_cookie():
 
 
 def test_extracts_api_key_from_bearer():
-    request = _make_request(headers={"Authorization": "Bearer kalygo_live_abc123"})
+    request = _make_request(headers={"Authorization": "Bearer cmdlabs_live_abc123"})
     auth = {"auth_type": "api_key"}
-    assert extract_auth_token(request, auth) == "kalygo_live_abc123"
+    assert extract_auth_token(request, auth) == "cmdlabs_live_abc123"
 
 
 def test_extracts_api_key_from_x_api_key():
-    request = _make_request(headers={"X-API-Key": "kalygo_live_xyz"})
+    request = _make_request(headers={"X-API-Key": "cmdlabs_live_xyz"})
     auth = {"auth_type": "api_key"}
-    assert extract_auth_token(request, auth) == "kalygo_live_xyz"
+    assert extract_auth_token(request, auth) == "cmdlabs_live_xyz"
 
 
 def test_returns_none_for_no_request():

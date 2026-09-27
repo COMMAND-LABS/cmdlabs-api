@@ -11,7 +11,7 @@ If the manifest has no "id" (or id is null), the script creates a new row in
 the database and writes the assigned id back into manifest.json so that future
 uploads are treated as updates.
 
-Usage (from kalygo3-ai-api directory):
+Usage (from cmdlabs-api directory):
 
     # Upload one template by its directory slug
     python -m scripts.upload_email_template welcome-email

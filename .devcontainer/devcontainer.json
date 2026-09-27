@@ -1,9 +1,9 @@
 {
   "name": "COMMAND LABS API Dev Container",
-  "image": "kalygo3-ai-api:latest",
+  "image": "cmdlabs-api:latest",
   "workspaceFolder": "/code",
   "workspaceMount": "source=${localWorkspaceFolder},target=/code,type=bind,consistency=delegated",
-  "runArgs": ["--name", "kalygo3-ai-api"],
+  "runArgs": ["--name", "cmdlabs-api"],
   "customizations": {
     "vscode": {
       "extensions": [

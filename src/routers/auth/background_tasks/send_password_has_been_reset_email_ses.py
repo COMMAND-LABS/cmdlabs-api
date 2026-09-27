@@ -7,10 +7,10 @@ from src.services import ses_logging
 logger = logging.getLogger(__name__)
 
 EMAIL_KIND = "password_has_been_reset"
-# NOTE: kalygo.io, not cmdlabs.io like the other senders. If this identity is no
+# NOTE: If this identity is no
 # longer verified in SES the send fails outright — the `failed` log line names
 # the code (MailFromDomainNotVerified / MessageRejected) when that is the case.
-FROM_ADDRESS = "noreply@kalygo.io"
+FROM_ADDRESS = "noreply@cmdlabs.io"
 
 
 def send_password_has_been_reset_email_ses(to_email: str):

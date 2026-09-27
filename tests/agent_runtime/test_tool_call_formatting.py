@@ -6,11 +6,11 @@ from src.agent_runtime.helpers.tool_calls import format_tool_call
 def test_vector_search_formats_correctly():
     result = format_tool_call(
         tool_name="vector_search",
-        tool_input={"query": "what is Kalygo?", "top_k": 5},
+        tool_input={"query": "what is Command Labs?", "top_k": 5},
         tool_output={"results": [{"id": "1", "score": 0.95, "metadata": {"text": "..."}}], "namespace": "docs", "index": "main"},
     )
     assert result["toolType"] == "vectorSearch"
-    assert result["input"]["query"] == "what is Kalygo?"
+    assert result["input"]["query"] == "what is Command Labs?"
     assert result["input"]["topK"] == 5
     assert len(result["output"]["results"]) == 1
 

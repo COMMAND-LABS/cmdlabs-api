@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://kalygo.example/schemas/chat-message-v2.schema.json",
+  "$id": "https://cmdlabs.example/schemas/chat-message-v2.schema.json",
   "title": "Chat Message v2",
   "description": "Schema for chat messages with structured tool call outputs",
   "type": "object",
@@ -598,7 +598,7 @@
                   "content": "Q: What is the pricing for the Pro plan?\nA: The Pro plan costs $29/month...",
                   "filename": "faq.csv",
                   "user_id": "123",
-                  "user_email": "admin@kalygo.io",
+                  "user_email": "admin@cmdlabs.io",
                   "upload_timestamp": "1706234567890"
                 }
               }

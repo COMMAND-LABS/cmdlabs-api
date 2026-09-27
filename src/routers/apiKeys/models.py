@@ -13,7 +13,7 @@ class CreateApiKeyRequest(BaseModel):
 class ApiKeyResponse(BaseModel):
     id: int
     name: Optional[str]
-    key_prefix: str  # e.g., "kalygo_live_abc123..."
+    key_prefix: str  # e.g., "cmdlabs_live_abc123..."
     status: str
     created_at: datetime
     last_used_at: Optional[datetime]

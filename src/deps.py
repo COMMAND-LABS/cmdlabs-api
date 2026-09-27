@@ -103,7 +103,7 @@ async def get_current_user_or_api_key(
         if not token:
             if auth_header.startswith("Bearer "):
                 bearer_value = auth_header.replace("Bearer ", "").strip()
-                if not bearer_value.startswith("kalygo_"):
+                if not bearer_value.startswith("cmdlabs_"):
                     token = bearer_value
 
         if token:
@@ -129,7 +129,7 @@ async def get_current_user_or_api_key(
     if not api_key:
         api_key = request.headers.get("X-API-Key", "").strip()
     
-    if api_key and api_key.startswith("kalygo_"):
+    if api_key and api_key.startswith("cmdlabs_"):
         key_prefix = api_key[:20] if len(api_key) >= 20 else api_key
         
         api_key_record = db.query(ApiKey).filter(

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://kalygo.example/schemas/agent-streaming-events-v1.schema.json",
+  "$id": "https://cmdlabs.example/schemas/agent-streaming-events-v1.schema.json",
   "title": "Agent Streaming Events v1",
   "description": "Schema for Server-Sent Events (SSE) emitted by the agent completion endpoint during streaming",
   "oneOf": [

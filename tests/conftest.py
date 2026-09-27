@@ -1,5 +1,5 @@
 """
-Shared test fixtures for the kalygo3-ai-api test suite.
+Shared test fixtures for the command-labs-api test suite.
 
 Key design choices:
 - POSTGRES_URL is FORCE-SET to the test database URL before any app imports.
@@ -20,7 +20,7 @@ from pathlib import Path
 # accidental operations against production.
 _TEST_DB_URL = os.environ.get(
     "POSTGRES_TEST_URL",
-    "postgresql://test:test@cmdlabs-test-pg:5432/kalygo_test"
+    "postgresql://test:test@cmdlabs-test-pg:5432/cmdlabs_test"
 )
 os.environ["POSTGRES_URL"] = _TEST_DB_URL
 os.environ.setdefault("AUTH_SECRET_KEY", "test-secret-key-do-not-use-in-prod")

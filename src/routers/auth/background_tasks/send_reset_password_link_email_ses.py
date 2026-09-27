@@ -7,9 +7,8 @@ from src.services import ses_logging
 logger = logging.getLogger(__name__)
 
 EMAIL_KIND = "reset_password_link"
-# NOTE: kalygo.io, not cmdlabs.io like the other senders. See the same note in
 # send_password_has_been_reset_email_ses.
-FROM_ADDRESS = "noreply@kalygo.io"
+FROM_ADDRESS = "noreply@cmdlabs.io"
 
 
 def send_reset_password_link_email_ses(account_id: int, to_email: str, reset_token: str):

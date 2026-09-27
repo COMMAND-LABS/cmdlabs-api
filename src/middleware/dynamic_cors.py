@@ -34,12 +34,12 @@ class DynamicCORSMiddleware(BaseHTTPMiddleware):
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             api_key = auth_header.replace("Bearer ", "").strip()
-            if api_key.startswith("kalygo_"):
+            if api_key.startswith("cmdlabs_"):
                 return True
         
         # Check X-API-Key header
         api_key = request.headers.get("X-API-Key", "").strip()
-        if api_key and api_key.startswith("kalygo_"):
+        if api_key and api_key.startswith("cmdlabs_"):
             return True
         
         return False

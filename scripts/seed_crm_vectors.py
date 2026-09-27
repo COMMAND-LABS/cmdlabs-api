@@ -6,7 +6,7 @@ Run this once to backfill vectors for data that was created before the
 vector integration was added.  It is idempotent — running it again
 simply overwrites existing vectors with the same IDs.
 
-Usage (from the kalygo3-ai-api root):
+Usage (from the cmdlabs-api root):
     python -m scripts.seed_crm_vectors --jwt <YOUR_JWT_TOKEN>
     python -m scripts.seed_crm_vectors --jwt <TOKEN> --account-id 1
     python -m scripts.seed_crm_vectors --jwt <TOKEN> --dry-run

@@ -155,15 +155,12 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 # Allowed origins for JWT/cookie authentication (internal UI)
 jwt_allowed_origins = [
-    "https://kalygo.io",
-    "https://bolay.kalygo.io",
     "https://cmdlabs.io",
     "https://www.cmdlabs.io",
     "http://127.0.0.1:3000",
     "http://127.0.0.1:3001",
     "http://127.0.0.1:3002",
     "http://localhost:3000",
-    "https://kalygo-nextjs-service-830723611668.us-east1.run.app",
     "https://localhost:3000",
     "http://localhost:5000",  # Second FastAPI
 ]

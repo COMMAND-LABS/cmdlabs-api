@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 #
 # qna-ingest-topic -> two-column Q&A CSVs and reviewed PDF-to-FAQ pairs; builds
 #                     one vector per Q&A pair.
-# txt-ingest-topic -> kalygo3-txt-ingest-cloud-function-python; chunks .txt/.md
+# txt-ingest-topic -> txt-ingest-cloud-function-python; chunks .txt/.md
 #                     free text and parses YAML front matter into file_* keys.
 QNA_INGEST_TOPIC = "qna-ingest-topic"
 TXT_INGEST_TOPIC = "txt-ingest-topic"

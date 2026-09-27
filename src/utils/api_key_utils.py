@@ -8,18 +8,18 @@ from passlib.context import CryptContext
 bcrypt_context = CryptContext(schemes=["sha256_crypt"])
 
 
-def generate_api_key(prefix: str = "kalygo_live") -> tuple[str, str, str]:
+def generate_api_key(prefix: str = "cmdlabs_live") -> tuple[str, str, str]:
     """
     Generate a new API key.
     
     Args:
-        prefix: Prefix for the API key (default: "kalygo_live")
+        prefix: Prefix for the API key (default: "cmdlabs_live")
     
     Returns:
         (full_key, key_hash, key_prefix)
         - full_key: The complete API key to return to user (only shown once)
         - key_hash: Bcrypt hash to store in database
-        - key_prefix: First 20 chars for display/lookup (e.g., "kalygo_live_abc123")
+        - key_prefix: First 20 chars for display/lookup (e.g., "cmdlabs_live_abc123")
     """
     # Generate random part (32 bytes = ~43 URL-safe chars)
     random_part = secrets.token_urlsafe(32)
@@ -29,7 +29,7 @@ def generate_api_key(prefix: str = "kalygo_live") -> tuple[str, str, str]:
     key_hash = bcrypt_context.hash(full_key)
     
     # Extract prefix for fast lookup (first 20 chars)
-    key_prefix = full_key[:20]  # e.g., "kalygo_live_abc123"
+    key_prefix = full_key[:20]  # e.g., "cmdlabs_live_abc123"
     
     return full_key, key_hash, key_prefix
 

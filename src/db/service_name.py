@@ -9,7 +9,7 @@ class ServiceName(str, Enum):
     Supported API service names for storing credentials.
     
     This enum explicitly defines which third-party services are supported
-    by the Kalygo platform. New services can be added as needed.
+    by the Command Labs platform. New services can be added as needed.
     
     Note: Adding a new value here requires a corresponding Alembic migration
     to add the value to the PostgreSQL enum type.
