@@ -51,7 +51,7 @@ def _configured_db():
 def stubbed_context(monkeypatch):
     """Stub the LLM/tool boundaries so setup runs without providers."""
     monkeypatch.setattr(ctx_mod, "get_required_credential_type", lambda provider: None)
-    monkeypatch.setattr(ctx_mod, "create_llm", lambda **kw: (MagicMock(), None))
+    monkeypatch.setattr(ctx_mod, "create_llm", lambda **kw: MagicMock())
 
     async def fake_tools(**kw):
         return []

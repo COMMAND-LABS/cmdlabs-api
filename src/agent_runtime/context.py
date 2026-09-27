@@ -275,7 +275,7 @@ async def prepare_agent_context(
 
     # --- LLM ---
     try:
-        llm, _ = create_llm(
+        llm = create_llm(
             model_config=model_config,
             credentials=credentials,
             temperature=0,
