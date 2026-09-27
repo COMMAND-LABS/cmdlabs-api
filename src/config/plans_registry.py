@@ -76,11 +76,6 @@ PLAN_KEYS = (PLAN_FREE, PLAN_PREMIUM)
 # dependency; db.models holds the same tuple for the Account property.
 ACTIVE_SUBSCRIPTION_STATUSES = ("active", "trialing")
 
-PLAN_LABELS = {
-    PLAN_FREE: "Free",
-    PLAN_PREMIUM: "Premium",
-}
-
 # What each plan includes. Keys must exist in modules_registry.MODULES.
 #
 # THE ONLY PLACE THIS IS WRITTEN DOWN, and it has to stay that way. It used to

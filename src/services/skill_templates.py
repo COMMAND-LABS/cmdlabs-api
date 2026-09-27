@@ -23,9 +23,6 @@ from src.services.skill_markdown import parse_skill_markdown
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "skill_templates"
 
-SKILL_CREATOR_TEMPLATE_NAME = "skill-creator"
-
-
 @dataclass(frozen=True)
 class SkillTemplate:
     name: str

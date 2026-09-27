@@ -215,28 +215,3 @@ def revoke_resource_grants_logged(
     return access.revoke_grants_for_resource(db, resource_type, resource_id)
 
 
-def revoke_principal_grants_logged(
-    db: Session, *, principal_type: str, principal_id: int, actor_account_id: int
-) -> int:
-    """Revoke every grant held by a principal, logging a 'revoke' event for each.
-
-    Use when an account is deleted. Call BEFORE deleting it so its label
-    snapshot resolves. Caller commits.
-    """
-    grants = (
-        db.query(AccessGrant)
-        .filter(AccessGrant.principal_type == principal_type, AccessGrant.principal_id == principal_id)
-        .all()
-    )
-    for g in grants:
-        record_access_event(
-            db,
-            event_type="revoke",
-            actor_account_id=actor_account_id,
-            resource_type=g.resource_type,
-            resource_id=g.resource_id,
-            principal_type=g.principal_type,
-            principal_id=g.principal_id,
-            role=g.role,
-        )
-    return access.revoke_grants_for_principal(db, principal_type, principal_id)

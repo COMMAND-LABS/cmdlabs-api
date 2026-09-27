@@ -218,24 +218,3 @@ def record_org_change(db: Session, *, event_type: str, org_id: int,
     )
 
 
-def record_catalog(db: Session, *, event_type: str, item_id: int,
-                   title: str | None, target_org_id: int | None = None,
-                   group_id: int | None = None,
-                   actor_account_id: int | None = None) -> None:
-    """A publish/unpublish, or a grant/revoke to one org (or department).
-
-    org_id is the org RECEIVING the lesson, so a client can see in their own
-    log when a lesson arrived and when it was taken away. Publish and unpublish
-    have no recipient and so carry no org.
-    """
-    record(
-        db,
-        event_type=event_type,
-        org_id=target_org_id,
-        resource_type=RESOURCE_CATALOG_ITEM,
-        resource_id=item_id,
-        resource_label=title,
-        principal_type="group" if group_id else None,
-        principal_id=group_id,
-        actor_account_id=actor_account_id,
-    )

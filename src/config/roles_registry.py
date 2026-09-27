@@ -77,17 +77,6 @@ ROLE_LABELS = {
     ROLE_COMMUNITY_MEMBER: "Community Member",
 }
 
-# For admin UIs and invite pickers. Not used for matching — see the key note.
-ROLE_DESCRIPTIONS = {
-    ROLE_MANAGER:
-        "Collaborates on the business — full access to everything the "
-        "organization's plan includes.",
-    ROLE_COMMUNITY_MEMBER:
-        "Someone the organization serves. Can take courses and talk to "
-        "agents; cannot see contacts, deals, or anything the team is "
-        "building.",
-}
-
 # The community member's ENTIRE surface. An allowlist, and it stays one.
 #
 # Note what is in and what is not, because the line is the point:
