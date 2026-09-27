@@ -36,6 +36,10 @@ dependencies = [
     "python-jose>=3.3.0,<4.0",
     "cryptography>=46.0.3,<47",  # Fernet for stored credentials (routers/credentials/encryption.py); was only arriving via sendgrid
     "psycopg2-binary>=2.9.9,<3.0",
+    # The driver for postgresql+psycopg:// URLs — the scheme production's
+    # POSTGRES_URL secret uses. Nothing imports it by name (SQLAlchemy loads it
+    # from the URL), so it looks unused to a code search. It is not.
+    "psycopg[binary]>=3.2.1,<4.0",
     "passlib>=1.7.4,<2.0",
     "python-multipart>=0.0.9,<1.0",
     "requests>=2.32.3,<3.0",
