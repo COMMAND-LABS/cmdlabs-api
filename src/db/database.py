@@ -54,7 +54,7 @@ engine = create_engine(
         "keepalives_idle": 20,    # Send keepalive after 20s idle
         "keepalives_interval": 5, # Retry every 5s
         "keepalives_count": 3,    # Give up after 3 failures (15s total)
-        "application_name": "kalygo3",
+        "application_name": "cmdlabs",
     },
 )
 
