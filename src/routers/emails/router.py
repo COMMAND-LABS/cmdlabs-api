@@ -11,9 +11,11 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Request
 
-from src.deps import org_dependency, db_dependency, auth_dependency
+from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims
 from src.services.org_scope import get_scoped_or_404
-from src.db.models import Contact, EmailCampaign, EmailTemplate
+from src.db.models import Contact
+from src.routers.email_campaigns._shared import owned_campaign_or_404
+from src.routers.email_templates._shared import owned_template_or_404
 from src.rate_limit import limiter
 from src.services.email_dispatch import (
     CredentialError,
@@ -38,23 +40,13 @@ async def send_email(
     org: org_dependency,
     request: Request,
 ):
-    account_id = int(auth["id"]) if isinstance(auth["id"], str) else auth["id"]
+    account_id = account_id_from_claims(auth)
 
     # ── Campaign (correlation tag) must exist ────────────────────────────────
-    campaign = db.query(EmailCampaign).filter(
-        EmailCampaign.id == body.campaign_id,
-        EmailCampaign.account_id == account_id,
-    ).first()
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Email campaign not found")
+    campaign = owned_campaign_or_404(db, body.campaign_id, account_id)
 
     # ── Template (immutable shape) ───────────────────────────────────────────
-    template = db.query(EmailTemplate).filter(
-        EmailTemplate.id == body.template_id,
-        EmailTemplate.account_id == account_id,
-    ).first()
-    if not template:
-        raise HTTPException(status_code=404, detail="Email template not found")
+    template = owned_template_or_404(db, body.template_id, account_id)
 
     # ── Resolve recipient ────────────────────────────────────────────────────
     contact = None

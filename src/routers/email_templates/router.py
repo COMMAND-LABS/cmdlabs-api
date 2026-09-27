@@ -1,8 +1,9 @@
 """Email templates CRUD router."""
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, status, Request, Query
-from src.deps import db_dependency, auth_dependency
+from fastapi import APIRouter, status, Request, Query
+from src.deps import db_dependency, auth_dependency, account_id_from_claims
 from src.db.models import EmailTemplate
+from ._shared import owned_template_or_404
 
 from .models import (
     CreateEmailTemplateRequest,
@@ -21,7 +22,7 @@ async def list_email_templates(
     request: Request,
     search: Optional[str] = Query(default=None, description="Filter by name (case-insensitive substring)"),
 ):
-    account_id = int(auth["id"]) if isinstance(auth["id"], str) else auth["id"]
+    account_id = account_id_from_claims(auth)
     q = db.query(EmailTemplate).filter(EmailTemplate.account_id == account_id)
     if search:
         q = q.filter(EmailTemplate.name.ilike(f"%{search}%"))
@@ -35,13 +36,8 @@ async def get_email_template(
     auth: auth_dependency,
     request: Request,
 ):
-    account_id = int(auth["id"]) if isinstance(auth["id"], str) else auth["id"]
-    tmpl = db.query(EmailTemplate).filter(
-        EmailTemplate.id == template_id,
-        EmailTemplate.account_id == account_id,
-    ).first()
-    if not tmpl:
-        raise HTTPException(status_code=404, detail="Email template not found")
+    account_id = account_id_from_claims(auth)
+    tmpl = owned_template_or_404(db, template_id, account_id)
     return tmpl
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=EmailTemplateResponse)
@@ -52,7 +48,7 @@ async def create_email_template(
     auth: auth_dependency,
     request: Request,
 ):
-    account_id = int(auth["id"]) if isinstance(auth["id"], str) else auth["id"]
+    account_id = account_id_from_claims(auth)
     tmpl = EmailTemplate(
         account_id=account_id,
         name=body.name,
@@ -75,13 +71,8 @@ async def update_email_template(
     auth: auth_dependency,
     request: Request,
 ):
-    account_id = int(auth["id"]) if isinstance(auth["id"], str) else auth["id"]
-    tmpl = db.query(EmailTemplate).filter(
-        EmailTemplate.id == template_id,
-        EmailTemplate.account_id == account_id,
-    ).first()
-    if not tmpl:
-        raise HTTPException(status_code=404, detail="Email template not found")
+    account_id = account_id_from_claims(auth)
+    tmpl = owned_template_or_404(db, template_id, account_id)
     if body.name is not None:
         tmpl.name = body.name
     if body.description is not None:
@@ -104,12 +95,7 @@ async def delete_email_template(
     auth: auth_dependency,
     request: Request,
 ):
-    account_id = int(auth["id"]) if isinstance(auth["id"], str) else auth["id"]
-    tmpl = db.query(EmailTemplate).filter(
-        EmailTemplate.id == template_id,
-        EmailTemplate.account_id == account_id,
-    ).first()
-    if not tmpl:
-        raise HTTPException(status_code=404, detail="Email template not found")
+    account_id = account_id_from_claims(auth)
+    tmpl = owned_template_or_404(db, template_id, account_id)
     db.delete(tmpl)
     db.commit()

@@ -12,9 +12,10 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func as sql_func
 
-from src.deps import db_dependency, auth_dependency
-from src.db.models import EmailCampaign, EmailCampaignRating
+from src.deps import db_dependency, auth_dependency, account_id_from_claims
+from src.db.models import EmailCampaignRating
 from src.rate_limit import limiter
+from ._shared import owned_campaign_or_404
 
 router = APIRouter()
 
@@ -68,14 +69,9 @@ async def list_campaign_ratings(
     offset: int = Query(default=0, ge=0, description="Pagination offset"),
 ):
     """List all ratings for a campaign with optional filters."""
-    account_id = int(auth["id"]) if isinstance(auth["id"], str) else auth["id"]
+    account_id = account_id_from_claims(auth)
 
-    campaign = db.query(EmailCampaign).filter(
-        EmailCampaign.id == campaign_id,
-        EmailCampaign.account_id == account_id,
-    ).first()
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Email campaign not found")
+    owned_campaign_or_404(db, campaign_id, account_id)
 
     q = db.query(EmailCampaignRating).filter(
         EmailCampaignRating.campaign_id == campaign_id,
@@ -108,14 +104,9 @@ async def campaign_ratings_summary(
     request: Request,
 ):
     """Return aggregated rating statistics for a campaign."""
-    account_id = int(auth["id"]) if isinstance(auth["id"], str) else auth["id"]
+    account_id = account_id_from_claims(auth)
 
-    campaign = db.query(EmailCampaign).filter(
-        EmailCampaign.id == campaign_id,
-        EmailCampaign.account_id == account_id,
-    ).first()
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Email campaign not found")
+    owned_campaign_or_404(db, campaign_id, account_id)
 
     base_filter = [
         EmailCampaignRating.campaign_id == campaign_id,
@@ -180,14 +171,9 @@ async def get_campaign_rating(
     request: Request,
 ):
     """Get a single rating by ID within a campaign."""
-    account_id = int(auth["id"]) if isinstance(auth["id"], str) else auth["id"]
+    account_id = account_id_from_claims(auth)
 
-    campaign = db.query(EmailCampaign).filter(
-        EmailCampaign.id == campaign_id,
-        EmailCampaign.account_id == account_id,
-    ).first()
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Email campaign not found")
+    owned_campaign_or_404(db, campaign_id, account_id)
 
     rating = db.query(EmailCampaignRating).filter(
         EmailCampaignRating.id == rating_id,
