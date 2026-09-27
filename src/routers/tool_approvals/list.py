@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import List
 from fastapi import APIRouter, Request
-from src.deps import db_dependency, auth_dependency
+from src.deps import db_dependency, auth_dependency, account_id_from_claims
 from src.db.models import PendingToolApproval
 from .models import PendingToolApprovalResponse
 from src.rate_limit import limiter
@@ -22,7 +22,7 @@ async def list_tool_approvals(
     Defaults to showing only pending requests; pass ?status=all to see all.
     Expired-but-still-pending records are automatically marked expired.
     """
-    account_id = int(auth["id"]) if isinstance(auth["id"], str) else auth["id"]
+    account_id = account_id_from_claims(auth)
     now = datetime.now(timezone.utc)
 
     query = db.query(PendingToolApproval).filter(
