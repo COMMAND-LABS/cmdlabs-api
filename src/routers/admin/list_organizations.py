@@ -54,17 +54,6 @@ async def list_organizations(
     owner_emails = {oid: email for oid, email, _, _ in owners}
     owner_billing = {oid: (st, lapsed) for oid, _, st, lapsed in owners}
 
-    def _state(org) -> str:
-        """Pinned orgs are always 'active': super admins gave them a plan,
-            so a
-            payment says nothing about them in either direction."""
-        if org.pinned_plan is not None:
-            return plans.BILLING_ACTIVE
-        billing = owner_billing.get(org.owner_account_id)
-        if billing is None:
-            return plans.BILLING_ACTIVE
-        return plans.billing_state(billing[0], billing[1])
-
     def _plan_of(org) -> str:
         """The plan in force. Same rule as services.modules.org_entitlement,
             evaluated from the rows already loaded above rather than one query
@@ -80,7 +69,8 @@ async def list_organizations(
                 id=o.id,
                 name=o.name,
                 is_personal=(member_counts.get(o.id, 0) == 1),
-                billing_state=_state(o),
+                billing_state=plans.org_billing_state(
+                    o.pinned_plan, owner_billing.get(o.owner_account_id)),
                 pinned_plan=o.pinned_plan,
                 owner_account_id=o.owner_account_id,
                 owner_email=owner_emails.get(o.owner_account_id),
