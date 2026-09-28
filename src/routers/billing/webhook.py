@@ -96,6 +96,25 @@ def _record_billing_transition(db, account: Account, event_type: str) -> None:
             actor_account_id=account.id)
 
 
+def is_stale_for(account: Account, subscription) -> bool:
+    """True when this payload is about a subscription we have moved past.
+
+    Stripe neither orders nor de-duplicates deliveries. A customer who cancels
+    subscription A and buys B can receive A's `updated`/`deleted` after B is
+    live, and applying it would flip a paying customer to canceled.
+
+    The rule: an event about a subscription OTHER than the one on record may
+    replace it only if it entitles. It can upgrade the account, never
+    downgrade it. Events about the subscription on record always apply.
+    """
+    current = account.stripe_subscription_id
+    incoming = subscription.get("id")
+    if not current or not incoming or current == incoming:
+        return False
+    return (account.subscription_status in ACTIVE_SUBSCRIPTION_STATUSES
+            and subscription.get("status") not in ACTIVE_SUBSCRIPTION_STATUSES)
+
+
 def _apply_subscription(db, account: Account, subscription) -> None:
     """
     Copy the subscription's current state onto the account.
@@ -118,6 +137,11 @@ def _apply_subscription(db, account: Account, subscription) -> None:
     account.subscription_current_period_end = _to_datetime(
         subscription.get("current_period_end")
     )
+    # Newer Stripe API versions schedule portal cancels with `cancel_at`
+    # rather than the boolean, so either one means "ends, does not renew".
+    account.subscription_cancel_at_period_end = bool(
+        subscription.get("cancel_at_period_end") or subscription.get("cancel_at")
+    )
 
     now_entitled = account.subscription_status in ACTIVE_SUBSCRIPTION_STATUSES
 
@@ -135,12 +159,9 @@ def _apply_subscription(db, account: Account, subscription) -> None:
 def apply_subscription_change(db, account: Account, subscription) -> None:
     """Apply a subscription state from Stripe AND audit the edge it crosses.
 
-    The one path for a subscription changing under an existing account: the
-    subscription webhooks and the /downgrade endpoint both come through here,
-    so a self-service cancel records its lapse (and org.suspend) exactly as a
-    Stripe-initiated one does, instead of leaving it for the later
-    customer.subscription.deleted webhook to stamp as if it had just happened.
-    Caller commits.
+    The one path for a subscription changing under an existing account: both
+    checkout completion and the subscription webhooks come through here, so
+    every lapse and recovery is audited the same way. Caller commits.
     """
     was_entitled = account.subscription_status in ACTIVE_SUBSCRIPTION_STATUSES
     _apply_subscription(db, account, subscription)
@@ -216,7 +237,9 @@ async def stripe_webhook(
             # the subscription itself — that is what entitlement is based on.
             subscription = get_subscription(subscription_id) if subscription_id else None
             if subscription:
-                _apply_subscription(db, account, subscription)
+                # The audited path, so a lapsed customer buying again gets the
+                # same org.restore row a Stripe-side recovery would write.
+                apply_subscription_change(db, account, subscription)
             if data.get("customer") and not account.stripe_customer_id:
                 account.stripe_customer_id = data["customer"]
             db.commit()
@@ -247,6 +270,13 @@ async def stripe_webhook(
                 # live. Pinned BEFORE _apply_subscription so the lapse timestamp
                 # is decided from the status we actually mean.
                 data = {**data, "status": "canceled"}
+
+            if is_stale_for(account, data):
+                logger.warning(
+                    "[STRIPE WEBHOOK] Ignored %s for superseded subscription %s "
+                    "(account %s is on %s)", event_type, data.get("id"),
+                    account.id, account.stripe_subscription_id)
+                return {"received": True, "handled": False}
 
             apply_subscription_change(db, account, data)
 

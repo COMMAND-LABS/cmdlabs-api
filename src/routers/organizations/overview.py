@@ -29,7 +29,8 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from sqlalchemy import func
 
-from src.config.modules_registry import BY_KEY, MODULE_KEYS
+from src.config import plans_registry as plans
+from src.config.modules_registry import BY_KEY
 from src.config import roles_registry as role_registry
 from src.db.models import (
     Account,
@@ -133,8 +134,7 @@ def _overview_payload(db, org) -> OrganizationOverviewResponse:
     # An org names one owner, so this is 1 when that account is actually a
     # member and 0 when it is not — which is the state worth surfacing,
     # because an owner outside their own org cannot administer it.
-    owner_id = (db.query(Organization.owner_account_id)
-                  .filter(Organization.id == org.org_id).scalar())
+    owner_id = organization.owner_account_id
     owner_count = (db.query(func.count(OrganizationMember.id))
                      .filter(OrganizationMember.org_id == org.org_id,
                              OrganizationMember.account_id == owner_id)
@@ -172,7 +172,9 @@ def _overview_payload(db, org) -> OrganizationOverviewResponse:
             ModuleSummary(key=k, label=BY_KEY[k].label)
             for k in ceiling if k in BY_KEY
         ],
-        module_total=len(MODULE_KEYS),
+        # Out of what a plan can include. Counting every registry key made a
+        # Premium org read "16 of 19", with two modules no plan sells.
+        module_total=len(plans.modules_for_plan(plans.PLAN_PREMIUM)),
         member_count=member_count,
         owner_count=owner_count,
         recent_members=[

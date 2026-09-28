@@ -252,11 +252,11 @@ class OrgContext:
     # Defaulted so the handful of test helpers that build a context by hand
     # keep working.
     plan: str = plans.PLAN_FREE
-
-    @property
-    def is_read_only(self) -> bool:
-        """Kept as the name every call site already reads."""
-        return self.read_only
+    # The org's module ceiling, resolved in the same entitlement read as `plan`.
+    # Carried so module gating does not query the org and its owner a second
+    # time per request. None on hand-built contexts, which makes
+    # services/modules.effective_modules look it up as before.
+    ceiling: tuple | None = None
 
 
 def _org_context_for(db: Session, account, account_id: int,
@@ -326,6 +326,7 @@ def _org_context_for(db: Session, account, account_id: int,
         # a request cannot see a plan resolved at one instant and a ceiling at
         # another — and so there is one place that decides what an org has.
         plan=entitlement.plan,
+        ceiling=tuple(entitlement.ceiling),
     )
 
 
@@ -554,7 +555,7 @@ def _refuse_writes_while_read_only(ctx: "OrgContext", request: Request) -> None:
     than the banner implies. Fixing it means guarding those routes by hand,
     which is a decision to take on purpose rather than by widening this.
     """
-    if ctx.is_read_only and request.method not in ("GET", "HEAD", "OPTIONS"):
+    if ctx.read_only and request.method not in ("GET", "HEAD", "OPTIONS"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="This workspace is read-only while the subscription is "

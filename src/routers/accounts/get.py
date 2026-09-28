@@ -30,5 +30,6 @@ async def get_account(
         stripe_customer_id=account.stripe_customer_id,
         is_super_admin=account.is_super_admin,
         subscription_status=account.subscription_status,
-        subscription_active=account.has_active_subscription
+        subscription_active=account.has_active_subscription,
+        subscription_cancel_at_period_end=bool(account.subscription_cancel_at_period_end),
     )

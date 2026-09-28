@@ -6,8 +6,10 @@ module ceiling each has, and where each one's billing stands. It returns no
 tenant data — super admins read an org's contacts by joining that org, which is
 visible to its members.
 """
-from fastapi import APIRouter, Request
-from sqlalchemy import func as sa_func
+from typing import Optional
+
+from fastapi import APIRouter, Query, Request
+from sqlalchemy import func as sa_func, or_
 
 from src.config import plans_registry as plans
 from src.db.models import Account, Organization, OrganizationMember
@@ -25,10 +27,24 @@ async def list_organizations(
     db: db_dependency,
     super_admin: super_admin_dependency,
     request: Request,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    q: Optional[str] = Query(None, max_length=200,
+                             description="Match on org name or owner email"),
 ):
-    orgs = db.query(Organization).order_by(Organization.id.asc()).all()
+    """One page of orgs, oldest first, optionally filtered by `q`."""
+    query = db.query(Organization)
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        query = (query.outerjoin(Account, Account.id == Organization.owner_account_id)
+                      .filter(or_(Organization.name.ilike(like),
+                                  Account.email.ilike(like))))
+    total = query.count()
+    orgs = (query.order_by(Organization.id.asc())
+                 .offset(offset).limit(limit).all())
     if not orgs:
-        return OrganizationListResponse(organizations=[], total=0)
+        return OrganizationListResponse.of([], total=total, limit=limit,
+                                           offset=offset)
 
     org_ids = [o.id for o in orgs]
 
@@ -54,17 +70,8 @@ async def list_organizations(
     owner_emails = {oid: email for oid, email, _, _ in owners}
     owner_billing = {oid: (st, lapsed) for oid, _, st, lapsed in owners}
 
-    def _plan_of(org) -> str:
-        """The plan in force. Same rule as services.modules.org_entitlement,
-            evaluated from the rows already loaded above rather than one query
-            per org."""
-        billing = owner_billing.get(org.owner_account_id)
-        if billing is None:
-            return plans.PLAN_FREE
-        return plans.plan_for(billing[0], billing[1])
-
-    return OrganizationListResponse(
-        organizations=[
+    return OrganizationListResponse.of(
+        [
             OrganizationSummary(
                 id=o.id,
                 name=o.name,
@@ -75,11 +82,11 @@ async def list_organizations(
                 owner_account_id=o.owner_account_id,
                 owner_email=owner_emails.get(o.owner_account_id),
                 member_count=member_counts.get(o.id, 0),
-                modules=plans.modules_for_plan(
-                    o.pinned_plan or _plan_of(o)),
+                modules=plans.modules_for_plan(plans.org_plan(
+                    o.pinned_plan, owner_billing.get(o.owner_account_id))),
                 created_at=o.created_at,
             )
             for o in orgs
         ],
-        total=len(orgs),
+        total=total, limit=limit, offset=offset,
     )

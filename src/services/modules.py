@@ -159,7 +159,8 @@ def effective_modules(db: Session, ctx) -> list:
     if getattr(ctx, "is_super_admin", False):
         return list(MODULE_KEYS)
 
-    ceiling = ceiling_for(db, ctx.org_id)
+    carried = getattr(ctx, "ceiling", None)
+    ceiling = list(carried) if carried is not None else ceiling_for(db, ctx.org_id)
 
     if getattr(ctx, "is_owner", False):
         return ceiling

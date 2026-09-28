@@ -21,6 +21,8 @@ class AccountResponse(BaseModel):
     # gate paid features on — `subscription_status` is for display.
     subscription_status: Optional[str] = None
     subscription_active: bool = False
+    # A cancellation is scheduled; still paid up until the period ends.
+    subscription_cancel_at_period_end: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -31,10 +31,10 @@ from src.services import modules
 # place to update.
 FREE_CEILING = plans.modules_for_plan(plans.PLAN_FREE)
 PREMIUM_CEILING = plans.modules_for_plan(plans.PLAN_PREMIUM)
+from src.services import invitations
 from src.services.organizations import (
     ensure_membership,
     own_org_for,
-    pin_plan,
 )
 
 
@@ -228,25 +228,48 @@ def test_billing_only_follows_the_owner_s_subscription(db: Session):
         db, own_org_for(db, acct.id).id) == PREMIUM_CEILING
 
 
-def test_becoming_a_team_pins_the_plan(db: Session):
-    """A colleague must not lose Contacts because the founder's card expired.
+def _team_of(db: Session, owner: Account, colleague_id: int) -> Organization:
+    """The owner's workspace with one colleague let in through a real invite."""
+    ensure_membership(db, owner)
+    org = own_org_for(db, owner.id)
+    colleague = _account(db, colleague_id)
+    invitation, _ = invitations.issue(
+        db, org_id=org.id, email=colleague.email,
+        role=roles.ROLE_MANAGER, invited_by_account_id=owner.id)
+    invitations.accept(db, invitation, colleague)
+    db.flush()
+    return org
 
-    Until somebody else is let in, the plan follows the owner's subscription.
-    The moment it stops being one person's workspace it is pinned — because the
-    people it would now move are no longer the person paying.
+
+def test_becoming_a_team_does_not_pin_the_plan(db: Session):
+    """Accepting an invite used to freeze the org on its plan at that moment.
+
+    That let an owner cancel and keep premium forever, so it was removed.
     """
-    acct = _account(db, 8112)
-    acct.subscription_status = "active"
-    ensure_membership(db, acct)
-    org = own_org_for(db, acct.id)
+    owner = _account(db, 8112, subscription_status="active")
+    org = _team_of(db, owner, 8113)
+
+    assert org.pinned_plan is None
     assert modules.ceiling_for(db, org.id) == PREMIUM_CEILING
 
-    pin_plan(db, org)
-    db.flush()
 
-    assert org.pinned_plan == plans.PLAN_PREMIUM
+def test_a_team_upgrades_when_its_owner_pays(db: Session):
+    """A free owner who invites people and later pays must get premium."""
+    owner = _account(db, 8114)
+    org = _team_of(db, owner, 8115)
+    assert modules.ceiling_for(db, org.id) == FREE_CEILING
 
-    acct.subscription_status = "canceled"
+    owner.subscription_status = "active"
     db.flush()
-    assert modules.ceiling_for(db, org.id) == PREMIUM_CEILING, (
-        "the team keeps the plan it had when it became a team")
+    assert modules.ceiling_for(db, org.id) == PREMIUM_CEILING
+
+
+def test_a_team_follows_its_owner_off_premium(db: Session):
+    """A cancelled owner's team drops to free once grace runs out."""
+    owner = _account(db, 8116, subscription_status="active")
+    org = _team_of(db, owner, 8117)
+
+    owner.subscription_status = "canceled"
+    owner.subscription_lapsed_at = None   # no grace moment on record
+    db.flush()
+    assert modules.ceiling_for(db, org.id) == FREE_CEILING

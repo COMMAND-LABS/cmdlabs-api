@@ -22,10 +22,10 @@ import uuid
 # (SpaceMember.tier_key was the other per-container tier and had nothing to do
 # with billing either. It went with spaces.)
 
-# Stripe subscription statuses that mean "this account has paid and is entitled
-# to the Premium features". Deliberately excludes past_due/unpaid/incomplete:
-# an attached card that was never successfully charged is not a paying member.
-ACTIVE_SUBSCRIPTION_STATUSES = ('active', 'trialing')
+# Stripe subscription statuses that mean "this account has paid". Defined once,
+# in config/plans_registry, and re-exported here for the callers that already
+# import it from the models.
+from src.config.plans_registry import ACTIVE_SUBSCRIPTION_STATUSES  # noqa: E402,F401
 
 
 # role_for_subscription() lived here and is gone with the `role` column it
@@ -68,6 +68,10 @@ class Account(Base):
     stripe_subscription_id = Column(String, nullable=True, index=True)
     subscription_status = Column(String(30), nullable=True, index=True)
     subscription_current_period_end = Column(DateTime(timezone=True), nullable=True)
+    # A cancellation is scheduled: still entitled until the period ends, when
+    # Stripe deletes the subscription. Display only; never gates anything.
+    subscription_cancel_at_period_end = Column(Boolean, nullable=False,
+                                               server_default=text("false"), default=False)
     # WHEN the subscription stopped being an entitling one. Set by the webhook
     # on the transition out of active/trialing, cleared on the way back in.
     #
@@ -150,8 +154,8 @@ class Organization(Base):
     plans_registry.PLAN_MODULES[plan], where plan is either pinned here or read
     from the owner's subscription. For a PERSONAL org that is the whole
     entitlement, because its single member is its owner and an owner bypasses
-    the tier layer; tiers only start mattering once an org has somebody in it
-    who is not the owner. Resolved at read time (services/modules.py), so a
+    roles; roles only start mattering once an org has somebody in it who is
+    not the owner. A team keeps following its owner's subscription. Resolved at read time (services/modules.py), so a
     change to a plan reaches every org on their next request.
     """
     __tablename__ = 'organizations'
@@ -216,9 +220,9 @@ class OrganizationMember(Base):
     ability to define their own bundles and buy back an answer to "what can
     this person do?" that means the same thing in every org.
 
-    granted_by is the override that makes comping work:
-      'subscription' - owned by the Stripe webhook; lapses when billing does.
-      'grant'        - set by an owner; NEVER written by any webhook.
+    granted_by is VESTIGIAL. Every writer sets 'grant' and nothing reads it;
+    comping is Organization.pinned_plan now. The column stays only because
+    dropping it is a migration with no user-visible benefit. Do not build on it.
 
     OWNERSHIP IS NOT HERE, AND IS NOT A ROLE VALUE. It is
     organizations.owner_account_id, and nowhere else. There used to be an
@@ -1074,7 +1078,7 @@ class AccessGrantEvent(Base):
             "'member.invite','member.invite_revoke',"
             "'member.invite_decline','member.invite_resend',"
             "'org.create','org.suspend','org.restore','org.ceiling_change',"
-            "'org.rename',"
+            "'org.rename','org.owner_transfer',"
             "'tier.modules_change',"
             "'catalog.publish','catalog.unpublish','catalog.grant','catalog.revoke',"
             "'super_admin.join',"

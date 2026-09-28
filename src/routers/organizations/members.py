@@ -44,6 +44,7 @@ slugs — an id identifies them everywhere — so the gate is gone and inviting 
 one step. The DISPLAY name is still editable, and now it is the only name there
 is.
 """
+import dataclasses
 import logging
 import re
 from datetime import datetime
@@ -54,7 +55,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from src.config import roles_registry as roles
 from src.db.models import Account, Organization, OrganizationMember
-from src.deps import db_dependency, named_org_dependency, org_dependency, require_org_owner
+from src.deps import db_dependency, named_org_dependency, require_org_owner
 from src.rate_limit import limiter
 from src.services import audit, invitations
 from src.services.invitation_mail import send_invitation
@@ -70,10 +71,9 @@ class MemberResponse(BaseModel):
     # Their role in THIS org: 'manager' | 'community_member'. Inert when
     # is_owner is true — an owner bypasses roles entirely.
     role: str
+    # Display name for `role`, from roles_registry, so no client keeps its own.
+    role_label: str
     is_owner: bool
-    # 'grant' | 'subscription'. Invited members are always granted: their
-    # access rides on the org, not on a subscription they never bought.
-    granted_by: str
     created_at: Optional[datetime] = None
 
 
@@ -88,24 +88,32 @@ class PendingInvitationResponse(BaseModel):
     id: int
     email: str
     role: str
+    role_label: str
     invited_by: Optional[str] = None
     created_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None
+
+
+class RoleOption(BaseModel):
+    key: str
+    label: str
 
 
 class MembersPageResponse(BaseModel):
     org_id: int
     org_name: str
     can_manage: bool
+    # Who is asking, so the page can mark "you" and offer Leave on that row.
+    viewer_account_id: int
     members: List[MemberResponse]
     # Outstanding invitations, newest first. Everyone in the org sees them, on
     # the same reasoning that everyone sees the roster: who is about to be able
     # to read your org's data is not a secret from the people already in it.
     # Only an owner can act on them — that is `can_manage`.
     invitations: List[PendingInvitationResponse] = []
-    # Role keys an invite may choose from, so the dropdown cannot offer one
-    # this org does not have.
-    role_keys: List[str]
+    # Roles an invite or a role change may choose from, with display names,
+    # so the dropdown cannot offer one this org does not have.
+    roles: List[RoleOption]
 
 
 # Deliberately not pydantic's EmailStr: that pulls in email-validator, which
@@ -198,9 +206,11 @@ def _members_payload(db, org) -> MembersPageResponse:
         org_id=org.org_id,
         org_name=organization.name,
         can_manage=org.is_owner,
+        viewer_account_id=org.account_id,
         invitations=[
             PendingInvitationResponse(
                 id=i.id, email=i.email, role=i.role,
+                role_label=roles.label(i.role),
                 invited_by=inviter_emails.get(i.invited_by_account_id),
                 created_at=i.created_at, expires_at=i.expires_at,
             )
@@ -209,26 +219,15 @@ def _members_payload(db, org) -> MembersPageResponse:
         members=[
             MemberResponse(
                 account_id=m.account_id, email=a.email, role=m.role,
-                is_owner=(m.account_id == owner_id), granted_by=m.granted_by,
+                role_label=roles.label(m.role),
+                is_owner=(m.account_id == owner_id),
                 created_at=m.created_at,
             )
             for m, a in rows
         ],
         # A constant, not a query: every org offers the same roles.
-        role_keys=list(roles.ROLE_KEYS),
+        roles=[RoleOption(key=k, label=roles.label(k)) for k in roles.ROLE_KEYS],
     )
-
-
-@router.get("/members", response_model=MembersPageResponse)
-@limiter.limit("60/minute")
-async def list_members(db: db_dependency, org: org_dependency, request: Request):
-    """Everyone in the caller's ACTIVE org.
-
-    Readable by any member: knowing who your
-    colleagues are is not privileged inside a team, and hiding it would make
-    "who can see my contacts?" unanswerable from inside the product.
-    """
-    return _members_payload(db, org)
 
 
 @router.get("/{org_id}/members", response_model=MembersPageResponse)
@@ -278,15 +277,6 @@ def _rename(body: RenameOrgRequest, db, org) -> MembersPageResponse:
     # than by calling the list route — which is rate-limit decorated, so
     # invoking it here would charge a rename against the read budget too.
     return _members_payload(db, org)
-
-
-@router.put("/name", response_model=MembersPageResponse)
-@limiter.limit("30/minute")
-async def rename_organization(
-    body: RenameOrgRequest, db: db_dependency, org: org_dependency, request: Request,
-):
-    """Rename the caller's ACTIVE org."""
-    return _rename(body, db, org)
 
 
 @router.put("/{org_id}/name", response_model=MembersPageResponse)
@@ -350,11 +340,6 @@ async def _invite(body: InviteRequest, db, org,
         invited_by_account_id=org.account_id,
     )
 
-    # NOT pin_plan. The org is not a team until somebody actually joins,
-    # and pinning on the offer would freeze a solo owner's plan because
-    # they typed an address once. It happens on accept instead — see
-    # services/invitations.accept.
-
     audit.record_invitation(
         db, event_type=audit.MEMBER_INVITE, org_id=org.org_id,
         email=email, role=body.role, actor_account_id=org.account_id,
@@ -370,6 +355,7 @@ async def _invite(body: InviteRequest, db, org,
                 org.account_id, email, org.org_id, body.role)
     return PendingInvitationResponse(
         id=invitation.id, email=invitation.email, role=invitation.role,
+        role_label=roles.label(invitation.role),
         invited_by=_email_for(db, invitation.invited_by_account_id),
         created_at=invitation.created_at, expires_at=invitation.expires_at,
     )
@@ -441,23 +427,10 @@ def _resend_invitation(invitation_id: int, db, org,
     send_invitation(db, background_tasks, invitation, token)
     return PendingInvitationResponse(
         id=invitation.id, email=invitation.email, role=invitation.role,
+        role_label=roles.label(invitation.role),
         invited_by=_email_for(db, invitation.invited_by_account_id),
         created_at=invitation.created_at, expires_at=invitation.expires_at,
     )
-
-
-@router.post("/members", status_code=status.HTTP_201_CREATED,
-             response_model=PendingInvitationResponse)
-@limiter.limit("20/minute")
-async def invite_member(
-    body: InviteRequest,
-    db: db_dependency,
-    org: org_dependency,
-    request: Request,
-    background_tasks: BackgroundTasks,
-):
-    """Invite somebody to the caller's ACTIVE org."""
-    return await _invite(body, db, org, background_tasks)
 
 
 @router.post("/{org_id}/members", status_code=status.HTTP_201_CREATED,
@@ -487,16 +460,6 @@ async def invite_member_for_org(
     return await _invite(body, db, org, background_tasks)
 
 
-@router.delete("/invitations/{invitation_id}",
-               status_code=status.HTTP_204_NO_CONTENT)
-@limiter.limit("30/minute")
-async def revoke_invitation(
-    invitation_id: int, db: db_dependency, org: org_dependency, request: Request,
-):
-    """Withdraw an invitation from the caller's ACTIVE org."""
-    _revoke_invitation(invitation_id, db, org)
-
-
 @router.delete("/{org_id}/invitations/{invitation_id}",
                status_code=status.HTTP_204_NO_CONTENT)
 @limiter.limit("30/minute")
@@ -507,17 +470,6 @@ async def revoke_invitation_for_org(
     """The same revoke, for an org named in the PATH. See invite_member_for_org
     for why naming the org relaxes nothing."""
     _revoke_invitation(invitation_id, db, org)
-
-
-@router.post("/invitations/{invitation_id}/resend",
-             response_model=PendingInvitationResponse)
-@limiter.limit("20/minute")
-async def resend_invitation(
-    invitation_id: int, db: db_dependency, org: org_dependency,
-    request: Request, background_tasks: BackgroundTasks,
-):
-    """Re-send an invitation from the caller's ACTIVE org, with a fresh token."""
-    return _resend_invitation(invitation_id, db, org, background_tasks)
 
 
 @router.post("/{org_id}/invitations/{invitation_id}/resend",
@@ -561,20 +513,10 @@ async def _update_role(account_id: int, body: UpdateMemberRequest,
     db.refresh(member)
     return MemberResponse(
         account_id=account_id, email=account.email, role=member.role,
+        role_label=roles.label(member.role),
         is_owner=(account_id == _owner_account_id(db, org.org_id)),
-        granted_by=member.granted_by,
         created_at=member.created_at,
     )
-
-
-@router.put("/members/{account_id}", response_model=MemberResponse)
-@limiter.limit("30/minute")
-async def update_member_role(
-    account_id: int, body: UpdateMemberRequest,
-    db: db_dependency, org: org_dependency, request: Request,
-):
-    """Move a member of the ACTIVE org to a different role."""
-    return await _update_role(account_id, body, db, org)
 
 
 @router.put("/{org_id}/members/{account_id}", response_model=MemberResponse)
@@ -599,8 +541,12 @@ def _remove(account_id: int, db, org) -> None:
     colleague's contacts and notes would be an unrecoverable answer to a
     reversible problem, and account_id has been attribution rather than
     ownership since org scoping landed.
+
+    The owner may remove anyone but themselves. Anyone else may remove only
+    themselves, which is how a member LEAVES an org.
     """
-    require_org_owner(org)
+    if account_id != org.account_id:
+        require_org_owner(org)
 
     member = (db.query(OrganizationMember)
                 .filter(OrganizationMember.org_id == org.org_id,
@@ -621,7 +567,7 @@ def _remove(account_id: int, db, org) -> None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="This is the organization's owner and cannot be "
-                   "removed.",
+                   "removed. Transfer ownership to another member first.",
         )
 
     audit.record_membership(
@@ -646,15 +592,6 @@ def _remove(account_id: int, db, org) -> None:
                 org.account_id, account_id, org.org_id)
 
 
-@router.delete("/members/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
-@limiter.limit("30/minute")
-async def remove_member(
-    account_id: int, db: db_dependency, org: org_dependency, request: Request,
-):
-    """Remove somebody from the caller's ACTIVE org."""
-    _remove(account_id, db, org)
-
-
 @router.delete("/{org_id}/members/{account_id}",
                status_code=status.HTTP_204_NO_CONTENT)
 @limiter.limit("30/minute")
@@ -665,3 +602,61 @@ async def remove_member_for_org(
     """The same removal, for an org named in the PATH. See
     invite_member_for_org for why naming the org relaxes nothing."""
     _remove(account_id, db, org)
+
+
+class TransferOwnershipRequest(BaseModel):
+    account_id: int
+
+
+@router.put("/{org_id}/owner", response_model=MembersPageResponse)
+@limiter.limit("10/minute")
+async def transfer_ownership(
+    body: TransferOwnershipRequest, db: db_dependency,
+    org: named_org_dependency, request: Request,
+):
+    """Hand the org to another member. Owner only.
+
+    Without this an owner could never leave, and an org whose owner left the
+    company needed a super admin. The org's plan follows its owner's
+    subscription (services/modules.org_entitlement), so after the transfer it
+    is the NEW owner's billing that counts.
+
+    The previous owner stays in as a manager. Their membership row still holds
+    whatever role it had while it was inert, usually the smaller one, and
+    handing over your org should not also demote you to it.
+    """
+    require_org_owner(org)
+    if body.account_id == org.account_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="You already own this organization.")
+
+    target = (db.query(OrganizationMember)
+                .filter(OrganizationMember.org_id == org.org_id,
+                        OrganizationMember.account_id == body.account_id)
+                .first())
+    if target is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="Not a member of this organization.")
+
+    organization = _load_org(db, org.org_id)
+    previous = (db.query(OrganizationMember)
+                  .filter(OrganizationMember.org_id == org.org_id,
+                          OrganizationMember.account_id == org.account_id)
+                  .first())
+    if previous is not None:
+        previous.role = roles.ROLE_MANAGER
+    organization.owner_account_id = body.account_id
+
+    audit.record_org_change(
+        db, event_type=audit.ORG_OWNER_TRANSFER, org_id=org.org_id,
+        detail=(f"from {_email_for(db, org.account_id)} "
+                f"to {_email_for(db, body.account_id)}"),
+        actor_account_id=org.account_id,
+    )
+    db.commit()
+    logger.info("[ORG] %s transferred org %s to %s",
+                org.account_id, org.org_id, body.account_id)
+
+    # The caller is no longer the owner, so the payload is built for a
+    # context that says so.
+    return _members_payload(db, dataclasses.replace(org, is_owner=False))

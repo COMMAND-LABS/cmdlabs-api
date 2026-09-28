@@ -97,7 +97,7 @@ def test_client():
             role="manager",
             is_super_admin=True,
             is_owner=True,
-            is_read_only=False,
+            read_only=False,
         )
 
     app.dependency_overrides[get_db] = override_db

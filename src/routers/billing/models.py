@@ -21,5 +21,7 @@ class SubscriptionResponse(BaseModel):
     status: Optional[str] = None
     active: bool
     current_period_end: Optional[str] = None
+    # Cancelled in the portal but still paid up: show "Ends on", not "Renews on".
+    cancel_at_period_end: bool = False
 
     model_config = ConfigDict(from_attributes=True)

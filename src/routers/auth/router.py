@@ -13,7 +13,6 @@ from src.routers.auth.background_tasks.send_reset_password_link_email_ses import
 from src.routers.auth.background_tasks.send_password_has_been_reset_email_ses import send_password_has_been_reset_email_ses
 from src.routers.auth.background_tasks.send_login_code_email_ses import send_login_code_email_ses
 from src.deps import db_dependency, bcrypt_context, jwt_dependency
-from src.clients.stripe_client import create_stripe_customer
 
 from src.services.organizations import ensure_membership
 from src.rate_limit import limiter
@@ -24,6 +23,11 @@ router = APIRouter()
 
 SECRET_KEY = os.getenv("AUTH_SECRET_KEY")
 ALGORITHM = os.getenv("AUTH_ALGORITHM")
+
+# Optional ceiling on the number of accounts, for throttling a launch. Unset or
+# 0 means no cap, and the count query is skipped entirely. This used to be a
+# hardcoded 400, which would have silently stopped all signups at account 400.
+SIGNUP_CAP = int(os.getenv("SIGNUP_CAP", "0") or 0)
 
 def _canonical_email(v: str) -> str:
     """Canonical email form used for storage and lookups (lowercase + trimmed)."""
@@ -157,21 +161,16 @@ async def request_login_code(body: RequestCodeBody, db: db_dependency, request: 
     account = db.query(Account).filter(Account.email == body.email).first()
 
     if not account:
-        account_count = db.query(Account).count()
-        if account_count >= 400:
+        if SIGNUP_CAP and db.query(Account).count() >= SIGNUP_CAP:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Account creation is currently limited.",
             )
-        stripe_customer_id = None
-        try:
-            stripe_customer_id = create_stripe_customer(body.email)
-        except Exception:
-            pass
-
+        # No Stripe customer yet. It used to be created here, before the email
+        # was even verified, so every typo and bot got one. Checkout creates it
+        # on first purchase (routers/billing/checkout.py).
         account = Account(
             email=body.email,
-            stripe_customer_id=stripe_customer_id,
         )
         db.add(account)
         db.flush()

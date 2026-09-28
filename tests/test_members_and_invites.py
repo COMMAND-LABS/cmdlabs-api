@@ -23,7 +23,9 @@ from src.db.models import (
 from tests.conftest import ROOT_ORG_ID, make_token
 from tests.org_isolation import Tenant, client_for, make_tenant
 
-MEMBERS = "/api/organizations/members"
+def members_url(tenant) -> str:
+    """Every members route names its org; the cookie-scoped copies were removed."""
+    return f"/api/organizations/{tenant.org_id}/members"
 MINE = "/api/organizations/mine"
 INVITATIONS = "/api/organizations/invitations"
 
@@ -114,7 +116,7 @@ async def test_invite_grants_nothing_until_it_is_accepted(
                    months. The membership is written on accept.
     """
     async with client_for(team) as c:
-        resp = await c.post(MEMBERS, json={"email": "New.Person@Acme.test",
+        resp = await c.post(members_url(team), json={"email": "New.Person@Acme.test",
                                            "role": "community_member"})
     assert resp.status_code == 201, resp.text
     body = resp.json()
@@ -142,7 +144,7 @@ async def test_accepting_is_what_creates_the_membership(
     invitee = _account(db, 9620, "joins@acme.test")
 
     async with client_for(team) as c:
-        await c.post(MEMBERS, json={"email": invitee.email,
+        await c.post(members_url(team), json={"email": invitee.email,
                                     "role": "community_member"})
     invitation = _invitation_for(db, invitee.email)
 
@@ -172,7 +174,7 @@ async def test_an_existing_account_keeps_its_own_default_org(
     """
     other = make_tenant(db, slug="already-here", account_id=9604)
     async with client_for(team) as c:
-        resp = await c.post(MEMBERS, json={"email": other.account.email,
+        resp = await c.post(members_url(team), json={"email": other.account.email,
                                            "role": "community_member"})
     assert resp.status_code == 201
 
@@ -196,7 +198,7 @@ async def test_only_the_invited_address_can_accept(
     """
     stranger = make_tenant(db, slug="stranger-home", account_id=9621)
     async with client_for(team) as c:
-        await c.post(MEMBERS, json={"email": "someone.else@acme.test",
+        await c.post(members_url(team), json={"email": "someone.else@acme.test",
                                     "role": "community_member"})
     invitation = _invitation_for(db, "someone.else@acme.test")
 
@@ -215,10 +217,10 @@ async def test_a_revoked_invitation_cannot_be_accepted(
     """Takes effect on their next click — there is no email to unsend."""
     invitee = _account(db, 9622, "too-late@acme.test")
     async with client_for(team) as c:
-        await c.post(MEMBERS, json={"email": invitee.email,
+        await c.post(members_url(team), json={"email": invitee.email,
                                     "role": "community_member"})
         invitation = _invitation_for(db, invitee.email)
-        gone = await c.delete(f"{INVITATIONS}/{invitation.id}")
+        gone = await c.delete(f"/api/organizations/{team.org_id}/invitations/{invitation.id}")
     assert gone.status_code == 204
 
     async with _client_as(invitee) as c:
@@ -243,7 +245,7 @@ async def test_the_public_lookup_leaks_nothing_about_the_org(
     db.flush()
 
     async with client_for(team) as c:
-        await c.post(MEMBERS, json={"email": "reader@acme.test",
+        await c.post(members_url(team), json={"email": "reader@acme.test",
                                     "role": "community_member"})
     token = _last_token
     assert token, "issue() handed back a raw token"
@@ -281,7 +283,7 @@ async def test_invite_refuses_an_unknown_role(db: Session, _override_db, team):
     was wrong.
     """
     async with client_for(team) as c:
-        resp = await c.post(MEMBERS, json={"email": "z@y.test",
+        resp = await c.post(members_url(team), json={"email": "z@y.test",
                                            "role": "not_a_role"})
     assert resp.status_code == 422
 
@@ -290,7 +292,7 @@ async def test_only_an_owner_can_invite(db: Session, _override_db, team):
     plain = make_tenant(db, slug="invite-co", account_id=9605,
                         role="manager", is_owner=False)
     async with client_for(plain) as c:
-        resp = await c.post(MEMBERS, json={"email": "n@y.test",
+        resp = await c.post(members_url(plain), json={"email": "n@y.test",
                                            "role": "community_member"})
     assert resp.status_code == 404, "the admin surface does not confirm it exists"
 
@@ -306,10 +308,10 @@ async def test_inviting_twice_refreshes_rather_than_duplicating(
     the row in place — new token, new expiry, same invitation.
     """
     async with client_for(team) as c:
-        first = await c.post(MEMBERS, json={"email": "dup@y.test",
+        first = await c.post(members_url(team), json={"email": "dup@y.test",
                                             "role": "community_member"})
         first_token = _last_token
-        again = await c.post(MEMBERS, json={"email": "dup@y.test",
+        again = await c.post(members_url(team), json={"email": "dup@y.test",
                                             "role": "manager"})
     assert first.status_code == 201 and again.status_code == 201
     assert first.json()["id"] == again.json()["id"], "one row, not two"
@@ -328,7 +330,7 @@ async def test_inviting_somebody_already_in_the_org_is_a_conflict(
     colleague = make_tenant(db, slug="invite-co", account_id=9612,
                             role="manager", is_owner=False)
     async with client_for(team) as c:
-        resp = await c.post(MEMBERS, json={"email": colleague.account.email,
+        resp = await c.post(members_url(team), json={"email": colleague.account.email,
                                            "role": "community_member"})
     assert resp.status_code == 409
 
@@ -352,7 +354,7 @@ async def test_removal_bites_on_the_very_next_request(
         assert (await c.get("/api/contacts/")).status_code == 200
 
     async with client_for(team) as c:
-        gone = await c.delete(f"{MEMBERS}/{colleague.account_id}")
+        gone = await c.delete(f"{members_url(team)}/{colleague.account_id}")
     assert gone.status_code == 204
 
     async with client_for(colleague) as c:
@@ -369,7 +371,7 @@ async def test_the_owner_cannot_be_removed(db: Session, _override_db, team):
     a count.
     """
     async with client_for(team) as c:
-        resp = await c.delete(f"{MEMBERS}/{team.account_id}")
+        resp = await c.delete(f"{members_url(team)}/{team.account_id}")
     assert resp.status_code == 409
     assert "owner" in resp.json()["detail"].lower()
 
@@ -387,7 +389,7 @@ async def test_a_removed_member_keeps_their_authored_rows(
     row_id = row.id
 
     async with client_for(team) as c:
-        await c.delete(f"{MEMBERS}/{colleague.account_id}")
+        await c.delete(f"{members_url(team)}/{colleague.account_id}")
 
     kept = db.query(Contact).filter(Contact.id == row_id).one()
     assert kept.account_id == colleague.account_id
@@ -484,7 +486,7 @@ async def test_renaming_is_audited(db: Session, _override_db, team):
     from src.services import audit
 
     async with client_for(team) as c:
-        await c.put("/api/organizations/name", json={"name": "Renamed Co"})
+        await c.put(f"/api/organizations/{team.org_id}/name", json={"name": "Renamed Co"})
 
     ev = (db.query(AccessGrantEvent)
             .filter(AccessGrantEvent.event_type == audit.ORG_RENAME,
@@ -495,7 +497,7 @@ async def test_renaming_is_audited(db: Session, _override_db, team):
 
 async def test_a_blank_name_is_refused(db: Session, _override_db, team):
     async with client_for(team) as c:
-        resp = await c.put("/api/organizations/name", json={"name": "   "})
+        resp = await c.put(f"/api/organizations/{team.org_id}/name", json={"name": "   "})
     assert resp.status_code == 422
 
 
@@ -503,7 +505,7 @@ async def test_a_member_cannot_rename(db: Session, _override_db, team):
     plain = make_tenant(db, slug="invite-co", account_id=9611,
                         role="manager", is_owner=False)
     async with client_for(plain) as c:
-        resp = await c.put("/api/organizations/name", json={"name": "Hijack"})
+        resp = await c.put(f"/api/organizations/{plain.org_id}/name", json={"name": "Hijack"})
     assert resp.status_code == 404
 
 
@@ -527,7 +529,7 @@ async def test_signing_in_with_an_invitation_waiting_creates_no_workspace(
     from src.services import organizations
 
     async with client_for(team) as c:
-        await c.post(MEMBERS, json={"email": "waiting@acme.test",
+        await c.post(members_url(team), json={"email": "waiting@acme.test",
                                     "role": "community_member"})
 
     invitee = _account(db, 9630, "waiting@acme.test")
@@ -550,7 +552,7 @@ async def test_declining_is_what_gives_them_a_workspace(
     Declining is the moment that stops being true.
     """
     async with client_for(team) as c:
-        await c.post(MEMBERS, json={"email": "nothanks@acme.test",
+        await c.post(members_url(team), json={"email": "nothanks@acme.test",
                                     "role": "community_member"})
     invitee = _account(db, 9631, "nothanks@acme.test")
     invitation = _invitation_for(db, invitee.email)
@@ -592,7 +594,7 @@ async def test_accepting_leaves_them_with_exactly_one_membership(
     from src.services import organizations
 
     async with client_for(team) as c:
-        await c.post(MEMBERS, json={"email": "clean@acme.test",
+        await c.post(members_url(team), json={"email": "clean@acme.test",
                                     "role": "community_member"})
     invitee = _account(db, 9633, "clean@acme.test")
     organizations.ensure_membership(db, invitee)   # their first verified login
@@ -657,3 +659,87 @@ async def test_the_cookie_still_chooses_among_orgs_you_are_in(
         body = (await c.get(MINE,
                             cookies={ORG_COOKIE_NAME: str(team.org_id)})).json()
     assert body["active_org_id"] == team.org_id
+
+
+# ---------------------------------------------------------------------------
+# Leaving, and handing an org over
+# ---------------------------------------------------------------------------
+
+def _team(db, owner_id: int, member_id: int, member_role="community_member"):
+    from src.db.models import Account, OrganizationMember
+    from src.services.organizations import ensure_membership, own_org_for
+    owner = Account(id=owner_id, email=f"o{owner_id}@team.test")
+    member = Account(id=member_id, email=f"m{member_id}@team.test")
+    db.add_all([owner, member]); db.flush()
+    ensure_membership(db, owner); ensure_membership(db, member)
+    org = own_org_for(db, owner.id)
+    db.add(OrganizationMember(org_id=org.id, account_id=member.id,
+                              role=member_role, granted_by="grant"))
+    db.flush()
+    return owner, member, org
+
+
+def _as(account):
+    from tests.conftest import make_token
+    return {"Authorization": f"Bearer {make_token(email=account.email, user_id=account.id)}"}
+
+
+async def test_a_member_can_leave(client, db):
+    from src.db.models import OrganizationMember
+    owner, member, org = _team(db, 9401, 9402)
+
+    resp = await client.delete(f"/api/organizations/{org.id}/members/{member.id}",
+                               headers=_as(member))
+
+    assert resp.status_code == 204, resp.text
+    assert db.query(OrganizationMember).filter_by(
+        org_id=org.id, account_id=member.id).first() is None
+
+
+async def test_a_member_cannot_remove_someone_else(client, db):
+    owner, member, org = _team(db, 9403, 9404)
+
+    resp = await client.delete(f"/api/organizations/{org.id}/members/{owner.id}",
+                               headers=_as(member))
+
+    assert resp.status_code == 404
+
+
+async def test_the_owner_cannot_leave_without_handing_over(client, db):
+    owner, member, org = _team(db, 9405, 9406)
+
+    resp = await client.delete(f"/api/organizations/{org.id}/members/{owner.id}",
+                               headers=_as(owner))
+
+    assert resp.status_code == 409
+    assert "Transfer ownership" in resp.json()["detail"]
+
+
+async def test_ownership_can_be_transferred(client, db):
+    from src.db.models import OrganizationMember
+    owner, member, org = _team(db, 9407, 9408)
+
+    resp = await client.put(f"/api/organizations/{org.id}/owner",
+                            json={"account_id": member.id}, headers=_as(owner))
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["can_manage"] is False
+    db.refresh(org)
+    assert org.owner_account_id == member.id
+    previous = db.query(OrganizationMember).filter_by(
+        org_id=org.id, account_id=owner.id).one()
+    assert previous.role == "manager", "handing over must not demote you"
+
+    # And the old owner can now leave.
+    resp = await client.delete(f"/api/organizations/{org.id}/members/{owner.id}",
+                               headers=_as(owner))
+    assert resp.status_code == 204, resp.text
+
+
+async def test_only_the_owner_can_transfer(client, db):
+    owner, member, org = _team(db, 9409, 9410, member_role="manager")
+
+    resp = await client.put(f"/api/organizations/{org.id}/owner",
+                            json={"account_id": member.id}, headers=_as(member))
+
+    assert resp.status_code == 404

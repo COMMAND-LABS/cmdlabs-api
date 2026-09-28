@@ -71,9 +71,10 @@ PLAN_FREE = "free"
 PLAN_PREMIUM = "premium"
 PLAN_KEYS = (PLAN_FREE, PLAN_PREMIUM)
 
-# Stripe statuses that count as paid. Kept here rather than imported from
-# db.models so this module stays importable by config-level code with no ORM
-# dependency; db.models holds the same tuple for the Account property.
+# Stripe statuses that count as paid. THE definition: db.models re-exports it
+# for Account.has_active_subscription. Kept here, with no ORM dependency, so
+# config-level code can import it. Excludes past_due/unpaid/incomplete: a card
+# that was never successfully charged is not a paying member.
 ACTIVE_SUBSCRIPTION_STATUSES = ("active", "trialing")
 
 # What each plan includes. Keys must exist in modules_registry.MODULES.
@@ -200,6 +201,19 @@ def org_billing_state(pinned_plan: str | None, owner_billing) -> str:
     if pinned_plan is not None or owner_billing is None:
         return BILLING_ACTIVE
     return billing_state(owner_billing[0], owner_billing[1])
+
+
+def org_plan(pinned_plan: str | None, owner_billing) -> str:
+    """An ORG's plan from its pin and its owner's (status, lapsed_at).
+
+    The same rule services/modules.org_entitlement applies per request, for
+    callers that have already loaded the rows in bulk (the admin org list).
+    """
+    if pinned_plan is not None:
+        return pinned_plan
+    if owner_billing is None:
+        return PLAN_FREE
+    return plan_for(owner_billing[0], owner_billing[1])
 
 
 def _utcnow() -> datetime:
