@@ -1,0 +1,159 @@
+"""
+Historical duty data for the forecast tool: upload a CSV, list what is there.
+
+A CSV lands at datasets/<name>.csv in the UPLOADER's own GCS bucket, which is
+exactly where the timeSeriesForecast / codeExecution tools read an agent
+owner's datasets from (agent_runtime/tools/datasets.py). So an agent's owner
+uploads here and points the forecast tool's `dataset.gcsPath` at the result;
+the response carries a ready-to-paste tool config for that.
+
+Monthly data: one row per month, a date column and at least one numeric
+column. The runner needs MIN_ROWS rows to train (runner/runner/forecast.py).
+"""
+import csv
+import datetime as dt
+import io
+import re
+
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
+
+from src.deps import auth_dependency, db_dependency, org_dependency
+from src.rate_limit import limiter
+from src.services import account_gcs_service
+from src.services.account_gcs_service import AccountGcsCredentialMissing
+
+router = APIRouter()
+
+PREFIX = "datasets/"
+MAX_BYTES = 10 * 1024 * 1024
+MIN_ROWS = 32      # runner/runner/forecast.py: max(LAGS) + 20
+_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}\.csv$")
+
+
+class DatasetError(ValueError):
+    """A problem with an uploaded CSV, in a message written here for the uploader."""
+
+
+def _parse_date(value: str) -> dt.date | None:
+    value = value.strip()
+    for fmt in ("%Y-%m-%d", "%Y-%m", "%m/%d/%Y", "%Y/%m/%d"):
+        try:
+            return dt.datetime.strptime(value, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _is_number(value: str) -> bool:
+    try:
+        float(value.replace(",", "").replace("$", "").strip())
+        return True
+    except ValueError:
+        return False
+
+
+def inspect_csv(data: bytes) -> dict:
+    """Columns, row count, date range, and the forecast tool config this file
+    supports. Raises DatasetError with a message a person can act on."""
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise DatasetError("The file is not UTF-8 text.")
+    rows = list(csv.DictReader(io.StringIO(text)))
+    if not rows:
+        raise DatasetError("The CSV has a header but no rows.")
+    columns = [c for c in (rows[0].keys()) if c]
+
+    def share(col, test):
+        vals = [r.get(col) or "" for r in rows]
+        return sum(1 for v in vals if v and test(v)) / len(vals)
+
+    date_cols = [c for c in columns if share(c, lambda v: _parse_date(v) is not None) >= 0.95]
+    if not date_cols:
+        raise DatasetError("No date column found (expected values like 2025-01-01 or 2025-01).")
+    date_col = date_cols[0]
+    numeric = [c for c in columns if c != date_col and share(c, _is_number) >= 0.95]
+    if not numeric:
+        raise DatasetError("No numeric column found to forecast.")
+    if len(rows) < MIN_ROWS:
+        raise DatasetError(f"The forecast needs at least {MIN_ROWS} monthly rows; this file has {len(rows)}.")
+
+    dates = sorted(d for d in (_parse_date(r[date_col] or "") for r in rows) if d)
+    rate_col = next((c for c in numeric if "rate" in c.lower()), None)
+    # Forecast the value the rate applies to (import_value), not the rate, and
+    # not a column that is already value x rate (duty_spend).
+    non_rate = [c for c in numeric if c != rate_col] or numeric
+    target = next((c for c in non_rate if "spend" not in c.lower()), non_rate[0])
+    return {
+        "columns": columns,
+        "rows": len(rows),
+        "date_column": date_col,
+        "numeric_columns": numeric,
+        "first_period": dates[0].isoformat(),
+        "last_period": dates[-1].isoformat(),
+        "suggested": {"target_column": target, "rate_column": rate_col},
+    }
+
+
+def tool_config(gcs_path: str, info: dict) -> dict:
+    cfg = {
+        "type": "timeSeriesForecast",
+        "name": "forecast_duty_spend",
+        "dataset": {"gcsPath": gcs_path},
+        "dateColumn": info["date_column"],
+        "targetColumn": info["suggested"]["target_column"],
+    }
+    if info["suggested"]["rate_column"]:
+        cfg["rate"] = {"column": info["suggested"]["rate_column"], "outputName": "duty_spend"}
+    return cfg
+
+
+def _gcs_error(e: AccountGcsCredentialMissing):
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get("/datasets")
+@limiter.limit("30/minute")
+async def list_datasets(db: db_dependency, auth: auth_dependency, org: org_dependency,
+                        request: Request):
+    try:
+        objects = account_gcs_service.list_objects(db, org.account_id, prefix=PREFIX)
+    except AccountGcsCredentialMissing as e:
+        raise _gcs_error(e)
+    return [o for o in objects if o["path"].lower().endswith(".csv")]
+
+
+@router.post("/datasets", status_code=status.HTTP_201_CREATED)
+@limiter.limit("20/minute")
+async def upload_dataset(
+    db: db_dependency, auth: auth_dependency, org: org_dependency, request: Request,
+    file: UploadFile = File(...),
+    replace: bool = Form(False),
+):
+    name = (file.filename or "").strip()
+    if not _NAME.match(name):
+        raise HTTPException(status_code=400, detail=(
+            "Use a .csv file name made of letters, digits, '.', '_' or '-'."))
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="File is empty")
+    if len(data) > MAX_BYTES:
+        raise HTTPException(status_code=400, detail="File exceeds the 10 MB limit")
+    try:
+        info = inspect_csv(data)
+    except DatasetError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    path = PREFIX + name
+    try:
+        if not replace and account_gcs_service.object_exists(db, org.account_id, gcs_file_path=path):
+            raise HTTPException(status_code=409, detail=(
+                f"{path} already exists. Tick 'Replace' to overwrite it; agents "
+                "reading it will use the new data from their next forecast."))
+        ref = account_gcs_service.upload_bytes(db, org.account_id, file_bytes=data,
+                                               gcs_file_path=path, content_type="text/csv")
+    except AccountGcsCredentialMissing as e:
+        raise _gcs_error(e)
+
+    return {"gcs_bucket": ref["gcs_bucket"], "gcs_file_path": path, **info,
+            "tool_config": tool_config(path, info)}

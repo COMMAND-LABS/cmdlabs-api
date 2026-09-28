@@ -135,3 +135,66 @@ async def test_cannot_review_another_orgs_measure(authed_client, db: Session):
     assert resp.status_code == 404
     db.refresh(m)
     assert m.status == "proposed"
+
+
+# ---------------------------------------------------------------------------
+# Upload Data: historical CSVs for the forecast tool
+# ---------------------------------------------------------------------------
+
+MOCK_CSV = open("data/mock/duty_spend.csv", "rb").read()
+
+
+def test_inspect_the_mock_dataset():
+    from src.routers.tariffs.datasets import inspect_csv, tool_config
+    info = inspect_csv(MOCK_CSV)
+    assert info["rows"] == 60
+    assert info["date_column"] == "month"
+    assert (info["first_period"], info["last_period"]) == ("2021-01-01", "2025-12-01")
+    assert info["suggested"] == {"target_column": "import_value", "rate_column": "duty_rate"}
+    assert tool_config("datasets/duty_spend.csv", info) == {
+        "type": "timeSeriesForecast", "name": "forecast_duty_spend",
+        "dataset": {"gcsPath": "datasets/duty_spend.csv"},
+        "dateColumn": "month", "targetColumn": "import_value",
+        "rate": {"column": "duty_rate", "outputName": "duty_spend"}}
+
+
+def test_inspect_rejects_unusable_files():
+    import pytest
+    from src.routers.tariffs.datasets import inspect_csv
+    for data, msg in [
+        (b"a,b\nx,y\n", "No date column"),
+        (b"month,note\n2025-01-01,hi\n", "No numeric column"),
+        (b"month,v\n2025-01-01,1\n2025-02-01,2\n", "at least 32"),
+    ]:
+        with pytest.raises(ValueError, match=msg):
+            inspect_csv(data)
+
+
+async def test_upload_stores_under_datasets_and_refuses_silent_overwrite(
+    authed_client, test_account, monkeypatch
+):
+    from src.services import account_gcs_service as gcs
+    stored = {}
+    monkeypatch.setattr(gcs, "object_exists",
+                        lambda db, acct, gcs_file_path: gcs_file_path in stored)
+
+    def upload(db, acct, *, file_bytes, gcs_file_path, content_type=None):
+        stored[gcs_file_path] = (acct, file_bytes)
+        return {"gcs_bucket": "b", "gcs_file_path": gcs_file_path}
+    monkeypatch.setattr(gcs, "upload_bytes", upload)
+
+    files = {"file": ("duty_spend.csv", MOCK_CSV, "text/csv")}
+    resp = await authed_client.post("/api/tariffs/datasets", files=files)
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["tool_config"]["dataset"]["gcsPath"] == "datasets/duty_spend.csv"
+    assert stored["datasets/duty_spend.csv"][0] == test_account.id   # the uploader's bucket
+
+    again = await authed_client.post("/api/tariffs/datasets", files=files)
+    assert again.status_code == 409
+    replaced = await authed_client.post("/api/tariffs/datasets", files=files,
+                                        data={"replace": "true"})
+    assert replaced.status_code == 201
+
+    bad = await authed_client.post("/api/tariffs/datasets",
+                                   files={"file": ("../x.csv", MOCK_CSV, "text/csv")})
+    assert bad.status_code == 400

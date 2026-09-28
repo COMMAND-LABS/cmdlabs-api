@@ -35,6 +35,7 @@ SAFE_EXCEPTION_TYPES = {
     "HTTPException",
     "AccountGcsCredentialMissing",
     "SkillMarkdownError",
+    "DatasetError",          # routers/tariffs/datasets: CSV checks, fixed messages
     "SesSendError",          # built from public_reason (services/email_dispatch)
     "MissingVariablesError",
     "RunnerError",           # runner_client: detail is the runner's own message

@@ -152,3 +152,9 @@ async def calculate_duty(
         db, org.org_id, hts_code=hts_code, origin=origin,
         on_date=entry_date or dt.date.today(), customs_value=customs_value,
         quantity=quantity)
+
+
+# Historical data for the forecast tool (Tariffs -> Upload Data).
+from .datasets import router as datasets_router  # noqa: E402
+
+router.include_router(datasets_router)

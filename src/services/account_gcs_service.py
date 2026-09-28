@@ -164,6 +164,26 @@ def upload_bytes(
     return {"gcs_bucket": bucket_name, "gcs_file_path": gcs_file_path}
 
 
+def list_objects(db: Session, account_id: int, *, prefix: str) -> list[Dict[str, Any]]:
+    """Objects under `prefix` in the account's bucket: [{path, size, updated}].
+
+    Raises AccountGcsCredentialMissing if the account has no GCS credential.
+    """
+    service_account_json, bucket_name = _resolve_account_gcs_config(db, account_id)
+    client = _build_storage_client(service_account_json)
+    return [
+        {"path": b.name, "size": b.size, "updated": b.updated}
+        for b in client.list_blobs(bucket_name, prefix=prefix)
+        if not b.name.endswith("/")
+    ]
+
+
+def object_exists(db: Session, account_id: int, *, gcs_file_path: str) -> bool:
+    service_account_json, bucket_name = _resolve_account_gcs_config(db, account_id)
+    client = _build_storage_client(service_account_json)
+    return client.bucket(bucket_name).blob(gcs_file_path).exists()
+
+
 def download_bytes(
     db: Session,
     account_id: int,
