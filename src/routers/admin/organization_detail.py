@@ -45,7 +45,6 @@ class AdminMember(BaseModel):
     email: str
     role: str
     is_owner: bool
-    granted_by: str
     # Which modules this member actually resolves to — ceiling ∩ role, with the
     # owner bypass applied. The single most asked support question is "why
     # can't they see X", and answering it from a role name alone requires
@@ -150,7 +149,7 @@ async def organization_detail(
     members = [
         AdminMember(
             account_id=m.account_id, email=a.email, role=m.role,
-            is_owner=(m.account_id == owner_id), granted_by=m.granted_by,
+            is_owner=(m.account_id == owner_id),
             effective_modules=_effective(m), created_at=m.created_at,
         )
         for m, a in member_rows

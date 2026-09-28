@@ -218,17 +218,14 @@ def accept(db: Session, invitation: OrganizationInvitation,
     belong in the router with the HTTP status codes that express them. What is
     here is the part that must not vary between callers.
 
-    Pinning the plan is not incidental. This org is becoming a TEAM, and
-    pin_plan freezes it on the plan its owner is on now, so the people joining
-    do not lose modules the day the owner's card expires. It happens on accept
-    rather than on invite because an unanswered invitation has not made
-    anything a team yet.
+    The org's plan is NOT pinned here. It keeps following the owner's
+    subscription; see services/organizations for why the old pin-on-accept
+    behaviour was removed.
     """
     # Imported here rather than at module scope: services/organizations imports
     # this module for has_pending_for_email, and a top-level import in both
     # directions is a cycle.
-    from src.services.organizations import GRANTED_BY_GRANT, pin_plan
-    from src.db.models import Organization
+    from src.services.organizations import GRANTED_BY_GRANT
 
     existing = (db.query(OrganizationMember)
                   .filter(OrganizationMember.org_id == invitation.org_id,
@@ -236,10 +233,6 @@ def accept(db: Session, invitation: OrganizationInvitation,
                   .first())
 
     if existing is None:
-        organization = (db.query(Organization)
-                          .filter(Organization.id == invitation.org_id).one())
-        pin_plan(db, organization)
-
         existing = OrganizationMember(
             org_id=invitation.org_id,
             account_id=account.id,

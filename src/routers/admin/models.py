@@ -4,6 +4,8 @@ from typing import List, Optional
 
 from pydantic import BaseModel
 
+from src.routers.pagination import Page
+
 
 class OrganizationSummary(BaseModel):
     """One org, as a platform super admin sees it in the org list.
@@ -33,9 +35,8 @@ class OrganizationSummary(BaseModel):
         from_attributes = True
 
 
-class OrganizationListResponse(BaseModel):
+class OrganizationListResponse(Page):
     organizations: List[OrganizationSummary]
-    total: int
 
 
 class LeadMagnetStatRow(BaseModel):

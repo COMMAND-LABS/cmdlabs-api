@@ -62,6 +62,7 @@ async def my_entitlements(db: db_dependency, org: org_dependency, request: Reque
         grace_ends_at=org.grace_ends_at,
         plan=org.plan,
         modules=modules.effective_modules(db, org),
-        ceiling=(modules.ceiling_for(db, org.org_id)
+        ceiling=((list(org.ceiling) if org.ceiling is not None
+                  else modules.ceiling_for(db, org.org_id))
                  if (org.is_owner or org.is_super_admin) else None),
     )

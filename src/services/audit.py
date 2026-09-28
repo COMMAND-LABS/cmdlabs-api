@@ -55,6 +55,8 @@ ORG_SUSPEND = "org.suspend"
 ORG_RESTORE = "org.restore"
 ORG_CEILING_CHANGE = "org.ceiling_change"
 ORG_RENAME = "org.rename"
+# The owner handed the org to another member. `detail` names both parties.
+ORG_OWNER_TRANSFER = "org.owner_transfer"
 
 # Platform super admins joining a tenant in order to read its data. This is
 # what makes "our super admins cannot read your data without appearing in your

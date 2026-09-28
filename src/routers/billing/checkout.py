@@ -7,22 +7,18 @@ Pay, 3DS, receipts and promo codes with it, and keeps us in PCI SAQ A.
 """
 import logging
 import os
-from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request, status
 import stripe
 
-from src.config import plans_registry as plans
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
 from src.clients.stripe_client import (
     create_billing_portal_session,
     create_stripe_customer,
     create_subscription_checkout_session,
-    cancel_subscription_now,
 )
 from src.utils.errors import handle_db_error
 from src.rate_limit import limiter
-from .webhook import apply_subscription_change
 from .models import CheckoutSessionResponse, PortalSessionResponse, SubscriptionResponse
 
 logger = logging.getLogger(__name__)
@@ -40,6 +36,14 @@ APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:3001")
 SUCCESS_PATH = "/dashboard/membership?checkout=success"
 CANCEL_PATH = "/dashboard/membership?checkout=cancelled"
 PORTAL_RETURN_PATH = "/dashboard/membership"
+
+# A live subscription that is waiting on payment. A new Checkout here would
+# open a SECOND subscription on the same customer while the first keeps
+# dunning, so the fix is the billing portal, not another purchase.
+# `incomplete` is deliberately absent: that first payment never went through,
+# Stripe expires it within a day, and the webhook ignores the expiry once a
+# newer subscription is live (webhook.is_stale_for).
+RECOVERABLE_STATUSES = ("past_due", "unpaid", "paused")
 
 
 def _is_missing_customer(error: stripe.error.StripeError) -> bool:
@@ -76,8 +80,15 @@ async def create_checkout_session(
             detail="This account already has an active membership",
         )
 
-    # Every account gets a Stripe customer at signup, but that call is
-    # best-effort there — create one now if it did not land.
+    if (account.stripe_subscription_id
+            and account.subscription_status in RECOVERABLE_STATUSES):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=("Your membership is waiting on a payment. Update your "
+                    "card in the billing portal instead of subscribing again."),
+        )
+
+    # The Stripe customer is created on first checkout, not at signup.
     if not account.stripe_customer_id:
         try:
             account.stripe_customer_id = create_stripe_customer(account.email)
@@ -180,66 +191,12 @@ async def get_subscription_status(
         status=account.subscription_status,
         active=account.has_active_subscription,
         current_period_end=period_end.isoformat() if period_end else None,
+        cancel_at_period_end=bool(account.subscription_cancel_at_period_end),
     )
 
 
-@router.post("/downgrade", response_model=SubscriptionResponse)
-@limiter.limit("10/minute")
-async def downgrade_to_free(
-    db: db_dependency,
-    jwt: jwt_dependency,
-    request: Request,
-):
-    """
-    Cancel the membership immediately.
-
-    The account stops being paid in this request rather than waiting for a
-    webhook, so a dropped or undelivered event can never leave someone on
-    Premium for free. It is audited like any lapse (org.suspend) but, unlike a
-    failed payment, gets no grace window. Stripe also emits
-    customer.subscription.deleted; by then a lapse is on record, so applying it
-    changes nothing — a safety net if the write below failed.
-
-    Note: unused paid time is NOT refunded. Coming back is a fresh checkout.
-    """
-    account_id = account_id_from_claims(jwt)
-    account = ensure_account(db, account_id)
-
-    if not account.stripe_subscription_id or not account.has_active_subscription:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="This account does not have an active membership to cancel",
-        )
-
-    try:
-        subscription = cancel_subscription_now(account.stripe_subscription_id)
-    except stripe.error.StripeError as e:
-        raise handle_db_error(e, "[STRIPE ERROR CANCELLING SUBSCRIPTION]")
-
-    # Apply what Stripe reports through the same path as the subscription
-    # webhooks, so the transition is audited (org.suspend) here and now.
-    apply_subscription_change(
-        db, account, {**subscription, "status": subscription.get("status") or "canceled"}
-    )
-    # A voluntary cancel gets no grace window — grace is a courtesy for a
-    # failed payment, and cancelling means free now. Record the lapse as one
-    # whose window has already closed: billing_state reads that as LAPSED, and
-    # because a lapse is now on record, the customer.subscription.deleted
-    # webhook that follows cannot stamp a fresh one and start a window late.
-    account.subscription_lapsed_at = (
-        datetime.now(timezone.utc) - timedelta(days=plans.GRACE_DAYS)
-    )
-    db.commit()
-    db.refresh(account)
-
-    logger.info(
-        "[BILLING] Account %s cancelled subscription %s -> status %s",
-        account.id, account.stripe_subscription_id,
-        account.subscription_status,
-    )
-    period_end = account.subscription_current_period_end
-    return SubscriptionResponse(
-        status=account.subscription_status,
-        active=account.has_active_subscription,
-        current_period_end=period_end.isoformat() if period_end else None,
-    )
+# POST /downgrade lived here: an in-app cancel that ended the subscription
+# immediately, unrefunded and with no grace. The billing portal cancels at the
+# period end instead, which the customer has already paid for and which gets
+# the same grace window as any lapse. Two cancel paths with different outcomes
+# was a support problem, so the portal is now the only one.

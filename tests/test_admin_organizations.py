@@ -145,3 +145,16 @@ async def test_response_carries_no_tenant_data(super_admin_client: AsyncClient, 
     }
     for org in body["organizations"]:
         assert set(org.keys()) <= allowed, f"unexpected field(s): {set(org) - allowed}"
+
+
+async def test_the_org_list_pages_and_searches(super_admin_client, seeded_orgs):
+    everything = (await super_admin_client.get(ADMIN_ORGS_URL)).json()
+    assert everything["total"] >= 2
+
+    first = (await super_admin_client.get(ADMIN_ORGS_URL, params={"limit": 1})).json()
+    assert len(first["organizations"]) == 1
+    assert first["total"] == everything["total"]
+    assert first["has_more"] is True
+
+    found = (await super_admin_client.get(ADMIN_ORGS_URL, params={"q": "acm"})).json()
+    assert [o["name"] for o in found["organizations"]] == ["Acme"]

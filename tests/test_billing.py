@@ -221,126 +221,6 @@ async def test_checkout_session_without_price_configured(
 # Downgrade / resume
 # ---------------------------------------------------------------------------
 
-async def test_downgrade_cancels_immediately(
-    authed_client: AsyncClient, test_account: Account, db: Session
-):
-    """
-    Cancelling demotes in this request, not on a later webhook — a dropped
-    event must never leave someone on Premium for free.
-    """
-    test_account.stripe_subscription_id = "sub_test1"
-    test_account.subscription_status = "active"
-    db.flush()
-    assert plans.plan_for_account(test_account) == "premium"
-
-    with patch(
-        "src.routers.billing.checkout.cancel_subscription_now",
-        return_value={"id": "sub_test1", "status": "canceled"},
-    ) as mock_cancel:
-        response = await authed_client.post("/api/billing/downgrade")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["active"] is False
-    assert body["status"] == "canceled"
-    mock_cancel.assert_called_once_with("sub_test1")
-    db.refresh(test_account)
-    assert plans.plan_for_account(test_account) == "free"
-    assert test_account.has_active_subscription is False
-
-
-async def test_downgrade_records_the_lapse_so_the_webhook_is_a_no_op(
-    authed_client: AsyncClient, test_account: Account, db: Session
-):
-    """A self-service cancel is a lapse like any other.
-
-    It used to set only the status, leaving subscription_lapsed_at empty. The
-    customer.subscription.deleted webhook that follows then saw a lapsed
-    account with no timestamp and stamped one THEN — putting the account back
-    on (read-only) premium for 14 days after it had dropped to free, with no
-    org.suspend entry.
-    """
-    from src.routers.billing.webhook import apply_subscription_change
-
-    test_account.stripe_subscription_id = "sub_test1"
-    test_account.subscription_status = "active"
-    db.flush()
-
-    with patch(
-        "src.routers.billing.checkout.cancel_subscription_now",
-        return_value={"id": "sub_test1", "status": "canceled"},
-    ):
-        response = await authed_client.post("/api/billing/downgrade")
-
-    assert response.status_code == 200
-    db.refresh(test_account)
-    lapsed_at = test_account.subscription_lapsed_at
-    assert lapsed_at is not None, "the lapse is on record from the cancel itself"
-    assert plans.plan_for_account(test_account) == "free", "no grace for a voluntary cancel"
-
-    apply_subscription_change(db, test_account, {"id": "sub_test1", "status": "canceled"})
-    assert test_account.subscription_lapsed_at == lapsed_at, (
-        "the deleted webhook must not start a grace window")
-    assert plans.plan_for_account(test_account) == "free"
-
-
-async def test_downgrade_never_demotes_super_admin(
-    authed_client: AsyncClient, test_account: Account, db: Session
-):
-    """Super admins keep the platform surface after a cancellation."""
-    test_account.is_super_admin = True
-    test_account.stripe_subscription_id = "sub_test1"
-    test_account.subscription_status = "active"
-    db.flush()
-
-    with patch(
-        "src.routers.billing.checkout.cancel_subscription_now",
-        return_value={"id": "sub_test1", "status": "canceled"},
-    ):
-        response = await authed_client.post("/api/billing/downgrade")
-
-    assert response.status_code == 200
-    db.refresh(test_account)
-    assert test_account.is_super_admin is True
-
-
-async def test_downgrade_then_resubscribe(
-    authed_client: AsyncClient, test_account: Account, db: Session
-):
-    """After cancelling, checkout must be available again straight away."""
-    test_account.stripe_customer_id = "cus_test123"
-    test_account.stripe_subscription_id = "sub_test1"
-    test_account.subscription_status = "active"
-    db.flush()
-
-    # While subscribed, checkout is refused.
-    assert (await authed_client.post("/api/billing/checkout-session")).status_code == 409
-
-    with patch(
-        "src.routers.billing.checkout.cancel_subscription_now",
-        return_value={"id": "sub_test1", "status": "canceled"},
-    ):
-        await authed_client.post("/api/billing/downgrade")
-
-    with patch(
-        "src.routers.billing.checkout.create_subscription_checkout_session",
-        return_value={"id": "cs_2", "url": "https://checkout.stripe.com/c/pay/cs_2"},
-    ):
-        again = await authed_client.post("/api/billing/checkout-session")
-    assert again.status_code == 200
-
-
-async def test_downgrade_without_a_subscription_is_rejected(
-    authed_client: AsyncClient, test_account: Account
-):
-    response = await authed_client.post("/api/billing/downgrade")
-    assert response.status_code == 409
-
-
-async def test_downgrade_requires_auth(client: AsyncClient):
-    assert (await client.post("/api/billing/downgrade")).status_code == 401
-
-
 # ---------------------------------------------------------------------------
 # Webhook
 # ---------------------------------------------------------------------------
@@ -590,3 +470,88 @@ async def test_webhook_ignores_one_off_checkout(client: AsyncClient, test_accoun
         )
 
     assert response.json()["handled"] is False
+
+
+# ---------------------------------------------------------------------------
+# Out-of-order deliveries and duplicate subscriptions
+# ---------------------------------------------------------------------------
+
+async def _post(client: AsyncClient, event):
+    with patch("src.routers.billing.webhook.construct_webhook_event", return_value=event):
+        return await client.post(
+            "/api/billing/webhook", content=b"{}", headers={"stripe-signature": "ok"})
+
+
+async def test_a_late_cancel_for_an_old_subscription_is_ignored(
+    client: AsyncClient, test_account: Account, db: Session
+):
+    """Cancel A, buy B, then A's deletion arrives late. B must stay live."""
+    test_account.stripe_subscription_id = "sub_B"
+    test_account.subscription_status = "active"
+    db.flush()
+
+    response = await _post(client, _subscription_event(
+        "customer.subscription.deleted", test_account.id, "canceled", sub_id="sub_A"))
+
+    assert response.json()["handled"] is False
+    db.refresh(test_account)
+    assert test_account.stripe_subscription_id == "sub_B"
+    assert test_account.subscription_status == "active"
+
+
+async def test_a_new_paid_subscription_replaces_the_old_one(
+    client: AsyncClient, test_account: Account, db: Session
+):
+    """An event for another subscription may still UPGRADE the account."""
+    test_account.stripe_subscription_id = "sub_A"
+    test_account.subscription_status = "canceled"
+    db.flush()
+
+    response = await _post(client, _subscription_event(
+        "customer.subscription.created", test_account.id, "active", sub_id="sub_B"))
+
+    assert response.json()["handled"] is True
+    db.refresh(test_account)
+    assert test_account.stripe_subscription_id == "sub_B"
+    assert test_account.has_active_subscription is True
+
+
+@pytest.mark.parametrize("status", ["past_due", "unpaid", "paused"])
+async def test_checkout_is_refused_while_a_payment_is_pending(
+    authed_client: AsyncClient, test_account: Account, db: Session, status: str
+):
+    """A second Checkout would open a second subscription beside the dunning one."""
+    test_account.stripe_customer_id = "cus_test123"
+    test_account.stripe_subscription_id = "sub_dunning"
+    test_account.subscription_status = status
+    db.flush()
+
+    with patch(
+        "src.routers.billing.checkout.create_subscription_checkout_session"
+    ) as mock_create:
+        response = await authed_client.post("/api/billing/checkout-session")
+
+    assert response.status_code == 409
+    assert "billing portal" in response.json()["detail"]
+    mock_create.assert_not_called()
+
+
+async def test_a_scheduled_cancel_is_reported_until_the_period_ends(
+    client: AsyncClient, authed_client: AsyncClient,
+    test_account: Account, db: Session
+):
+    """A portal cancel keeps premium but must stop saying 'Renews on'."""
+    test_account.stripe_subscription_id = "sub_test1"
+    test_account.subscription_status = "active"
+    db.flush()
+
+    event = _subscription_event("customer.subscription.updated",
+                                test_account.id, "active")
+    event["data"]["object"]["cancel_at_period_end"] = True
+    await _post(client, event)
+
+    body = (await authed_client.get("/api/billing/subscription")).json()
+    assert body["active"] is True
+    assert body["cancel_at_period_end"] is True
+    me = (await authed_client.get("/api/accounts/me")).json()
+    assert me["subscription_cancel_at_period_end"] is True

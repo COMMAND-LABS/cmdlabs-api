@@ -21,14 +21,20 @@ Super admins now bypass the module ceiling wherever they are, and publishing
 became a Space (itself since removed), so the platform's org is an ordinary tenant like any
 customer's.
 
-WHY THE CEILING, NOT THE TIER
------------------------------
-A personal org's member is its owner, and an owner bypasses the tier layer
-(services/modules.effective_modules) so that one bad save in the matrix can
-never lock them out of the screen that fixes it. The consequence is that for a
-personal org the CEILING is the whole entitlement — it is what billing raises
-and lowers. Tiers only start meaning anything once an org contains somebody who
-is not its owner.
+THE PLAN FOLLOWS THE OWNER, SOLO OR TEAM
+----------------------------------------
+An org's plan is its owner's subscription unless a super admin pinned one
+(services/modules.org_entitlement). Owners bypass roles
+(services/modules.effective_modules), so for a personal org the plan is the
+whole entitlement. Roles only start meaning anything once an org contains
+somebody who is not its owner.
+
+Accepting an invitation used to pin the plan the org was on at that moment.
+That froze teams in both directions: an owner who cancelled kept premium for
+free, and a free owner who later paid stayed on free. Teams now track the
+owner's billing like everyone else, and the 14-day read-only grace window
+(config/plans_registry.billing_state) is what protects colleagues when a card
+fails.
 
 """
 import logging
@@ -64,38 +70,6 @@ logger = logging.getLogger(__name__)
 # nullable column (Organization.pinned_plan) rather than a flag over a stored
 # module list.
 GRANTED_BY_GRANT = "grant"
-
-
-def pin_plan(db: Session, org: Organization) -> None:
-    """Pin an org to the plan it is on right now. Caller commits.
-
-    Called when a workspace becomes a TEAM — the moment somebody who is not the
-    owner is let in. Until then the plan is read from the owner's subscription;
-    afterwards it must not be, because the people it would move are no longer
-    the person paying. A colleague should not lose Contacts because the
-    founder's card expired.
-
-    PINS THE PLAN, NOT THE MODULE LIST. This used to write down the resolved
-    modules and set a flag saying billing could no longer touch them, which
-    made the pin a snapshot: every module added to a plan afterwards never
-    reached the org. All three pinned orgs on the platform lost `courses` and
-    `courses` that way, silently, and it read as a missing menu item rather than
-    as a stale cache. A pinned plan tracks PLAN_MODULES as it grows.
-
-    Idempotent: an org that is already pinned is left exactly as it is.
-    """
-    if org.pinned_plan is not None:
-        return
-
-    from src.services import modules
-
-    plan = modules.org_entitlement(db, org.id).plan
-    org.pinned_plan = plan
-    audit.record_org_change(
-        db, event_type=audit.ORG_CEILING_CHANGE, org_id=org.id,
-        detail=f"pinned to the {plan} plan on becoming a team",
-    )
-    logger.info("[ORG] %s pinned to the %s plan — now a team", org.id, plan)
 
 
 def is_solo(db: Session, org_id: int) -> bool:
@@ -200,8 +174,8 @@ def ensure_membership(db: Session, account: Account,
 
         if org is None:
             # 3. Imported here rather than at module scope: services/
-            #    invitations imports pin_plan and GRANTED_BY_GRANT from this
-            #    module, and a top-level import both ways is a cycle.
+            #    invitations imports GRANTED_BY_GRANT from this module, and a
+            #    top-level import both ways is a cycle.
             from src.services import invitations
 
             if invitations.has_pending_for_email(db, account.email):
@@ -285,9 +259,8 @@ def _create_personal_org(db: Session, account: Account) -> Organization:
         name=name,
         owner_account_id=account.id,
         # pinned_plan stays NULL: this workspace follows its owner's
-        # subscription, which is what every self-serve signup should do. A
-        # super admin pins a plan (admin.set_plan), and the moment somebody
-        # else is let in pin_plan() does it automatically — see there for why.
+        # subscription, and keeps following it after other people join. Only
+        # a super admin pins a plan (admin.set_plan), to comp an org.
     )
     db.add(org)
     db.flush()
