@@ -17,7 +17,7 @@ from src.rate_limit import limiter
 from src.services.ingestion_log import record_ingestion_log
 from src.utils.errors import handle_db_error, public_reason
 from .helpers import get_pinecone_api_key_for_index
-from .list_namespace_files import SCAN_CAP, collect_ids_for_filename
+from .list_namespace_files import SCAN_CAP, collect_ids_for_filename, invalidate_namespace_cache
 from .models import DeleteFileVectorsResponse
 from src.services.vector_store_access import authorize_vector_store
 
@@ -99,12 +99,10 @@ async def delete_file_vectors_in_namespace(
                 detail="Namespace is too large to safely delete this file's vectors.",
             )
 
-        if not ids:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"No vectors found for file '{filename}' in namespace '{namespace}'",
-            )
-
+        # No ids means the file is already gone — typically deleted a moment
+        # ago while the file list still showed it (describe_index_stats lags
+        # deletes on serverless indexes). Idempotent success rather than a 404:
+        # the log row below and the cache eviction then correct the listing.
         logger.info(
             "Deleting %d vectors for file '%s' in index='%s' namespace='%s'",
             len(ids), filename, index_name, namespace,
@@ -114,10 +112,7 @@ async def delete_file_vectors_in_namespace(
             index.delete(ids=ids[i:i + DELETE_BATCH], namespace=namespace)
 
         deleted = len(ids)
-        logger.info(
-            "Successfully deleted %d vectors for file '%s' in namespace='%s'",
-            deleted, filename, namespace,
-        )
+        invalidate_namespace_cache(account_id, index_name, namespace)
 
         # ── Log to VectorDbIngestionLog ───────────────────────────────
         log_id = record_ingestion_log(
@@ -144,7 +139,10 @@ async def delete_file_vectors_in_namespace(
             filename=filename,
             vectors_deleted=deleted,
             log_id=log_id,
-            message=f"Deleted {deleted} vectors for file '{filename}'",
+            message=(
+                f"Deleted {deleted} vectors for file '{filename}'" if deleted
+                else f"File '{filename}' has no vectors left; it was already deleted"
+            ),
         )
 
     except HTTPException:

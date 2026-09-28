@@ -156,3 +156,78 @@ async def test_falls_back_to_ingestion_log_on_scan_error(
     # the log has no uploader info, so uploaded_by is None.
     assert isinstance(f["uploaded_at"], str)
     assert f["uploaded_by"] is None
+
+
+# ── deleting a file: the list must drop it although stats lag ─────────
+
+import src.routers.vectorStores.delete_file_vectors as dfv
+
+DELETE_URL = f"/api/vector-stores/indexes/{IDX}/namespaces/{NS}/file-vectors"
+
+
+class _DeletableIndex(_FakeIndex):
+    """Serverless-style: describe_index_stats keeps reporting the pre-delete
+    count, while list/fetch reflect the delete (what production showed)."""
+
+    def delete(self, ids=None, namespace=None):
+        for i in ids or []:
+            self._metas.pop(i, None)
+
+
+def _patch_both(monkeypatch, fake_index):
+    _patch_pinecone(monkeypatch, fake_index)
+    monkeypatch.setattr(dfv, "Pinecone", nf.Pinecone)
+    monkeypatch.setattr(dfv, "get_pinecone_api_key_for_index", lambda *a, **k: "fake-key")
+
+
+async def _filenames(client):
+    resp = await client.get(URL)
+    assert resp.status_code == 200, resp.text
+    return [f["filename"] for f in resp.json()["files"]]
+
+
+async def test_a_deleted_file_leaves_the_list_although_the_count_lags(
+    authed_client, monkeypatch
+):
+    fake = _DeletableIndex(ns_counts={NS: 2},
+                           metas={"v1": {"filename": "a.md"}, "v2": {"filename": "b.md"}})
+    _patch_both(monkeypatch, fake)
+    assert await _filenames(authed_client) == ["a.md", "b.md"]  # now cached
+
+    resp = await authed_client.delete(DELETE_URL, params={"filename": "a.md"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["vectors_deleted"] == 1
+
+    # Stats still say 2: a count-only cache key would serve the old list.
+    assert await _filenames(authed_client) == ["b.md"]
+
+
+async def test_another_instances_cache_moves_on_the_logged_delete(
+    authed_client, db, monkeypatch
+):
+    """The delete ran elsewhere: no local eviction here, only its log row."""
+    fake = _DeletableIndex(ns_counts={NS: 2},
+                           metas={"v1": {"filename": "a.md"}, "v2": {"filename": "b.md"}})
+    _patch_both(monkeypatch, fake)
+    assert await _filenames(authed_client) == ["a.md", "b.md"]
+
+    fake.delete(ids=["v1"])
+    log = VectorDbIngestionLog(account_id=1, provider="pinecone", index_name=IDX,
+                               namespace=NS, filenames=["a.md"], vectors_added=0,
+                               vectors_deleted=1, vectors_failed=0)
+    log.operation_type = "DELETE"
+    log.status = "SUCCESS"
+    db.add(log)
+    db.flush()
+
+    assert await _filenames(authed_client) == ["b.md"]
+
+
+async def test_deleting_an_already_deleted_file_succeeds(authed_client, monkeypatch):
+    _patch_both(monkeypatch, _DeletableIndex(ns_counts={NS: 1},
+                                             metas={"v2": {"filename": "b.md"}}))
+    resp = await authed_client.delete(DELETE_URL, params={"filename": "a.md"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["vectors_deleted"] == 0
+    assert "already deleted" in body["message"]

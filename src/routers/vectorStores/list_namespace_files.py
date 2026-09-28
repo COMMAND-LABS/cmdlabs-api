@@ -8,9 +8,13 @@ namespace's ids (``list_paginated``) and read each vector's ``filename`` metadat
 
 Robustness:
   - A cheap ``describe_index_stats`` gives the namespace total. We key an
-    in-process cache on (account, index, namespace, total), so an unchanged
-    namespace returns instantly and any ingest/delete (which changes the total)
-    naturally invalidates the entry.
+    in-process cache on (account, index, namespace, total, newest ingestion-log
+    row), so an unchanged namespace returns instantly. The count alone is NOT
+    enough: on serverless indexes it lags deletes — it can report the
+    pre-delete total for minutes — and a count-only key kept serving a deleted
+    file. Every upload and delete records a log row, on whichever instance
+    handled it, so the log marker moves the key on all of them; the deleting
+    instance also evicts its own entries directly (invalidate_namespace_cache).
   - The live scan is bounded by SCAN_CAP. Namespaces larger than the cap (or any
     Pinecone read failure) fall back to an approximate breakdown derived from the
     Postgres ingestion log, flagged via ``source``/``truncated`` — we degrade
@@ -24,6 +28,7 @@ from typing import Any, Callable, Dict, Iterable, Optional
 
 from fastapi import APIRouter, HTTPException, Request, status
 from pinecone import Pinecone
+from sqlalchemy import func
 
 from src.db.models import VectorDbIngestionLog
 from src.deps import org_dependency, account_id_from_claims, db_dependency, ensure_account, jwt_dependency
@@ -137,6 +142,27 @@ def _cache_put(key: tuple, value: NamespaceFilesResponse) -> None:
         _CACHE.move_to_end(key)
         while len(_CACHE) > _CACHE_MAX:
             _CACHE.popitem(last=False)
+
+
+def invalidate_namespace_cache(account_id: int, index_name: str, namespace: str) -> None:
+    """Drop this instance's cached listings for one namespace (after a delete)."""
+    with _CACHE_LOCK:
+        for key in [k for k in _CACHE if k[:3] == (account_id, index_name, namespace)]:
+            del _CACHE[key]
+
+
+def _log_marker(db, account_id: int, index_name: str, namespace: str):
+    """Newest ingestion-log row for the namespace — the part of the cache key
+    that moves on every instance when a delete happens (see module docstring)."""
+    return (
+        db.query(func.max(VectorDbIngestionLog.created_at))
+        .filter(
+            VectorDbIngestionLog.account_id == account_id,
+            VectorDbIngestionLog.index_name == index_name,
+            VectorDbIngestionLog.namespace == namespace,
+        )
+        .scalar()
+    )
 
 
 def _metadatas_for_ids(index, namespace: str, ids: list) -> list:
@@ -359,7 +385,8 @@ async def list_namespace_files(
     ns_info = (stats.get("namespaces", {}) or {}).get(namespace)
     total = ns_info.get("vector_count", 0) if ns_info else 0
 
-    cache_key = (account_id, index_name, namespace, total)
+    cache_key = (account_id, index_name, namespace, total,
+                 _log_marker(db, account_id, index_name, namespace))
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
