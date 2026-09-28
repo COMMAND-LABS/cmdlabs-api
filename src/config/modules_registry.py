@@ -79,6 +79,9 @@ MODULES = (
     Module("contact_lists", "Contact Lists", ("/api/contact-lists",)),
     Module("companies", "Companies", ("/api/companies",)),
     Module("deals", "Deals", ("/api/deals",)),
+    # Duty & tariff updates found by the research agent, their review, and
+    # duty calculated from the approved ones (routers/tariffs).
+    Module("tariffs", "Tariff Updates", ("/api/tariffs",)),
     Module("prompts", "Prompts", ("/api/prompts",)),
     # Agent Skills: SKILL.md-style instruction packages agents load on demand.
     # This key gates the CRUD surface; the runtime side (the system-prompt

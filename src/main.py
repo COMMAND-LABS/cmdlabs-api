@@ -46,6 +46,7 @@ from .routers import contact_lists
 from .routers import companies
 from .routers import files
 from .routers import deals
+from .routers import tariffs
 from .routers import tool_approvals
 from .routers import email_events
 from .routers import email_templates
@@ -208,6 +209,7 @@ _ROUTERS = [
     (companies.router, "/api/companies", ["Companies"]),
     (files.router, "/api/files", ["Files"]),
     (deals.router, "/api/deals", ["Deals"]),
+    (tariffs.router, "/api/tariffs", ["Tariff & Duty Updates"]),
     (tool_approvals.router, "/api/tool-approvals", ["Tool Approvals"]),
     (email_events.router, "/api/email-events", ["Email Events"]),
     (email_templates.router, "/api/email-templates", ["Email Templates"]),
