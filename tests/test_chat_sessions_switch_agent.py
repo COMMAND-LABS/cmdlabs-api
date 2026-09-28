@@ -174,3 +174,35 @@ async def test_contact_bound_session_cannot_switch(
     assert resp.status_code == 400
     db.refresh(session)
     assert session.agent_id is None
+
+
+async def test_list_includes_agent_name_for_untitled_label(
+    authed_client: AsyncClient, db: Session, test_account: Account
+):
+    # The sidebar labels untitled sessions by agent name, not "Agent #<id>".
+    agent = _seed_agent(db, account_id=test_account.id, name="Logistics Analyst")
+    session = _seed_session(db, account_id=test_account.id, agent_id=agent.id)
+
+    resp = await authed_client.get(SESSIONS_URL)
+
+    assert resp.status_code == 200
+    row = next(s for s in resp.json()["sessions"]
+               if s["sessionId"] == str(session.session_id))
+    assert row["title"] is None
+    assert row["agentName"] == "Logistics Analyst"
+
+
+async def test_switch_agent_returns_new_agent_name(
+    authed_client: AsyncClient, db: Session, test_account: Account
+):
+    old_agent = _seed_agent(db, account_id=test_account.id, name="Old Agent")
+    new_agent = _seed_agent(db, account_id=test_account.id, name="New Agent")
+    session = _seed_session(db, account_id=test_account.id, agent_id=old_agent.id)
+
+    resp = await authed_client.patch(
+        f"{SESSIONS_URL}/{session.session_id}",
+        json={"agentId": new_agent.id},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["agentName"] == "New Agent"

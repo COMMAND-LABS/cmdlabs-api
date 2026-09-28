@@ -21,7 +21,10 @@ async def list_deals(
     org: org_dependency,
     request: Request,
     contact_id: int | None = Query(default=None, description="Filter to deals for this contact"),
-    stage: str | None = Query(default=None, description="Filter by pipeline stage"),
+    stage: str | None = Query(
+        default=None,
+        description="Filter by pipeline stage: one stage, or several comma-separated (lead,proposal)",
+    ),
     search: str | None = Query(default=None, description="Full-text over title/description"),
     limit: int = Query(50, ge=1, le=500, description="Number of deals to return"),
     offset: int = Query(0, ge=0, description="Number of deals to skip"),
@@ -29,7 +32,8 @@ async def list_deals(
     """
     List deals for the authenticated account.
 
-    Optional filters: ?contact_id=, ?stage=, and full-text ?search= over
+    Optional filters: ?contact_id=, ?stage= (one or several, comma-separated),
+    and full-text ?search= over
     title/description. Returns a paginated envelope
     ({deals, total, limit, offset, has_more}).
     """
@@ -44,7 +48,11 @@ async def list_deals(
         query = query.filter(Deal.contact_id == contact_id)
 
     if stage:
-        query = query.filter(Deal.stage == stage.strip().lower())
+        # One stage, or several as a comma-separated list (the deals page's
+        # multi-select). A single value filters exactly as it always has.
+        stages = [s.strip().lower() for s in stage.split(",") if s.strip()]
+        if stages:
+            query = query.filter(Deal.stage.in_(stages))
 
     if search:
         term = f"%{search.lower()}%"

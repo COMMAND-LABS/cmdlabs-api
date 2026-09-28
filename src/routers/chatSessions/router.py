@@ -2,6 +2,7 @@ import logging
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, status, Request, Query
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.orm import joinedload
 from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
 from src.services.org_scope import get_scoped_or_404
 from src.db.models import ChatSession, ChatMessage, Contact
@@ -54,6 +55,8 @@ class ChatSessionResponse(BaseModel):
     id: int
     sessionId: uuid.UUID
     agentId: Optional[int] = None
+    # Display label for untitled sessions (title -> agentName -> "Agent #<id>").
+    agentName: Optional[str] = None
     accountId: int
     createdAt: datetime
     title: Optional[str] = None
@@ -76,6 +79,8 @@ class ChatSessionWithMessagesResponse(BaseModel):
     id: int
     sessionId: uuid.UUID
     agentId: Optional[int] = None
+    # Display label for untitled sessions (title -> agentName -> "Agent #<id>").
+    agentName: Optional[str] = None
     accountId: int
     createdAt: datetime
     title: Optional[str] = None
@@ -90,6 +95,7 @@ def _session_to_dict(session: ChatSession) -> dict:
         "id": session.id,
         "sessionId": session.session_id,
         "agentId": session.agent_id,
+        "agentName": session.agent.name if session.agent else None,
         "accountId": session.account_id,
         "createdAt": session.created_at,
         "title": session.title,
@@ -207,7 +213,12 @@ async def get_sessions(
 
     # Total before pagination, then the requested slice.
     total = query.count()
-    rows = query.order_by(ChatSession.created_at.desc()).offset(offset).limit(limit).all()
+    # Eager-load the agent so agentName doesn't cost a query per row.
+    rows = (
+        query.options(joinedload(ChatSession.agent))
+        .order_by(ChatSession.created_at.desc())
+        .offset(offset).limit(limit).all()
+    )
 
     sessions = [_session_to_dict(s) for s in rows]
 
@@ -290,8 +301,8 @@ async def update_session(
 ):
     """Rename a session and/or switch the agent it runs.
 
-    Titles are what make a session list human-readable — without one the UI can
-    only fall back to "Agent #<id>". A blank/whitespace-only title clears the
+    Titles are what make a session list human-readable — without one the UI
+    falls back to the agent's name (agentName), then "Agent #<id>". A blank/whitespace-only title clears the
     field back to NULL so the fallback chain takes over again, rather than
     persisting an empty string that renders as a nameless row.
 
