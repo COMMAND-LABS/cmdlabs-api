@@ -22,6 +22,7 @@ from src.agent_runtime.tools.pinecone_helpers import (
     load_pinecone_index,
     query_pinecone,
 )
+from src.services.vector_store_access import can_read_vector_store
 from src.utils.errors import public_reason
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,21 @@ async def create_vector_search_tool(
     reranking: bool = False,
     **kwargs,
 ) -> StructuredTool | None:
+    # Searching a knowledge base through an agent takes a read grant on it, as
+    # reading it directly does; sharing the agent does not share its knowledge
+    # bases (services/agent_knowledge_bases.py). Skipped, not refused: the
+    # agent still runs, and the chat names the knowledge bases they lack.
+    index_name = tool_config.get("index")
+    owner_account_id = kwargs.get("agent_owner_account_id", account_id)
+    org_scope = kwargs.get("org_scope")
+    if index_name and not can_read_vector_store(
+        db, account_id, index_name, owner_account_id,
+        org_id=getattr(org_scope, "org_id", None),
+    ):
+        logger.info("[VECTOR SEARCH] skipped: account %s has no read grant on '%s'",
+                    account_id, index_name)
+        return None
+
     setup = load_pinecone_index(tool_config, account_id, db, **kwargs)
     if not setup:
         return None

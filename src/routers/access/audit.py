@@ -3,9 +3,9 @@ Access audit endpoints.
 
 Turns the access graph into something you can read off one screen:
 - effective users of a resource (grants resolved to individual accounts), and
-- for an agent, the DERIVED exposure: the indexes its vector-search tools query
-  and whose source documents its users can therefore open — the implicit chain
-  that has no grant row of its own.
+- for an agent, the knowledge bases its vector-search tools query. Using the
+  agent does not grant them: each needs its own read grant, so the audit names
+  the agent's users who lack one (they chat without search).
 """
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, status, Request
@@ -18,12 +18,11 @@ from src.services.org_scope import resource_predicate
 from src.db.models import Agent, VectorStore, Credential, AccessGrant, AccessGrantEvent
 from src.services import access
 from src.services.access_admin import grant_label
+from src.services.agent_knowledge_bases import agent_kb_indexes
+from src.services.vector_store_access import can_read_vector_store
 from src.rate_limit import limiter
 
 router = APIRouter()
-
-_VECTOR_TOOL_TYPES = {"vectorSearch", "vectorSearchWithReranking"}
-
 
 class EffectiveAccount(BaseModel):
     account_id: int
@@ -33,11 +32,13 @@ class EffectiveAccount(BaseModel):
 
 
 class DerivedExposure(BaseModel):
-    """A resource reachable THROUGH the audited resource (no grant of its own)."""
+    """A resource the audited resource reaches (an agent's knowledge base)."""
     resource_type: str
     resource_id: int
     label: str
     note: str
+    # Emails of the audited resource's users who cannot reach this one.
+    missing_accounts: List[str] = []
 
 
 class ResourceAuditResponse(BaseModel):
@@ -98,9 +99,9 @@ async def audit_resource(
 ):
     """Who can access this resource (resolved to accounts) + derived exposure.
 
-    For an agent, derived_exposure lists each index its vector-search tools query
-    — those same effective accounts can read that index's content and open its
-    source documents (via /files/source-url), even with no grant on the index.
+    For an agent, derived_exposure lists each index its vector-search tools
+    query, with the agent's users who hold no read grant on it — for them the
+    agent runs without that search, and its source documents stay closed.
     """
     account_id = account_id_from_claims(jwt)
     if resource_type not in (access.AGENT, access.VECTOR_STORE, access.CREDENTIAL):
@@ -112,25 +113,29 @@ async def audit_resource(
     derived: List[DerivedExposure] = []
     if resource_type == access.AGENT:
         agent = db.query(Agent).filter(Agent.id == resource_id).first()
-        tools = ((agent.config or {}).get("data") or {}).get("tools") or [] if agent else []
-        seen = set()
-        for tool in tools:
-            if isinstance(tool, dict) and tool.get("type") in _VECTOR_TOOL_TYPES:
-                idx = tool.get("index")
-                if not idx or idx in seen:
-                    continue
-                seen.add(idx)
-                vs = (
-                    db.query(VectorStore)
-                    .filter(VectorStore.owner_account_id == agent.account_id, VectorStore.index_name == idx)
-                    .first()
-                )
-                derived.append(DerivedExposure(
-                    resource_type=access.VECTOR_STORE,
-                    resource_id=vs.id if vs else -1,
-                    label=idx,
-                    note="Agent users can read this index's content and open its source documents.",
-                ))
+        for idx in agent_kb_indexes(agent.config if agent else None):
+            vs = (
+                db.query(VectorStore)
+                .filter(VectorStore.owner_account_id == agent.account_id, VectorStore.index_name == idx)
+                .first()
+            )
+            missing = [
+                e.email or f"account #{e.account_id}"
+                for e in effective
+                if not can_read_vector_store(db, e.account_id, idx, agent.account_id, org_id=org.org_id)
+            ]
+            derived.append(DerivedExposure(
+                resource_type=access.VECTOR_STORE,
+                resource_id=vs.id if vs else -1,
+                label=idx,
+                note=(
+                    f"{len(missing)} of this agent's users can't search it: share the "
+                    "knowledge base with them to give them search and its source files."
+                    if missing else
+                    "Everyone who can use this agent can search it and open its source files."
+                ),
+                missing_accounts=missing,
+            ))
 
     return ResourceAuditResponse(
         resource_type=resource_type,

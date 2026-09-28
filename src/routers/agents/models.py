@@ -2,7 +2,7 @@
 Shared Pydantic models for the agents router.
 """
 from pydantic import BaseModel, ConfigDict
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 
 class CreateAgentRequest(BaseModel):
@@ -24,11 +24,15 @@ class AgentResponse(BaseModel):
     name: str
     config: Optional[Dict[str, Any]] = None
     is_owner: Optional[bool] = None
+    # Index names of the agent's knowledge bases the CALLER may not read, so
+    # the chat can say why search is missing. Set by GET /{id} only.
+    unreadable_knowledge_bases: Optional[List[str]] = None
 
     model_config = ConfigDict(from_attributes=True)
 
     @classmethod
-    def from_agent(cls, agent, is_owner: Optional[bool] = None) -> "AgentResponse":
+    def from_agent(cls, agent, is_owner: Optional[bool] = None,
+                   unreadable_knowledge_bases: Optional[List[str]] = None) -> "AgentResponse":
         """The one field-by-field mapping every agents route returns.
 
         create/update leave is_owner unset (null), as they always have.
@@ -38,4 +42,5 @@ class AgentResponse(BaseModel):
             name=agent.name,
             config=agent.config,
             is_owner=is_owner,
+            unreadable_knowledge_bases=unreadable_knowledge_bases,
         )

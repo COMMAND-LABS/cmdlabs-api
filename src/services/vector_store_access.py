@@ -83,6 +83,24 @@ def authorize_vector_store(
     return owner_account_id
 
 
+def can_read_vector_store(
+    db: Session,
+    caller_account_id: int,
+    index_name: str,
+    owner_account_id: int | None,
+    *,
+    org_id: int | None = None,
+) -> bool:
+    """authorize_vector_store's read answer as a bool, for callers that skip
+    rather than refuse (agent tool setup, audit)."""
+    try:
+        authorize_vector_store(db, caller_account_id, index_name, owner_account_id,
+                               require_write=False, org_id=org_id)
+    except HTTPException:
+        return False
+    return True
+
+
 def list_shared_vector_stores(db: Session, account_id: int,
                               org_id: int | None = None) -> list[dict]:
     """Knowledge bases shared with ``account_id`` by grant.

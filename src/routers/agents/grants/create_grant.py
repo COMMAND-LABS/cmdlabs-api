@@ -6,7 +6,10 @@ sharing is a premium feature, and on the free plan the person shared with
 could not open agent chat anyway (see config/plans_registry). The person must
 already be a member of this org (resolve_grantee / assert_same_org).
 
-Writes a unified AccessGrant (resource_type='agent', role='use').
+Writes a unified AccessGrant (resource_type='agent', role='use'). With
+grantKnowledgeBases, also a read grant on each knowledge base the agent
+searches: using an agent does not by itself let someone read its knowledge
+bases (services/agent_knowledge_bases.py), so the share offers both in one step.
 """
 from fastapi import APIRouter, HTTPException, status, Request
 from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
@@ -14,6 +17,8 @@ from src.config import plans_registry as plans
 from src.services.org_scope import get_resource_or_404
 from src.db.models import Agent, AccessGrant
 from src.services import access
+from src.services.agent_knowledge_bases import agent_kb_indexes
+from src.routers.vectorStores.helpers import get_or_create_vector_store
 from src.services.access_admin import resolve_grantee, upsert_grant, record_access_event
 from .models import CreateGrantRequest, AgentAccessGrantResponse
 from src.rate_limit import limiter
@@ -81,6 +86,10 @@ async def create_grant(
         principal_id=principal_id,
         role="use",
     )
+    kb_granted = (
+        _grant_knowledge_bases(db, agent, org.org_id, account_id, principal_type, principal_id)
+        if body.grantKnowledgeBases else []
+    )
     db.commit()
     db.refresh(grant)
 
@@ -90,4 +99,49 @@ async def create_grant(
         grantee_account_id=principal_id,
         label=label,
         created_at=grant.created_at,
+        knowledge_bases_granted=kb_granted,
     )
+
+
+def _grant_knowledge_bases(db, agent: Agent, org_id: int, actor_account_id: int,
+                           principal_type: str, principal_id: int) -> list[str]:
+    """Read-grant each of the agent's knowledge bases to the principal.
+
+    Anyone already holding a grant on one keeps it as it is, so this never
+    downgrades a write grant. A knowledge base recorded in another org is
+    skipped: a grant may not cross orgs (access.assert_same_org). Caller commits.
+    """
+    granted = []
+    for index_name in agent_kb_indexes(agent.config):
+        store = get_or_create_vector_store(db, agent.account_id, index_name, org_id=org_id)
+        if store.org_id != org_id:
+            continue
+        held = db.query(AccessGrant.id).filter(
+            AccessGrant.principal_type == principal_type,
+            AccessGrant.principal_id == principal_id,
+            AccessGrant.resource_type == access.VECTOR_STORE,
+            AccessGrant.resource_id == store.id,
+        ).first()
+        if held:
+            continue
+        upsert_grant(
+            db,
+            org_id=org_id,
+            principal_type=principal_type,
+            principal_id=principal_id,
+            resource_type=access.VECTOR_STORE,
+            resource_id=store.id,
+            role="read",
+        )
+        record_access_event(
+            db,
+            event_type="create",
+            actor_account_id=actor_account_id,
+            resource_type=access.VECTOR_STORE,
+            resource_id=store.id,
+            principal_type=principal_type,
+            principal_id=principal_id,
+            role="read",
+        )
+        granted.append(index_name)
+    return granted

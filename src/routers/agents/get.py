@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, status, Request
 from src.deps import db_dependency, jwt_dependency, org_dependency, account_id_from_claims
 from src.db.models import Agent
 from src.services.agent_access import can_access_agent
+from src.services.agent_knowledge_bases import unreadable_indexes
 from .models import AgentResponse
 from src.rate_limit import limiter
 
@@ -41,4 +42,8 @@ async def get_agent(
             detail="Agent not found"
         )
         
-    return AgentResponse.from_agent(agent, is_owner=(agent.account_id == account_id))
+    return AgentResponse.from_agent(
+        agent,
+        is_owner=(agent.account_id == account_id),
+        unreadable_knowledge_bases=unreadable_indexes(db, account_id, agent, org.org_id),
+    )

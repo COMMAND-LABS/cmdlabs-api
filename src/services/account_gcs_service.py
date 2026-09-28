@@ -294,3 +294,40 @@ def generate_signed_url_for(
         expiration=timedelta(seconds=expiration_seconds),
         method="GET",
     )
+
+
+def generate_signed_url_for_index(
+    db: Session,
+    owner_account_id: int,
+    index_name: str,
+    *,
+    gcs_file_path: str,
+    expiration_seconds: int = 900,
+) -> str:
+    """
+    Generate a short-lived V4 signed GET URL for an object in the bucket bound to
+    knowledge base *index_name* (falling back to the owner's default credential
+    when unbound) — the same credential upload_bytes_for_index stores with.
+
+    Used when no ingestion-log row recorded the bucket for a source file. The
+    caller MUST have already authorized access and validated that the path
+    belongs to this knowledge base.
+
+    Raises AccountGcsCredentialMissing if the index has no usable GCS credential.
+    """
+    from src.services.vector_store_credentials import resolve_index_gcs_credential
+
+    credential = resolve_index_gcs_credential(db, owner_account_id, index_name)
+    if not credential:
+        raise AccountGcsCredentialMissing(
+            "This knowledge base has no Google Cloud Storage credential configured."
+        )
+    service_account_json, bucket_name = _config_from_credential(credential)
+
+    client = _build_storage_client(service_account_json)
+    blob = client.bucket(bucket_name).blob(gcs_file_path)
+    return blob.generate_signed_url(
+        version="v4",
+        expiration=timedelta(seconds=expiration_seconds),
+        method="GET",
+    )
