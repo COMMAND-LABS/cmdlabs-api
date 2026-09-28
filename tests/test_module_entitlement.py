@@ -338,3 +338,26 @@ def test_a_non_super_admin_member_of_the_platform_org_is_still_capped_by_their_r
     assert set(resolved) <= set(COMMUNITY_MODULES)
     assert "contacts" not in resolved, (
         "a full ceiling on the platform org must not reach a community member")
+
+
+async def test_a_community_member_builds_agents_and_reviews_tariffs_but_not_crm(
+    db: Session, _override_db, acme
+):
+    """What was widened on 2026-09-28, asserted at the routes rather than the
+    tuple: community members author agents and review the tariff research
+    agent's findings, and still cannot open a module that shows every row."""
+    member = _member_of(db, acme, 8807, ROLE_COMMUNITY_MEMBER)
+    async with client_for(member) as c:
+        body = (await c.get(ENTITLEMENTS)).json()
+        for key in ("agents", "knowledge_bases", "prompts", "skills", "tariffs"):
+            assert key in body["modules"]
+
+        assert (await c.get("/api/tariffs/measures")).status_code == 200
+        created = await c.post("/api/agents/", json={
+            "name": "Community-built agent",
+            "config": {"schema": "agent_config", "version": 4,
+                       "data": {"systemPrompt": "hi", "tools": []}}})
+        assert created.status_code in (200, 201), created.text
+
+        for path in ("/api/contacts/", "/api/companies/", "/api/deals/", "/api/access/audit"):
+            assert (await c.get(path)).status_code == 404, path

@@ -82,8 +82,17 @@ ROLE_LABELS = {
 # Note what is in and what is not, because the line is the point:
 #
 #   agent_chat  IN  — using an agent someone else configured
-#   agents      OUT — authoring them; an agent carries credentials and reaches
-#                     knowledge bases, so building one is a team activity
+#   agents      IN  — building their own (2026-09-28). Agents are resources:
+#                     they list and use their own and ones shared with them;
+#                     only an agent's creator edits, shares or deletes it.
+#   knowledge_bases IN — same shape: their own KBs and ones granted to them.
+#   prompts     IN  — a person only ever sees their own prompts.
+#   skills      IN  — their own plus 'org'-visible ones. Unlike agents, anybody
+#                     who can see an 'org'-visible skill may edit or delete it
+#                     (routers/skills/update.py).
+#   tariffs     IN  — community members review the duty & tariff research
+#                     agent's findings. That includes APPROVING rates, which
+#                     then drive this org's duty calculations.
 #   courses     IN  — published material is what "serving people" means here
 #   credentials IN  — their OWN API keys (account-scoped: the credentials API
 #                     only ever lists a person's own keys and ones explicitly
@@ -93,8 +102,10 @@ ROLE_LABELS = {
 #
 # Everything else is out, and adding to this tuple is a decision about who sees
 # your customers' data. `contacts`, `contact_lists`, `companies`, `deals`,
-# `access`, `analytics`, `email_*` may not appear here.
-COMMUNITY_MODULES = ("home", "courses", "agent_chat", "credentials")
+# `access`, `analytics`, `email_*` may not appear here: those modules show
+# EVERY row in the org (see WHAT THIS FILE CANNOT DO above).
+COMMUNITY_MODULES = ("home", "courses", "agent_chat", "agents", "knowledge_bases",
+                     "prompts", "skills", "tariffs", "credentials")
 
 
 def is_valid(role: str) -> bool:

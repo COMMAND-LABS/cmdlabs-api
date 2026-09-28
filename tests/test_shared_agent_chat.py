@@ -1,8 +1,9 @@
-"""A community member can USE an agent shared with them, and cannot author one.
+"""A community member can USE an agent shared with them, and cannot change it.
 
 Agent Chat needs the read-and-run surface under /api/agents (list, get,
 stream), /api/tool-approvals and /api/files. Authoring — create, edit, delete,
-share — stays with the Agents module. And a shared agent keeps its owner's
+share — stays with the Agents module, which community members hold since
+2026-09-28 for their OWN agents. And a shared agent keeps its owner's
 knowledge-base tools, while CRM and email tools still follow the chatter's
 own role.
 """
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from src.agent_runtime.tool_entitlement import agent_tool_modules
 from src.config import plans_registry as plans
+from src.config import roles_registry as roles
 from src.config.modules_registry import modules_for_path
 from src.config.roles_registry import ROLE_COMMUNITY_MEMBER
 from src.db.models import Agent, Organization
@@ -60,17 +62,21 @@ async def test_a_community_member_can_list_and_open_a_shared_agent(member, share
     assert approvals.status_code == 200, approvals.text
 
 
-async def test_a_community_member_cannot_author_or_share(member, shared_agent):
+async def test_a_community_member_authors_their_own_but_not_a_shared_agent(
+    member, shared_agent
+):
+    """Community members hold the Agents module (since 2026-09-28), so they
+    build their own. An agent shared WITH them stays its owner's to change."""
     async with client_for(member) as c:
+        created = await c.post("/api/agents/", json={"name": "Mine", "config": CONFIG})
         responses = [
-            await c.post("/api/agents/", json={"name": "Mine", "config": CONFIG}),
             await c.put(f"/api/agents/{shared_agent.id}", json={"name": "Renamed"}),
             await c.delete(f"/api/agents/{shared_agent.id}"),
             await c.post(f"/api/agents/{shared_agent.id}/access-grants",
                          json={"granteeEmail": "x@example.com"}),
         ]
-    # 404, not 403: a module the role excludes looks absent (require_module).
-    assert [r.status_code for r in responses] == [404, 404, 404, 404]
+    assert created.status_code == 201, created.text
+    assert [r.status_code for r in responses] == [404, 404, 404]
 
 
 def test_agent_routes_open_for_agents_or_agent_chat():
@@ -80,7 +86,14 @@ def test_agent_routes_open_for_agents_or_agent_chat():
     assert modules_for_path("/api/contacts") == ("contacts",)
 
 
-def test_a_shared_agent_keeps_its_owners_knowledge_base_tools(db: Session, owner, member):
+def test_a_shared_agent_keeps_its_owners_knowledge_base_tools(
+    db: Session, owner, member, monkeypatch
+):
+    # Community members now hold knowledge_bases; take it away so this keeps
+    # testing the rule (a shared agent's KB tools follow its OWNER), not the
+    # current contents of the allowlist.
+    monkeypatch.setattr(roles, "COMMUNITY_MODULES",
+                        tuple(m for m in roles.COMMUNITY_MODULES if m != "knowledge_bases"))
     own = agent_tool_modules(db, member.account_id, member.org_id,
                              agent_owner_account_id=member.account_id)
     shared = agent_tool_modules(db, member.account_id, member.org_id,
