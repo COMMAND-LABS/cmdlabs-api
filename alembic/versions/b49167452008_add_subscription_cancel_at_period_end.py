@@ -66,11 +66,17 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        'accounts',
-        sa.Column('subscription_cancel_at_period_end', sa.Boolean(),
-                  server_default=sa.false(), nullable=False),
-    )
+    # Production already has this column: d7e8f9a0b1c2 originally added it
+    # (514a60f) and was applied, then the add was deleted from that file
+    # (82a303f). Fresh databases don't have it, so add it only when missing —
+    # the existing definition (Boolean, NOT NULL, default false) is identical.
+    existing = {c['name'] for c in sa.inspect(op.get_bind()).get_columns('accounts')}
+    if 'subscription_cancel_at_period_end' not in existing:
+        op.add_column(
+            'accounts',
+            sa.Column('subscription_cancel_at_period_end', sa.Boolean(),
+                      server_default=sa.false(), nullable=False),
+        )
     op.drop_constraint('ck_access_grant_event_type', 'access_grant_events',
                        type_='check')
     op.create_check_constraint('ck_access_grant_event_type',
