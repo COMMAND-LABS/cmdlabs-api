@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import Request
@@ -56,6 +56,7 @@ from src.agent_runtime.skills import (
     load_agent_skills,
 )
 from src.agent_runtime.tools import CredentialError, create_tools_from_agent_config
+from src.agent_runtime.tools.registry import tool_types_by_name
 from src.agent_runtime.tools.think import THINK_SYSTEM_GUIDANCE
 from src.utils.pdf_to_images import (
     build_document_message,
@@ -132,6 +133,9 @@ class AgentContext:
     # GCS-backed attachment reference persisted onto the chat message, or None.
     attachment_ref: dict | None
     callbacks: list
+    # {tool name: tool type} for this run's tools, so tool events can say what
+    # a tool IS no matter what the agent config named it.
+    tool_types: dict[str, str] = field(default_factory=dict)
 
 
 class AgentSetupError(Exception):
@@ -492,6 +496,7 @@ async def prepare_agent_context(
         pdf_filename=pdf_filename,
         attachment_ref=attachment_ref,
         callbacks=callbacks,
+        tool_types=tool_types_by_name(tools),
     )
 
 

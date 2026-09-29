@@ -27,7 +27,8 @@ from .vector_search import create_vector_search_tool
 # ── Register all built-in tool types ────────────────────────────────────────
 # Vector search is one builder; the reranking variant is the same tool with
 # ``reranking=True``. Both type strings stay registered for backward compatibility.
-ToolRegistry.register("vectorSearch", partial(create_vector_search_tool, reranking=False))
+ToolRegistry.register("vectorSearch", create_vector_search_tool)  # `rerank` in the config
+# Legacy alias: the type reranking used to be. Kept so saved configs load.
 ToolRegistry.register("vectorSearchWithReranking", partial(create_vector_search_tool, reranking=True))
 ToolRegistry.register("dbTableRead", create_db_read_tool)
 ToolRegistry.register("dbTableWrite", create_db_write_tool)

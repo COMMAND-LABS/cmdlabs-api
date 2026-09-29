@@ -279,7 +279,7 @@
     },
     "vectorSearchTool": {
       "type": "object",
-      "description": "Vector database search tool for semantic retrieval from knowledge bases.",
+      "description": "Vector database search tool for semantic retrieval from knowledge bases. Set rerank for two-stage retrieve-then-rerank.",
       "additionalProperties": false,
       "required": [
         "type",
@@ -289,16 +289,26 @@
       ],
       "properties": {
         "type": { "type": "string", "const": "vectorSearch" },
+        "name": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,64}$",
+          "description": "Name the model calls the tool by. Defaults to vector_search (vector_search_with_reranking with rerank). Give each search tool in an agent its own name."
+        },
         "provider": { "type": "string", "enum": ["pinecone"] },
         "index": { "type": "string", "minLength": 1 },
         "namespace": { "type": "string", "minLength": 1 },
         "description": { "type": "string", "minLength": 1 },
-        "topK": { "type": "integer", "minimum": 1, "maximum": 100, "default": 10 }
+        "topK": {
+          "type": "integer", "minimum": 1, "maximum": 100,
+          "description": "Results to return; with rerank, candidates to rerank. Default 10, or 20 with rerank."
+        },
+        "rerank": { "type": "boolean", "default": false, "description": "Rerank the topK candidates and return the best topN." },
+        "topN": { "type": "integer", "minimum": 1, "maximum": 50, "default": 5, "description": "Results to return after reranking. Used only with rerank." }
       }
     },
     "vectorSearchWithRerankingTool": {
       "type": "object",
-      "description": "Vector database search with re-ranking.",
+      "description": "DEPRECATED: use vectorSearch with rerank: true. Still accepted so existing configs load.",
       "additionalProperties": false,
       "required": [
         "type",

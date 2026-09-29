@@ -14,18 +14,23 @@ logger = logging.getLogger(__name__)
 def format_tool_call(
     tool_name: str,
     tool_input: dict[str, Any],
-    tool_output: Any
+    tool_output: Any,
+    tool_type: str | None = None,
 ) -> dict[str, Any] | None:
     """
     Format a tool call according to the chat_message.v2.json schema.
 
-    Determines the tool type from the tool name and formats the input/output
-    appropriately for each tool type.
+    The layout is chosen by the tool's TYPE, which the factory stamped on the
+    tool from its agent config (tools/registry.tag_tool_type). It is never
+    guessed from the name: names are free per agent ("forecast_duty_spend"),
+    and guessing sent every renamed tool to the untyped "custom" layout.
 
     Args:
         tool_name: The name of the tool that was executed
         tool_input: The input that was passed to the tool
         tool_output: The output returned by the tool
+        tool_type: The tool's config type, e.g. "timeSeriesForecast". None for
+            a tool nobody tagged, which is formatted as "custom".
 
     Returns:
         Formatted tool call dict, or None if the tool output is invalid
@@ -57,40 +62,32 @@ def format_tool_call(
             logger.debug(f"[TOOL CALLS] Normalizing non-dict/non-str tool_output (type: {type(tool_output).__name__})")
             tool_output = {"result": str(tool_output)}
 
-    _FORMATTERS = {
-        "vector_search": lambda n, i, o: _format_vector_search(n, i, o, "vectorSearch"),
-        "vector_search_with_reranking": lambda n, i, o: _format_vector_search(n, i, o, "vectorSearchWithReranking"),
-        "send_txt_email_with_ses": _format_send_txt_email,
-        "send_html_email_with_ses": _format_send_html_email,
-        "load_skill": _format_load_skill,
-        "save_skill": _format_save_skill,
-        # Default names of the runner-backed and knowledge-write tools. A
-        # config that renames one falls through to the generic "custom" shape.
-        "time_series_forecast": lambda n, i, o: _format_typed(n, i, o, "timeSeriesForecast"),
-        "run_python": lambda n, i, o: _format_typed(n, i, o, "codeExecution"),
-        "knowledge_write": lambda n, i, o: _format_typed(n, i, o, "knowledgeWrite"),
-    }
-
-    formatter = _FORMATTERS.get(tool_name)
-    if formatter is None:
-        if tool_name.startswith("db_table_read"):
-            formatter = _format_db_table_read
-        elif tool_name.startswith("db_table_write"):
-            formatter = _format_db_table_write
-        else:
-            formatter = _format_generic_tool
-    return formatter(tool_name, tool_input, tool_output)
+    formatter = _FORMATTERS_BY_TYPE.get(tool_type or "")
+    if formatter is not None:
+        return formatter(tool_name, tool_input, tool_output)
+    if tool_type:
+        # A known type with a plain-dict output (forecast, code execution,
+        # knowledge write, think, contact tools...): keep the type so the UI
+        # picks the right card.
+        return _format_typed(tool_name, tool_input, tool_output, tool_type)
+    return _format_generic_tool(tool_name, tool_input, tool_output)
 
 
 def _format_vector_search(
     tool_name: str,
     tool_input: dict[str, Any],
     tool_output: dict[str, Any],
-    tool_type: str = "vectorSearch",
 ) -> dict[str, Any] | None:
-    """Format vector search tool call. Returns None for error outputs."""
+    """Format vector search tool call. Returns None for error outputs.
+
+    One builder serves plain and reranked search (tools/vector_search.py); a
+    reranked search says so in its output (`reranking_applied`), which is what
+    picks the vectorSearchWithReranking layout.
+    """
     if 'error' in tool_output and 'results' not in tool_output:
         return None
+    tool_type = ("vectorSearchWithReranking" if "reranking_applied" in tool_output
+                 else "vectorSearch")
 
     results = _format_search_results(tool_output.get('results', []))
 
@@ -306,3 +303,17 @@ def _format_generic_tool(
         "input": tool_input,
         "output": tool_output
     }
+
+
+# Types whose input/output need reshaping for chat_message.v2. Every other
+# tagged type is passed through by _format_typed with its type kept.
+_FORMATTERS_BY_TYPE = {
+    "vectorSearch": _format_vector_search,
+    "vectorSearchWithReranking": _format_vector_search,
+    "dbTableRead": _format_db_table_read,
+    "dbTableWrite": _format_db_table_write,
+    "sendTxtEmailWithSes": _format_send_txt_email,
+    "sendHtmlEmailWithSes": _format_send_html_email,
+    "loadSkill": _format_load_skill,
+    "saveSkill": _format_save_skill,
+}

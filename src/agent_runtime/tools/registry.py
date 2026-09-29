@@ -28,3 +28,29 @@ class ToolRegistry:
     @classmethod
     def list_types(cls) -> list[str]:
         return list(cls._builders.keys())
+
+
+# ---------------------------------------------------------------------------
+# Tool type on a BUILT tool
+# ---------------------------------------------------------------------------
+# A tool's `name` is what the model calls and is free per agent config
+# ("forecast_duty_spend"); its TYPE is what it is ("timeSeriesForecast"). The
+# type used to be guessed back from the name, which failed for every renamed
+# tool. Now whoever builds a tool stamps its type on it, and the stream reads
+# it from there (helpers/tool_calls.format_tool_call, stream.on_tool_start).
+
+TOOL_TYPE_KEY = "tool_type"
+
+
+def tag_tool_type(tool: StructuredTool, tool_type: str) -> StructuredTool:
+    tool.metadata = {**(tool.metadata or {}), TOOL_TYPE_KEY: tool_type}
+    return tool
+
+
+def tool_types_by_name(tools: list[StructuredTool]) -> dict[str, str]:
+    """{tool name: tool type} for every tool that was tagged."""
+    return {
+        t.name: (t.metadata or {})[TOOL_TYPE_KEY]
+        for t in tools
+        if (t.metadata or {}).get(TOOL_TYPE_KEY)
+    }

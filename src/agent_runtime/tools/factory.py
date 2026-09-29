@@ -11,7 +11,7 @@ from langchain_core.tools import StructuredTool
 
 from src.agent_runtime.tool_entitlement import agent_tool_modules, allowed_tool_configs
 
-from .registry import ToolRegistry
+from .registry import ToolRegistry, tag_tool_type
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +42,16 @@ async def _build_tool(
         return None
 
     try:
-        return await builder(
+        tool = await builder(
             tool_config=tool_config,
             account_id=account_id,
             db=db,
             auth_token=auth_token,
             **kwargs
         )
+        # The config's type travels with the tool, so the stream never has to
+        # guess it from the (freely renamable) tool name.
+        return tag_tool_type(tool, tool_type) if tool else None
     except Exception as e:
         logger.exception(f"[TOOL FACTORY] Error building tool '{tool_type}': {e}")
         return None

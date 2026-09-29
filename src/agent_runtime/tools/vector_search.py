@@ -1,10 +1,14 @@
 """Vector Search Tool — semantic search over Pinecone, with optional reranking.
 
-A single builder backs two registered tool types (see ``tools/__init__.py``):
-- ``vectorSearch`` (``reranking=False``): one-stage semantic search.
-- ``vectorSearchWithReranking`` (``reranking=True``): two-stage retrieve-then-
-  rerank, which degrades to one-stage search when ``RERANKER_API_URL`` is unset
-  or the reranker is unavailable.
+One tool type, ``vectorSearch``, with reranking as a setting:
+- ``rerank`` false (default): one-stage semantic search.
+- ``rerank: true``: two-stage retrieve-then-rerank (``topK`` candidates, the
+  best ``topN`` returned), which degrades to one-stage search when
+  ``RERANKER_API_URL`` is unset or the reranker is unavailable.
+
+``vectorSearchWithReranking`` is the type reranking used to be. It stays
+registered as an alias that forces ``rerank`` on, so existing agent configs
+keep working unchanged (see ``tools/__init__.py``).
 """
 
 import logging
@@ -34,9 +38,14 @@ async def create_vector_search_tool(
     db: Session,
     auth_token: str | None = None,
     *,
-    reranking: bool = False,
+    reranking: bool | None = None,
     **kwargs,
 ) -> StructuredTool | None:
+    # None = read the config's `rerank` flag; the legacy
+    # vectorSearchWithReranking type passes True.
+    if reranking is None:
+        reranking = bool(tool_config.get("rerank"))
+
     # Searching a knowledge base through an agent takes a read grant on it, as
     # reading it directly does; sharing the agent does not share its knowledge
     # bases (services/agent_knowledge_bases.py). Skipped, not refused: the

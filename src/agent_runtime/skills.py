@@ -47,6 +47,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, or_
 
+from src.agent_runtime.tools.registry import tag_tool_type
 from src.agent_runtime.tool_entitlement import effective_modules
 from src.agent_runtime.tools.sessions import default_session_factory
 from src.db.models import Skill
@@ -227,7 +228,7 @@ def create_load_skill_tool(skills: list[AttachedSkill]) -> StructuredTool:
         )
 
     names = ", ".join(sorted(by_name))
-    return StructuredTool.from_function(
+    tool = StructuredTool.from_function(
         coroutine=_load_skill,
         name=LOAD_SKILL_TOOL_NAME,
         description=(
@@ -237,6 +238,7 @@ def create_load_skill_tool(skills: list[AttachedSkill]) -> StructuredTool:
         ),
         args_schema=LoadSkillInput,
     )
+    return tag_tool_type(tool, "loadSkill")
 
 
 # ---------------------------------------------------------------------------
@@ -385,7 +387,7 @@ def create_save_skill_tool(
         finally:
             db.close()
 
-    return StructuredTool.from_function(
+    tool = StructuredTool.from_function(
         coroutine=_save_skill,
         name=SAVE_SKILL_TOOL_NAME,
         description=(
@@ -395,3 +397,4 @@ def create_save_skill_tool(
         ),
         args_schema=SaveSkillInput,
     )
+    return tag_tool_type(tool, "saveSkill")

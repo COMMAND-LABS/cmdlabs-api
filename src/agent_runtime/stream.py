@@ -175,6 +175,9 @@ async def _stream_agent_executor(ctx: AgentContext):
             tool_input = _parse_tool_input(event["data"].get("input", {}))
             yield sse_event("on_tool_start", data={
                 "name": event["name"],
+                # What the tool IS, whatever the config named it; the UI keys
+                # its card and label off this.
+                "toolType": ctx.tool_types.get(event["name"]),
                 "input": tool_input if isinstance(tool_input, dict) else {},
             }, run_id=run_id)
 
@@ -199,6 +202,7 @@ async def _stream_agent_executor(ctx: AgentContext):
                     tool_name=event["name"],
                     tool_input=tool_input if isinstance(tool_input, dict) else {},
                     tool_output=tool_output,
+                    tool_type=ctx.tool_types.get(event["name"]),
                 )
                 if formatted:
                     tool_calls.append(formatted)

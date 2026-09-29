@@ -115,8 +115,22 @@
           "const": "on_tool_start"
         },
         "data": {
-          "type": "string",
-          "description": "Human-readable description of tool execution starting (e.g., 'Starting tool: search_docs with inputs: ...')"
+          "type": "object",
+          "description": "The tool being called.",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "The tool's name as the model calls it; free per agent config (e.g. 'forecast_duty_spend')."
+            },
+            "toolType": {
+              "type": ["string", "null"],
+              "description": "What the tool is, from its agent config type (e.g. 'timeSeriesForecast'). Null for an untagged tool."
+            },
+            "input": {
+              "type": "object",
+              "description": "The arguments the model passed."
+            }
+          }
         }
       }
     },
@@ -150,7 +164,7 @@
     },
     {
       "event": "on_tool_start",
-      "data": "Starting tool: search_docs with inputs: {'query': 'ollama', 'topK': 5}"
+      "data": {"name": "search_docs", "toolType": "vectorSearch", "input": {"query": "ollama", "top_k": 5}}
     },
     {
       "event": "on_tool_end"
