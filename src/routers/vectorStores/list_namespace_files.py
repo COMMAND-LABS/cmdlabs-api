@@ -165,20 +165,25 @@ def _log_marker(db, account_id: int, index_name: str, namespace: str):
     )
 
 
-def _metadatas_for_ids(index, namespace: str, ids: list) -> list:
-    """Fetch the given ids and return their metadata dicts (normalizing SDK shape)."""
+def metadata_by_id(index, namespace: str, ids: list) -> Dict[str, Optional[Dict[str, Any]]]:
+    """Fetch the given ids and return {id: metadata} for those that exist
+    (normalizing SDK shape)."""
     fetched = index.fetch(ids=ids, namespace=namespace)
     vectors = getattr(fetched, "vectors", None)
     if vectors is None and isinstance(fetched, dict):
         vectors = fetched.get("vectors")
-    vectors = vectors or {}
-    metadatas = []
-    for vec in vectors.values():
+    out = {}
+    for vid, vec in (vectors or {}).items():
         meta = getattr(vec, "metadata", None)
         if meta is None and isinstance(vec, dict):
             meta = vec.get("metadata")
-        metadatas.append(meta)
-    return metadatas
+        out[vid] = meta
+    return out
+
+
+def _metadatas_for_ids(index, namespace: str, ids: list) -> list:
+    """Fetch the given ids and return their metadata dicts."""
+    return list(metadata_by_id(index, namespace, ids).values())
 
 
 def scan_namespace_file_counts(index, namespace: str, cap: int = SCAN_CAP):

@@ -13,7 +13,12 @@ from .contact_crm import (
     create_contact_read_tool,
 )
 from .db_read import create_db_read_tool
+from .knowledge_delete import create_knowledge_delete_tool
 from .knowledge_write import create_knowledge_write_tool
+from .tariff_measures import (
+    create_tariff_measure_search_tool,
+    create_tariff_measure_update_tool,
+)
 from .time_series_forecast import create_time_series_forecast_tool
 from .db_write import create_db_write_tool
 from .exceptions import CredentialError
@@ -52,6 +57,12 @@ ToolRegistry.register("think", create_think_tool)
 ToolRegistry.register("timeSeriesForecast", create_time_series_forecast_tool)
 ToolRegistry.register("codeExecution", create_code_execution_tool)
 ToolRegistry.register("knowledgeWrite", create_knowledge_write_tool)
+# HITL delete from a KB (routers/tool_approvals/knowledge_delete.py executes it).
+ToolRegistry.register("knowledgeDelete", create_knowledge_delete_tool)
+# Tariff measures: a read-only lookup, and HITL edits
+# (routers/tool_approvals/tariff_measure_update.py executes them).
+ToolRegistry.register("tariffMeasureSearch", create_tariff_measure_search_tool)
+ToolRegistry.register("tariffMeasureUpdate", create_tariff_measure_update_tool)
 
 __all__ = [
     "CredentialError",

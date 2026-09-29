@@ -62,6 +62,11 @@ TOOL_MODULES = {
     "think": None,
     # Writes to a KB: same module as reading one.
     "knowledgeWrite": "knowledge_bases",
+    "knowledgeDelete": "knowledge_bases",
+    # The org's rate table. Follows the chatting person's role (not in
+    # OWNER_ENTITLED_MODULES): rates are the org's, not the agent owner's.
+    "tariffMeasureSearch": "tariffs",
+    "tariffMeasureUpdate": "tariffs",
     # Ungated for v1 by the same rule as dbTableRead: the agent OWNER opts in
     # by adding the tool, and the dataset it reads sits in the owner's own
     # bucket. Give these an 'analytics' module when they are priced separately.

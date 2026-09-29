@@ -175,6 +175,15 @@
         },
         {
           "$ref": "#/$defs/knowledgeWriteTool"
+        },
+        {
+          "$ref": "#/$defs/knowledgeDeleteTool"
+        },
+        {
+          "$ref": "#/$defs/tariffMeasureSearchTool"
+        },
+        {
+          "$ref": "#/$defs/tariffMeasureUpdateTool"
         }
       ]
     },
@@ -278,6 +287,39 @@
           "description": "Closed list of topics the model may file a note under. Each becomes the note's front-matter topic and a folder in the bucket.",
           "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" }
         }
+      }
+    },
+    "knowledgeDeleteTool": {
+      "type": "object",
+      "description": "Remove a document or specific passages from a knowledge base. Always queued for human approval; the approver sees the text that would be removed, and nothing is deleted until they approve. Needs write access to the knowledge base.",
+      "additionalProperties": false,
+      "required": ["type", "provider", "index", "namespace"],
+      "properties": {
+        "type": { "type": "string", "const": "knowledgeDelete" },
+        "provider": { "type": "string", "enum": ["pinecone"] },
+        "index": { "type": "string", "minLength": 1 },
+        "namespace": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 }
+      }
+    },
+    "tariffMeasureSearchTool": {
+      "type": "object",
+      "description": "Read-only lookup of the organization's tariff measures (tnd_measures) by tariff code, origin, program, status or date. Needs the Tariffs module.",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string", "const": "tariffMeasureSearch" },
+        "description": { "type": "string", "minLength": 1 }
+      }
+    },
+    "tariffMeasureUpdateTool": {
+      "type": "object",
+      "description": "Propose an edit to one of the organization's tariff measures (rate, dates, tariff code, origin, description). Always queued for human approval; the measure keeps its review status. Needs the Tariffs module.",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string", "const": "tariffMeasureUpdate" },
+        "description": { "type": "string", "minLength": 1 }
       }
     },
     "thinkTool": {

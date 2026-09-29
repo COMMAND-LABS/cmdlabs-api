@@ -46,6 +46,8 @@ SAFE_EXCEPTION_TYPES = {
     "CredentialDecryptError",
     "LlmInitError",
     "CredentialError",
+    "MeasureEditError",      # services/tnd_measure_edits: edit checks, fixed messages
+    "KnowledgeTargetError",  # tools/knowledge_delete: target lookup, fixed messages
 }
 
 
