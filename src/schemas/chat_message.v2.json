@@ -19,6 +19,15 @@
       "type": "string",
       "description": "The text content of the message."
     },
+    "agentName": {
+      "type": "string",
+      "description": "Display name of the agent that produced this AI message (multi-agent / swarm flows)."
+    },
+    "attachments": {
+      "type": "array",
+      "description": "Files attached to a human message (helpers/message_history.store_user_message). The GCS-backed reference is {type, filename, gcs_bucket, gcs_file_path, content_type} with null fields dropped; legacy PDF-only messages carry just {type: 'pdf', filename}.",
+      "items": { "$ref": "#/$defs/attachment" }
+    },
     "blocks": {
       "type": "array",
       "description": "Ordered presentation blocks for AI messages produced over multiple model calls (multi-step turns). Text blocks carry one model segment's text; tool blocks reference an entry in toolCalls by index, preserving where in the turn the call happened. Absent for single-segment messages — content alone renders those. content always holds the full text (all segments joined), so consumers ignorant of blocks lose layout, never words.",
@@ -49,20 +58,67 @@
       "type": "array",
       "description": "Array of tool calls made during the generation of this message. Only present for AI messages. Each tool call has a different schema depending on the tool type.",
       "items": {
-        "oneOf": [
-          { "$ref": "#/$defs/vectorSearchToolCall" },
-          { "$ref": "#/$defs/vectorSearchWithRerankingToolCall" },
-          { "$ref": "#/$defs/dbTableReadToolCall" },
-          { "$ref": "#/$defs/dbTableWriteToolCall" },
-          { "$ref": "#/$defs/sendEmailToolCall" },
-          { "$ref": "#/$defs/customToolCall" }
-        ],
-        "description": "A tool call. The schema varies by tool type."
+        "description": "A tool call. The schema is selected by toolType: each typed layout applies only to its own toolType, and every other toolType (custom, and typed tools passed through as-is by helpers/tool_calls._format_typed such as loadSkill, saveSkill, think, timeSeriesForecast, codeExecution, knowledgeWrite, contact*) uses the generic customToolCall layout.",
+        "type": "object",
+        "allOf": [
+          {
+            "if": { "required": ["toolType"], "properties": { "toolType": { "const": "vectorSearch" } } },
+            "then": { "$ref": "#/$defs/vectorSearchToolCall" }
+          },
+          {
+            "if": { "required": ["toolType"], "properties": { "toolType": { "const": "vectorSearchWithReranking" } } },
+            "then": { "$ref": "#/$defs/vectorSearchWithRerankingToolCall" }
+          },
+          {
+            "if": { "required": ["toolType"], "properties": { "toolType": { "const": "dbTableRead" } } },
+            "then": { "$ref": "#/$defs/dbTableReadToolCall" }
+          },
+          {
+            "if": { "required": ["toolType"], "properties": { "toolType": { "const": "dbTableWrite" } } },
+            "then": { "$ref": "#/$defs/dbTableWriteToolCall" }
+          },
+          {
+            "if": { "required": ["toolType"], "properties": { "toolType": { "enum": ["sendTxtEmailWithSes", "sendHtmlEmailWithSes", "sendTxtEmailWithGoogleOAuth", "sendTxtEmailWithGoogleSmtp"] } } },
+            "then": { "$ref": "#/$defs/sendEmailToolCall" }
+          },
+          {
+            "if": { "required": ["toolType"], "properties": { "toolType": { "enum": ["vectorSearch", "vectorSearchWithReranking", "dbTableRead", "dbTableWrite", "sendTxtEmailWithSes", "sendHtmlEmailWithSes", "sendTxtEmailWithGoogleOAuth", "sendTxtEmailWithGoogleSmtp"] } } },
+            "else": { "$ref": "#/$defs/customToolCall" }
+          }
+        ]
       },
       "default": []
     }
   },
   "$defs": {
+    "attachment": {
+      "type": "object",
+      "description": "A file attached to a human message. Known fields are typed; others are tolerated so older/newer attachment shapes still validate.",
+      "additionalProperties": true,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Attachment kind: 'pdf', 'image', 'document', or 'file' (default when unspecified)"
+        },
+        "filename": {
+          "type": "string",
+          "description": "Original filename"
+        },
+        "gcs_bucket": {
+          "type": "string",
+          "description": "GCS bucket holding the durable copy"
+        },
+        "gcs_file_path": {
+          "type": "string",
+          "description": "Object path of the durable copy within gcs_bucket"
+        },
+        "content_type": {
+          "type": "string",
+          "description": "MIME type of the file (e.g., 'application/pdf')"
+        }
+      }
+    },
     "vectorSearchToolCall": {
       "type": "object",
       "description": "Tool call for vector search (semantic retrieval)",
@@ -188,20 +244,12 @@
         },
         "score": {
           "type": "number",
-          "description": "Similarity score (0-1)",
-          "minimum": 0,
-          "maximum": 1
+          "description": "Relevance score: reranker relevance (0-1) for reranked results, otherwise the index's similarity score (range depends on the index metric: cosine, euclidean, or dotproduct)"
         },
         "metadata": {
-          "oneOf": [
-            {
-              "$ref": "#/$defs/textDocumentMetadata"
-            },
-            {
-              "$ref": "#/$defs/qaMetadata"
-            }
-          ],
-          "description": "Metadata structure varies by ingestion type (text/markdown vs CSV Q&A)"
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Vector metadata as stored in Pinecone. The common shapes are textDocumentMetadata (text/markdown ingest) and qaMetadata (CSV / PDF-to-FAQ ingest), but they are not enforced: a namespace can also hold vectors from other writers (e.g., crm) or from before a metadata rename (e.g., gcs_bucket / gcs_file_path)."
         }
       }
     },
@@ -250,6 +298,26 @@
           "type": "integer",
           "description": "Total number of chunks in the document",
           "minimum": 1
+        },
+        "user_id": {
+          "type": "string",
+          "description": "ID of the user who uploaded the file"
+        },
+        "user_email": {
+          "type": "string",
+          "description": "Email of the user who uploaded the file"
+        },
+        "upload_timestamp": {
+          "type": "string",
+          "description": "Upload timestamp in milliseconds (unix epoch); same value as uploadTimestamp"
+        },
+        "created_at": {
+          "type": "string",
+          "description": "Creation timestamp (front matter or upload date)"
+        },
+        "last_edited_at": {
+          "type": "string",
+          "description": "Last edit timestamp (front matter or upload date)"
         },
         "storage_provider": {
           "type": "string",
@@ -367,17 +435,17 @@
           "type": "object",
           "properties": {
             "filters": {
-              "type": "object",
-              "description": "Filters applied to the query",
+              "type": ["object", "null"],
+              "description": "Filters applied to the query (null when the model passed none)",
               "additionalProperties": true
             },
             "limit": {
-              "type": "integer",
-              "description": "Maximum number of results"
+              "type": ["integer", "null"],
+              "description": "Maximum number of results (null when the model left the default)"
             },
             "offset": {
-              "type": "integer",
-              "description": "Number of results to skip"
+              "type": ["integer", "null"],
+              "description": "Number of results to skip (null when the model left the default)"
             }
           }
         },
@@ -464,8 +532,8 @@
               "description": "Success or error message"
             },
             "error": {
-              "type": "string",
-              "description": "Error message if insert failed"
+              "type": ["string", "null"],
+              "description": "Error message if insert failed (null on success)"
             }
           }
         }
@@ -493,7 +561,7 @@
             "subject": { "type": "string", "description": "Email subject line" },
             "body": { "type": "string", "description": "Plain-text email body" },
             "html_body": { "type": ["string", "null"], "description": "HTML email body (sendHtmlEmailWithSes)" },
-            "template_id": { "type": "integer", "description": "Email template ID (sendHtmlEmailWithSes)" },
+            "template_id": { "type": ["integer", "string"], "description": "Email template ID (sendHtmlEmailWithSes); the raw model argument, normally an integer" },
             "variables": { "type": "object", "description": "Template variables", "additionalProperties": true }
           }
         },
@@ -510,7 +578,7 @@
     },
     "customToolCall": {
       "type": "object",
-      "description": "Fallback for unrecognized or custom tool calls",
+      "description": "Generic layout: untagged tools (toolType 'custom') and every typed tool without a dedicated layout above, which helpers/tool_calls passes through as-is (loadSkill, saveSkill, think, timeSeriesForecast, codeExecution, knowledgeWrite, contactRead, contactEventsRead, contactEventWrite, ...). Selected by toolType, never as a fallback for a malformed typed call.",
       "additionalProperties": false,
       "required": ["toolType", "toolName", "input", "output"],
       "properties": {

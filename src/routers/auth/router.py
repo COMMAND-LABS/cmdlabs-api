@@ -2,17 +2,14 @@ from datetime import timedelta, datetime, timezone
 import hashlib
 import logging
 import random
-import uuid
 from fastapi import APIRouter, HTTPException, status, Header, Response, BackgroundTasks, Request
 from pydantic import BaseModel, field_validator
 from jose import jwt
 import os
 from src.db.models import Account, UsageCredits
 from src.routers.auth.background_tasks.record_login import record_login
-from src.routers.auth.background_tasks.send_reset_password_link_email_ses import send_reset_password_link_email_ses
-from src.routers.auth.background_tasks.send_password_has_been_reset_email_ses import send_password_has_been_reset_email_ses
 from src.routers.auth.background_tasks.send_login_code_email_ses import send_login_code_email_ses
-from src.deps import db_dependency, bcrypt_context, jwt_dependency
+from src.deps import db_dependency, jwt_dependency
 
 from src.services.organizations import ensure_membership
 from src.rate_limit import limiter
@@ -32,19 +29,6 @@ SIGNUP_CAP = int(os.getenv("SIGNUP_CAP", "0") or 0)
 def _canonical_email(v: str) -> str:
     """Canonical email form used for storage and lookups (lowercase + trimmed)."""
     return v.strip().lower()
-
-class RequestPasswordResetBody(BaseModel):
-    email: str
-
-    @field_validator("email")
-    @classmethod
-    def _normalize_email(cls, v: str) -> str:
-        return _canonical_email(v)
-
-class PasswordResetBody(BaseModel):
-    accountId: int
-    resetToken: str
-    newPassword: str
 
 class CurrentUserResponse(BaseModel):
     email: str
@@ -113,42 +97,12 @@ def logout(request: Request, response: Response):
     )
     return {"message": "Logged out successfully"}
 
-@router.post("/request-password-reset")
-def request_reset_password(request_body: RequestPasswordResetBody, db: db_dependency):
-    try:
-        account = db.query(Account).filter(Account.email == request_body.email).first()
-        if not account:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
-
-        reset_token: str = str(uuid.uuid4())
-        account.reset_token = reset_token
-        db.commit()
-
-        send_reset_password_link_email_ses(account.id, account.email, reset_token)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-@router.post("/reset-password")
-def reset_password(request_body: PasswordResetBody, db: db_dependency):
-    try:
-        account = db.query(Account).filter(
-            Account.id == request_body.accountId,
-            Account.reset_token == request_body.resetToken
-        ).first()
-        if not account:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
-
-        account.hashed_password = bcrypt_context.hash(request_body.newPassword)
-        account.reset_token = None
-        db.commit()
-
-        send_password_has_been_reset_email_ses(account.email)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+# POST /request-password-reset and /reset-password sat here. Removed
+# 2026-09-29: sign-in is by emailed one-time code, so the password they set was
+# never read, the emailed link pointed at a page that did not exist, and the
+# request route was unauthenticated, unthrottled and answered 404 for unknown
+# emails (an account-existence check that also sent SES mail on every call).
+# The accounts.hashed_password / reset_token columns remain for now.
 
 @router.post("/request-code", status_code=status.HTTP_200_OK)
 @limiter.limit("5/minute")

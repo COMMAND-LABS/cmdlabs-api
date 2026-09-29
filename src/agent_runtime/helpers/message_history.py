@@ -81,10 +81,11 @@ def store_user_message(
                 "filename": pdf_filename
             }]
 
-        # Validate message against schema
+        # Validate message against schema v2 (same schema as AI messages;
+        # it types `attachments`). Log-only: a mismatch never fails the request.
         if validate:
             try:
-                validate_against_schema(message_obj, "message", 1)
+                validate_against_schema(message_obj, "chat_message", 2)
             except Exception as validation_error:
                 logger.error(f"[MESSAGE HISTORY] Message validation error: {validation_error}")
                 # Continue anyway - don't fail the request

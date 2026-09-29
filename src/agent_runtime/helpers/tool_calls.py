@@ -6,6 +6,7 @@ Handles formatting tool call data according to the chat_message.v2.json schema.
 import ast
 import json as _json
 import logging
+from functools import partial
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -168,10 +169,12 @@ def _format_send_txt_email(
     tool_name: str,
     tool_input: dict[str, Any],
     tool_output: dict[str, Any],
+    tool_type: str = "sendTxtEmailWithSes",
 ) -> dict[str, Any]:
-    """Format a send-plain-text-email tool call."""
+    """Format a send-plain-text-email tool call (SES or either Gmail variant:
+    same inputs and output, only the provider differs)."""
     return {
-        "toolType": "sendTxtEmailWithSes",
+        "toolType": tool_type,
         "toolName": tool_name,
         "input": {
             "to": tool_input.get("to_email", tool_input.get("to", "")),
@@ -314,6 +317,10 @@ _FORMATTERS_BY_TYPE = {
     "dbTableWrite": _format_db_table_write,
     "sendTxtEmailWithSes": _format_send_txt_email,
     "sendHtmlEmailWithSes": _format_send_html_email,
+    "sendTxtEmailWithGoogleOAuth": partial(
+        _format_send_txt_email, tool_type="sendTxtEmailWithGoogleOAuth"),
+    "sendTxtEmailWithGoogleSmtp": partial(
+        _format_send_txt_email, tool_type="sendTxtEmailWithGoogleSmtp"),
     "loadSkill": _format_load_skill,
     "saveSkill": _format_save_skill,
 }

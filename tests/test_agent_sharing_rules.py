@@ -145,3 +145,38 @@ async def test_sharing_stays_premium_even_if_agents_reach_the_free_plan(
     assert resp.status_code == 403, resp.text
     assert resp.json()["detail"] == "Sharing agents requires the premium plan"
     assert _grants(db, agent) == 0
+
+
+# ── revoking a share ────────────────────────────────────────────────────────
+
+def _grant(db: Session, agent, grantee):
+    g = AccessGrant(org_id=agent.org_id, resource_type="agent", resource_id=agent.id,
+                    principal_type="account", principal_id=grantee.account_id,
+                    role="use")
+    db.add(g)
+    db.flush()
+    return g
+
+
+async def test_the_owner_can_revoke_a_share(db: Session, _override_db, owner, invitee):
+    agent = _agent(db, owner)
+    grant = _grant(db, agent, invitee)
+    async with client_for(owner) as c:
+        resp = await c.delete(f"/api/agents/{agent.id}/access-grants/{grant.id}")
+    assert resp.status_code == 204, resp.text
+    assert _grants(db, agent) == 0
+
+
+async def test_revoke_answers_not_found_for_anyone_but_the_owner(
+    db: Session, _override_db, owner, teammate, invitee
+):
+    """Same answer for "not yours" and "does not exist", in this org or another."""
+    agent = _agent(db, owner, visibility="org")
+    grant = _grant(db, agent, invitee)
+    outsider = make_tenant(db, slug="share-rules-elsewhere", account_id=9104)
+    for caller in (teammate, invitee, outsider):
+        async with client_for(caller) as c:
+            resp = await c.delete(f"/api/agents/{agent.id}/access-grants/{grant.id}")
+            missing = await c.delete(f"/api/agents/999999/access-grants/{grant.id}")
+        assert resp.status_code == missing.status_code == 404, (caller.account_id, resp.text)
+    assert _grants(db, agent) == 1

@@ -19,6 +19,10 @@ from .db_write import create_db_write_tool
 from .exceptions import CredentialError
 from .factory import create_tools_from_agent_config
 from .registry import ToolRegistry
+from .send_email_with_gmail import (
+    create_send_email_with_google_oauth_tool,
+    create_send_email_with_google_smtp_tool,
+)
 from .send_email_with_ses import create_send_email_with_ses_tool
 from .send_html_email_with_ses import create_send_html_email_with_ses_tool
 from .think import create_think_tool
@@ -34,6 +38,8 @@ ToolRegistry.register("dbTableRead", create_db_read_tool)
 ToolRegistry.register("dbTableWrite", create_db_write_tool)
 ToolRegistry.register("sendTxtEmailWithSes", create_send_email_with_ses_tool)
 ToolRegistry.register("sendHtmlEmailWithSes", create_send_html_email_with_ses_tool)
+ToolRegistry.register("sendTxtEmailWithGoogleOAuth", create_send_email_with_google_oauth_tool)
+ToolRegistry.register("sendTxtEmailWithGoogleSmtp", create_send_email_with_google_smtp_tool)
 ToolRegistry.register("contactRead", create_contact_read_tool)
 ToolRegistry.register("contactEventsRead", create_contact_events_read_tool)
 ToolRegistry.register("contactEventWrite", create_contact_event_write_tool)

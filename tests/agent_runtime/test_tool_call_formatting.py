@@ -151,3 +151,16 @@ def test_the_type_decides_not_the_name():
         tool_output={"ok": True},
     )
     assert untagged["toolType"] == "custom"
+
+
+def test_gmail_email_calls_format_like_ses_but_keep_their_type():
+    from src.agent_runtime.helpers.tool_calls import format_tool_call
+
+    for tool_type in ("sendTxtEmailWithGoogleOAuth", "sendTxtEmailWithGoogleSmtp"):
+        call = format_tool_call(
+            "send_mail", {"to_email": "x@y.co", "subject": "Hi", "body": "Hello"},
+            {"success": False, "error": "Failed to queue email for approval."},
+            tool_type=tool_type)
+        assert call["toolType"] == tool_type
+        assert call["input"] == {"to": "x@y.co", "subject": "Hi", "body": "Hello"}
+        assert call["output"]["success"] is False

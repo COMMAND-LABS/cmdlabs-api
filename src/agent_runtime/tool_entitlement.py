@@ -52,6 +52,8 @@ TOOL_MODULES = {
     "contactEventWrite": "contacts",
     "sendTxtEmailWithSes": "email_campaigns",
     "sendHtmlEmailWithSes": "email_campaigns",
+    "sendTxtEmailWithGoogleOAuth": "email_campaigns",
+    "sendTxtEmailWithGoogleSmtp": "email_campaigns",
     # Ungated: bound to a credential grant rather than to a product module.
     "dbTableRead": None,
     "dbTableWrite": None,

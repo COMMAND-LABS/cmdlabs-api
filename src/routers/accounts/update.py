@@ -25,7 +25,7 @@ async def update_account(
     - name: Display name (whitespace-only clears it)
     - newsletter_subscribed: Newsletter subscription preference
 
-    Note: Password changes should use the /auth/reset-password flow.
+    There is no password: sign-in is by emailed one-time code.
     """
     account_id = account_id_from_claims(jwt)
     account = ensure_account(db, account_id)

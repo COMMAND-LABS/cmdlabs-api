@@ -31,8 +31,20 @@ async def similarity_search(
     Only the namespaces in SEARCHABLE_NAMESPACES may be searched, and results
     are filtered to vectors the caller owns (see _shared.py) — a namespace is
     shared by every account, so it is never an access boundary on its own.
+
+    Gated by the knowledge_bases module (its path prefix). The Prompts page now
+    searches through POST /api/prompts/search instead, gated by `prompts`, so
+    plans with Prompts but no knowledge bases (Free) can search their prompts.
     """
-    filter_ = owner_filter(namespace, account_id_from_claims(decoded_jwt))
+    return await run_similarity_search(
+        query, namespace, account_id_from_claims(decoded_jwt), request)
+
+
+async def run_similarity_search(
+    query: Query, namespace: str, account_id: int, request: Request | None,
+) -> dict:
+    """The search itself, shared by this route and /api/prompts/search."""
+    filter_ = owner_filter(namespace, account_id)
     if filter_ is None:
         return {
             "success": False,

@@ -7,8 +7,9 @@ been removed altogether) — so the second authority moved
 with the thing it was an authority over rather than being dropped.
 """
 from fastapi import APIRouter, HTTPException, status, Request
-from src.deps import db_dependency, jwt_dependency, account_id_from_claims
-from src.db.models import Agent, AccessGrant
+from src.deps import db_dependency, jwt_dependency, account_id_from_claims, org_dependency
+from src.db.models import AccessGrant
+from src.routers.agents._shared import owned_agent_or_404
 from src.services import access
 from src.services.access_admin import record_access_event
 from src.rate_limit import limiter
@@ -22,14 +23,18 @@ async def revoke_grant(
     grant_id: int,
     db: db_dependency,
     jwt: jwt_dependency,
+    org: org_dependency,
     request: Request,
 ):
-    """Revoke a grant on this agent. Agent owner only."""
-    account_id = account_id_from_claims(jwt)
+    """Revoke a grant on this agent. Agent owner only.
 
-    agent = db.query(Agent).filter(Agent.id == agent_id).first()
-    if not agent:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    The owner lookup is the one every other managing route uses: the agent
+    must be in the org the caller is acting in AND be theirs, else 404. It
+    used to load the agent by id alone and answer 403 for someone else's, so
+    the status code told a caller whether an agent id existed in another org.
+    """
+    account_id = account_id_from_claims(jwt)
+    owned_agent_or_404(db, agent_id, org)
 
     grant = db.query(AccessGrant).filter(
         AccessGrant.id == grant_id,
@@ -38,9 +43,6 @@ async def revoke_grant(
     ).first()
     if not grant:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grant not found")
-
-    if agent.account_id != account_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have permission to revoke this grant")
 
     record_access_event(
         db,
