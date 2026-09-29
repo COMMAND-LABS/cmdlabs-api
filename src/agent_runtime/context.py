@@ -19,7 +19,7 @@ from langchain_classic.agents import (
     create_tool_calling_agent,
 )
 from langchain_classic.memory import ConversationBufferMemory
-from langchain_community.chat_message_histories import ChatMessageHistory
+from langchain_core.chat_history import InMemoryChatMessageHistory as ChatMessageHistory
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 

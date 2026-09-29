@@ -7,7 +7,7 @@ and storing new messages to the database.
 import logging
 from typing import Any
 
-from langchain_community.chat_message_histories import ChatMessageHistory
+from langchain_core.chat_history import InMemoryChatMessageHistory as ChatMessageHistory
 
 from src.db.models import ChatMessage
 from src.schemas import validate_against_schema

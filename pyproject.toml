@@ -5,30 +5,25 @@ description = "COMMAND LABS API"
 requires-python = ">=3.12"
 readme = "README.md"
 dependencies = [
+    # Used directly by services/fetch_embedding.py and agent_runtime/tools/vector_search.py;
+    # previously only present transitively (via langchain-community).
+    "aiohttp>=3.9,<4",
     "anyio>=4.10,<5",  # httpcore2 (via anthropic>=1 -> httpx2) calls anyio.Lock(fast_acquire=True), added in anyio 4.5
     "boto3==1.34.153",
     "fastapi>=0.112.0,<1.0",
     "httpx==0.28.0",
-    "langchain>=1.0.0",
     "langchain-anthropic>=0.3.19",
     "langchain-classic>=1.0.0",
-    "langchain-community>=0.3.31",
     "langchain-core>=1.0.0",
     "langchain-google-genai>=2.0.0",
     "langchain-ollama>=0.3.10",
     "langchain-openai>=1.0.0",
     "langsmith>=0.1.0",
-    "numpy>=1.26.0,<3.0.0",
-    "openai>=1.109.1",
-    "orjson==3.10.6",
-    "packaging>=23.2",
-    "protobuf<5.0,>=3.19",
     "pydantic>=2.9.0",
     "python-dotenv==1.0.1",
     "bcrypt==4.0.1",
     "PyYAML==6.0.1",
     "starlette<0.38.0,>=0.37.2",
-    "tenacity==8.5.0",
     "typing-extensions>=4.16.0",  # langchain-protocol needs PEP 728 TypedDict extra_items
     "uvicorn==0.30.5",
     "pinecone>=7.3.0,<8.0",
@@ -42,13 +37,11 @@ dependencies = [
     "psycopg[binary]>=3.2.1,<4.0",
     "passlib>=1.7.4,<2.0",
     "python-multipart>=0.0.9,<1.0",
-    "requests>=2.32.3,<3.0",
     "alembic>=1.13.2,<2.0",
     "slowapi>=0.1.9,<0.2.0",
     "pymupdf>=1.24.0,<2.0",
     "google-cloud-storage>=2.18.2,<3.0",
     "google-cloud-pubsub>=2.31.1,<3.0",
-    "tiktoken>=0.5.0,<1.0",
     "stripe>=7.0.0,<8.0",
     "jsonschema>=4.20.0,<5.0",
     "python-docx>=1.1,<2.0",

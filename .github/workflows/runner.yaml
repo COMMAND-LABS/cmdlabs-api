@@ -28,11 +28,14 @@ jobs:
         with:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.12.3"  # same uv as runner/Dockerfile
+      # --locked: test exactly the versions the image installs (runner/uv.lock),
+      # and fail if the lock is out of date with pyproject.toml.
       - name: Run runner tests
         working-directory: runner
         run: |
-          uv venv
-          uv pip install -e '.[dev]'
+          uv sync --locked --extra dev
           uv run python -m pytest -q
 
   deploy:

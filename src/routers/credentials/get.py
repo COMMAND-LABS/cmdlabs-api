@@ -1,16 +1,20 @@
 """
 Get credential endpoint (legacy).
 """
+import logging
+
 from fastapi import APIRouter, Request
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
 from ._shared import invalid_data_as_400, legacy_detail_response, owned_credential_or_404
 from .models import CredentialDetailResponse
 from src.rate_limit import limiter
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 
-@router.get("/{credential_id}", response_model=CredentialDetailResponse)
+@router.get("/{credential_id}", response_model=CredentialDetailResponse, deprecated=True)
 @limiter.limit("30/minute")
 async def get_credential(
     credential_id: int,
@@ -26,6 +30,7 @@ async def get_credential(
     For full credential data (DB connections, etc.), use GET /{id}/full
     """
     account_id = account_id_from_claims(jwt)
+    logger.warning("[DEPRECATED] GET /api/credentials/{credential_id} called by account %s", account_id)
     ensure_account(db, account_id)
 
     credential = owned_credential_or_404(db, account_id, credential_id=credential_id)

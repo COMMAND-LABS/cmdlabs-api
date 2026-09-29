@@ -1,6 +1,8 @@
 """
 Create credential endpoint (legacy).
 """
+import logging
+
 from fastapi import APIRouter, status, Request
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
 from src.db.models import Credential
@@ -9,10 +11,12 @@ from .encryption import encrypt_credential_data
 from .models import CreateCredentialRequest, CredentialResponse
 from src.rate_limit import limiter
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 
-@router.post("/", status_code=status.HTTP_201_CREATED, response_model=CredentialResponse)
+@router.post("/", status_code=status.HTTP_201_CREATED, response_model=CredentialResponse, deprecated=True)
 @limiter.limit("10/minute")
 async def create_credential(
     request_body: CreateCredentialRequest,
@@ -28,6 +32,7 @@ async def create_credential(
     For flexible credentials (DB connections, OAuth, etc.), use POST /flexible
     """
     account_id = account_id_from_claims(jwt)
+    logger.warning("[DEPRECATED] POST /api/credentials/ called by account %s", account_id)
     ensure_account(db, account_id)
 
     with invalid_data_as_400(db, 'creating credential'):

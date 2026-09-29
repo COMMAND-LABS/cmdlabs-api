@@ -1,6 +1,8 @@
 """
 Get credential by service name with full decrypted data endpoint.
 """
+import logging
+
 from fastapi import APIRouter, Request
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
 from src.db.service_name import ServiceName
@@ -8,10 +10,12 @@ from ._shared import flexible_detail_response, invalid_data_as_400, owned_creden
 from .models import FlexibleCredentialDetailResponse
 from src.rate_limit import limiter
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 
-@router.get("/service/{service_name}/full", response_model=FlexibleCredentialDetailResponse)
+@router.get("/service/{service_name}/full", response_model=FlexibleCredentialDetailResponse, deprecated=True)
 @limiter.limit("30/minute")
 async def get_credential_by_service_full(
     service_name: ServiceName,
@@ -23,6 +27,7 @@ async def get_credential_by_service_full(
     Get a credential by service/provider type (first match) with full decrypted data.
     """
     account_id = account_id_from_claims(jwt)
+    logger.warning("[DEPRECATED] GET /api/credentials/service/{service_name}/full called by account %s", account_id)
     ensure_account(db, account_id)
 
     credential = owned_credential_or_404(db, account_id, service_name=service_name)

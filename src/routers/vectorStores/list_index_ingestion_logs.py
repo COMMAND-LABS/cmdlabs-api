@@ -1,6 +1,7 @@
 """
 List ingestion logs for a specific index (delegation endpoint).
 """
+import logging
 from typing import Optional
 from datetime import datetime
 
@@ -8,9 +9,11 @@ from fastapi import APIRouter, Request, Query
 from src.deps import db_dependency, jwt_dependency
 from src.rate_limit import limiter
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
-@router.get("/indexes/{index_name}/ingestion-logs")
+@router.get("/indexes/{index_name}/ingestion-logs", deprecated=True)
 @limiter.limit("30/minute")
 async def list_index_ingestion_logs(
     index_name: str,
@@ -32,6 +35,7 @@ async def list_index_ingestion_logs(
     List ingestion logs for a specific index.
     This endpoint filters logs by index_name automatically.
     """
+    logger.warning("[DEPRECATED] GET /api/vector-stores/indexes/{index_name}/ingestion-logs called by account %s", jwt.get("id"))
     # Import here to avoid circular imports
     from .ingestion_logs import list_ingestion_logs
 

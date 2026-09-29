@@ -1,6 +1,8 @@
 """
 Get credential by service name endpoint (legacy).
 """
+import logging
+
 from fastapi import APIRouter, Request
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
 from src.db.service_name import ServiceName
@@ -8,10 +10,12 @@ from ._shared import invalid_data_as_400, legacy_detail_response, owned_credenti
 from .models import CredentialDetailResponse
 from src.rate_limit import limiter
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 
-@router.get("/service/{service_name}", response_model=CredentialDetailResponse)
+@router.get("/service/{service_name}", response_model=CredentialDetailResponse, deprecated=True)
 @limiter.limit("30/minute")
 async def get_credential_by_service(
     service_name: ServiceName,
@@ -26,6 +30,7 @@ async def get_credential_by_service(
     For full credential data, use GET /service/{service_name}/full
     """
     account_id = account_id_from_claims(jwt)
+    logger.warning("[DEPRECATED] GET /api/credentials/service/{service_name} called by account %s", account_id)
     ensure_account(db, account_id)
 
     credential = owned_credential_or_404(db, account_id, service_name=service_name)

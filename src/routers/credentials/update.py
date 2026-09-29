@@ -1,6 +1,8 @@
 """
 Update credential endpoint (legacy).
 """
+import logging
+
 from fastapi import APIRouter, Request
 from src.deps import db_dependency, jwt_dependency, account_id_from_claims, ensure_account
 from ._shared import invalid_data_as_400, metadata_response, owned_credential_or_404
@@ -8,10 +10,12 @@ from .encryption import encrypt_credential_data
 from .models import UpdateCredentialRequest, CredentialResponse
 from src.rate_limit import limiter
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 
-@router.put("/{credential_id}", response_model=CredentialResponse)
+@router.put("/{credential_id}", response_model=CredentialResponse, deprecated=True)
 @limiter.limit("10/minute")
 async def update_credential(
     credential_id: int,
@@ -27,6 +31,7 @@ async def update_credential(
     For flexible credentials, use PUT /{id}/full
     """
     account_id = account_id_from_claims(jwt)
+    logger.warning("[DEPRECATED] PUT /api/credentials/{credential_id} called by account %s", account_id)
     ensure_account(db, account_id)
 
     credential = owned_credential_or_404(db, account_id, credential_id=credential_id)

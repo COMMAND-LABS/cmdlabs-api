@@ -84,9 +84,14 @@ def run_migrations_offline() -> None:
 #                  drop it in an explicit, deliberate migration. Do NOT let
 #                  autogenerate make that decision by accident.
 #
+#   memory_chat_messages - created by c9d0e1f2a3b4. Its router (the Memory
+#                  Chat demo) was removed and its MemoryChatMessage model
+#                  followed; the table and its rows are kept. Same rule: drop
+#                  it only in an explicit migration.
+#
 # Keep this list SHORT and each entry justified. It suppresses a real signal,
 # so anything added here should be something a human has actually looked at.
-_TABLES_WITHOUT_MODELS = {"json_schemas"}
+_TABLES_WITHOUT_MODELS = {"json_schemas", "memory_chat_messages"}
 
 
 def include_object(object_, name, type_, reflected, compare_to):

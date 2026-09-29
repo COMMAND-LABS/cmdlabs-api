@@ -2,6 +2,8 @@
 Ingestion Logs router for reading VectorDbIngestionLog entries.
 Provides endpoints to query and filter vector database operation logs.
 """
+import logging
+
 from fastapi import APIRouter, HTTPException, status, Request, Query
 from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
@@ -11,6 +13,8 @@ from src.db.models import VectorDbIngestionLog, OperationType, OperationStatus
 from src.services.vector_store_access import authorize_vector_store
 from src.routers.pagination import Page
 from src.rate_limit import limiter
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -176,7 +180,7 @@ async def list_ingestion_logs(
     return IngestionLogsListResponse.of(
         log_responses, total=total, limit=limit, offset=offset)
 
-@router.get("/ingestion-logs/{log_id}", response_model=IngestionLogResponse)
+@router.get("/ingestion-logs/{log_id}", response_model=IngestionLogResponse, deprecated=True)
 @limiter.limit("30/minute")
 async def get_ingestion_log(
     log_id: str,
@@ -190,6 +194,7 @@ async def get_ingestion_log(
     Only returns logs belonging to the authenticated user.
     """
     account_id = account_id_from_claims(jwt)
+    logger.warning("[DEPRECATED] GET /api/vector-stores/ingestion-logs/{log_id} called by account %s", account_id)
         
     # Query log by ID and account_id
     log = db.query(VectorDbIngestionLog).filter(
@@ -226,7 +231,7 @@ async def get_ingestion_log(
         batch_number=log.batch_number
     )
 
-@router.get("/ingestion-logs/stats/summary", response_model=dict)
+@router.get("/ingestion-logs/stats/summary", response_model=dict, deprecated=True)
 @limiter.limit("30/minute")
 async def get_ingestion_logs_summary(
     db: db_dependency,
@@ -241,6 +246,7 @@ async def get_ingestion_logs_summary(
     Returns aggregated counts and totals for the authenticated user's logs.
     """
     account_id = account_id_from_claims(jwt)
+    logger.warning("[DEPRECATED] GET /api/vector-stores/ingestion-logs/stats/summary called by account %s", account_id)
         
     # Base query
     query = db.query(VectorDbIngestionLog).filter(

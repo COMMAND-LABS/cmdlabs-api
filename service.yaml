@@ -119,12 +119,6 @@ spec:
                   name: KB_INGEST_SA
                   key: latest
 
-            - name: API_HOSTNAME
-              valueFrom:
-                secretKeyRef:
-                  name: API_HOSTNAME
-                  key: latest
-
             # - name: SERPER_API_KEY
             #   valueFrom:
             #     secretKeyRef:
@@ -151,12 +145,6 @@ spec:
                   name: PINECONE_ALL_MINILM_L6_V2_INDEX
                   key: latest
 
-            - name: PINECONE_IMAGEBIND_1024_DIMS_INDEX
-              valueFrom:
-                secretKeyRef:
-                  name: PINECONE_IMAGEBIND_1024_DIMS_INDEX
-                  key: latest
-
             # Autoresearch & email tracking
 
             - name: TRACKING_BASE_URL
@@ -166,9 +154,6 @@ spec:
                   key: latest
 
             # Google Cloud Storage and PubSub
-            - name: GCS_BUCKET_NAME
-              value: "cmdlabs-kb-ingest-storage"
-
             - name: GOOGLE_CLOUD_PROJECT
               value: "command-labs"
 

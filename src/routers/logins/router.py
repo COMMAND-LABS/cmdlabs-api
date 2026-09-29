@@ -10,9 +10,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-@router.get('/')
+@router.get('/', deprecated=True)
 @limiter.limit("100/minute")
 def get_logins(db: db_dependency, jwt: jwt_dependency, request: Request, cursor: Optional[int] = 0):
+    logger.warning("[DEPRECATED] GET /api/logins/ called by account %s", jwt.get('id'))
     results = db.query(Logins).filter(Logins.account_id == jwt.get('id')).order_by(Logins.created_at.desc()).offset(cursor).limit(40).all()
 
     results = [{
