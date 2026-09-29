@@ -71,6 +71,10 @@ class RoleSummary(BaseModel):
     role: str
     label: str
     module_count: int
+    # What the role opens, as display labels ("Agents", "Tariffs"), so a
+    # screen can say "Can use: Agents, Knowledge Bases…" instead of a count.
+    # Home and Settings are left out: everybody has them.
+    module_labels: List[str] = []
     member_count: int
 
 
@@ -194,6 +198,11 @@ def _overview_payload(db, org) -> OrganizationOverviewResponse:
                 role=key,
                 label=role_registry.label(key),
                 module_count=len(role_registry.modules_for(key, ceiling)),
+                module_labels=[
+                    BY_KEY[k].label
+                    for k in role_registry.modules_for(key, ceiling)
+                    if k in BY_KEY and k not in ("home", "settings")
+                ],
                 member_count=per_role.get(key, 0),
             )
             for key in role_registry.ROLE_KEYS

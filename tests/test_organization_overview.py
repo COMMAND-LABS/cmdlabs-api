@@ -78,3 +78,17 @@ async def test_platform_super_admin_do_not_get_the_owners_console(
         resp = await c.get(_overview(team.org_id))
     assert resp.status_code == 404
 
+
+
+async def test_roles_say_what_they_open_by_name(db: Session, _override_db, team):
+    """A role reads as "Can use: Agents, Tariffs…", not "9 features"."""
+    async with client_for(team) as c:
+        resp = await c.get(_overview(team.org_id))
+    assert resp.status_code == 200, resp.text
+    roles = {r["role"]: r for r in resp.json()["roles"]}
+    for role in roles.values():
+        assert "Home" not in role["module_labels"]
+        assert len(role["module_labels"]) <= role["module_count"]
+    community = roles["community_member"]["module_labels"]
+    assert community, "the community role opens something"
+    assert all(isinstance(label, str) and label for label in community)
