@@ -31,6 +31,21 @@
           "minLength": 1,
           "description": "The system prompt that defines the agent's behavior and personality."
         },
+        "description": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "One-line summary of what this agent helps with, shown to the people who use it. Not sent to the model."
+        },
+        "starterPrompts": {
+          "type": "array",
+          "maxItems": 6,
+          "description": "Suggested first questions shown on the chat start screen. Not sent to the model.",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
         "model": {
           "$ref": "#/$defs/modelConfig",
           "description": "Configuration for the LLM that powers this agent. If not specified, defaults to OpenAI gpt-4o-mini."

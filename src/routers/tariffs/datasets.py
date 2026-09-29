@@ -9,22 +9,38 @@ the response carries a ready-to-paste tool config for that.
 
 Monthly data: one row per month, a date column and at least one numeric
 column. The runner needs MIN_ROWS rows to train (runner/runner/forecast.py).
+
+So nobody has to copy JSON or type a storage path, two more routes close the
+loop: GET /datasets/columns reads back a stored file's columns (for the
+forecast ability form's dropdowns), and POST /datasets/attach writes the
+forecast tool straight into an agent the caller owns.
 """
+import asyncio
+import copy
 import csv
 import datetime as dt
 import io
+import logging
 import re
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile, status
+from google.api_core.exceptions import NotFound
+from jsonschema import ValidationError as JsonSchemaValidationError
+from pydantic import BaseModel, Field
 
 from src.deps import auth_dependency, db_dependency, org_dependency
 from src.rate_limit import limiter
+from src.routers.agents._shared import owned_agent_or_404
+from src.schemas import validate_against_schema
 from src.services import account_gcs_service
 from src.services.account_gcs_service import AccountGcsCredentialMissing
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 PREFIX = "datasets/"
+DEFAULT_TOOL_NAME = "forecast_duty_spend"
 MAX_BYTES = 10 * 1024 * 1024
 MIN_ROWS = 32      # runner/runner/forecast.py: max(LAGS) + 20
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}\.csv$")
@@ -98,7 +114,7 @@ def inspect_csv(data: bytes) -> dict:
 def tool_config(gcs_path: str, info: dict) -> dict:
     cfg = {
         "type": "timeSeriesForecast",
-        "name": "forecast_duty_spend",
+        "name": DEFAULT_TOOL_NAME,
         "dataset": {"gcsPath": gcs_path},
         "dateColumn": info["date_column"],
         "targetColumn": info["suggested"]["target_column"],
@@ -110,6 +126,40 @@ def tool_config(gcs_path: str, info: dict) -> dict:
 
 def _gcs_error(e: AccountGcsCredentialMissing):
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+def _inspect_or_400(data: bytes) -> dict:
+    try:
+        return inspect_csv(data)
+    except DatasetError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+def _checked_path(path: str) -> str:
+    """A stored dataset path, datasets/<name>.csv, or 400. Never lets a caller
+    reach outside datasets/ in their bucket."""
+    path = (path or "").strip()
+    name = path[len(PREFIX):] if path.startswith(PREFIX) else ""
+    if not name or ".." in path or not _NAME.match(name):
+        raise HTTPException(status_code=400, detail=(
+            "Choose a file under datasets/ with a .csv name made of letters, "
+            "digits, '.', '_' or '-'."))
+    return path
+
+
+async def _stored_info(db, account_id: int, path: str) -> dict:
+    """Download a stored dataset from the caller's own bucket and inspect it."""
+    try:
+        data = await asyncio.to_thread(
+            account_gcs_service.download_bytes, db, account_id,
+            gcs_file_path=path, max_bytes=MAX_BYTES)
+    except AccountGcsCredentialMissing as e:
+        raise _gcs_error(e)
+    except NotFound:
+        raise HTTPException(status_code=404, detail=f"{path} was not found in your storage.")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="File exceeds the 10 MB limit")
+    return _inspect_or_400(data)
 
 
 @router.get("/datasets")
@@ -139,10 +189,7 @@ async def upload_dataset(
         raise HTTPException(status_code=400, detail="File is empty")
     if len(data) > MAX_BYTES:
         raise HTTPException(status_code=400, detail="File exceeds the 10 MB limit")
-    try:
-        info = inspect_csv(data)
-    except DatasetError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    info = _inspect_or_400(data)
 
     path = PREFIX + name
     try:
@@ -157,3 +204,74 @@ async def upload_dataset(
 
     return {"gcs_bucket": ref["gcs_bucket"], "gcs_file_path": path, **info,
             "tool_config": tool_config(path, info)}
+
+
+@router.get("/datasets/columns")
+@limiter.limit("30/minute")
+async def dataset_columns(db: db_dependency, auth: auth_dependency, org: org_dependency,
+                          request: Request, path: str = Query(...)):
+    """Columns and suggestions for a file already uploaded, for the forecast
+    ability form. Same checks as an upload, read from the caller's bucket."""
+    path = _checked_path(path)
+    info = await _stored_info(db, org.account_id, path)
+    return {"path": path, **info}
+
+
+class AttachRequest(BaseModel):
+    path: str
+    agent_id: int
+    name: str | None = Field(default=None, max_length=64)
+
+
+@router.post("/datasets/attach")
+@limiter.limit("10/minute")
+async def attach_dataset(body: AttachRequest, db: db_dependency, auth: auth_dependency,
+                         org: org_dependency, request: Request):
+    """Give an agent the caller OWNS a Forecast ability over a stored file.
+
+    Replaces the agent's forecast tool of the same name (so re-attaching a new
+    month's file is idempotent), else appends one. The file is read from the
+    caller's bucket, which is the owner's bucket the tool reads at run time.
+    """
+    path = _checked_path(body.path)
+    agent = owned_agent_or_404(db, body.agent_id, org)
+
+    config = agent.config
+    if (not isinstance(config, dict) or config.get("version") != 4
+            or not isinstance(config.get("data"), dict)):
+        raise HTTPException(status_code=400, detail=(
+            "This agent's settings are in an older format. Open the agent and "
+            "save it once, then try again."))
+
+    info = await _stored_info(db, org.account_id, path)
+    tool = tool_config(path, info)
+    if body.name and body.name.strip():
+        tool["name"] = body.name.strip()
+
+    new_config = copy.deepcopy(config)
+    tools = new_config["data"].get("tools")
+    if not isinstance(tools, list):
+        tools = []
+    replaced = False
+    for i, t in enumerate(tools):
+        if (isinstance(t, dict) and t.get("type") == "timeSeriesForecast"
+                and t.get("name") == tool["name"]):
+            tools[i] = tool
+            replaced = True
+            break
+    if not replaced:
+        tools.append(tool)
+    new_config["data"]["tools"] = tools
+
+    try:
+        validate_against_schema(new_config, "agent_config", 4)
+    except JsonSchemaValidationError:
+        raise HTTPException(status_code=400, detail=(
+            "The agent's settings would not be valid with this ability "
+            "(check the ability name: lowercase letters, digits and '_')."))
+    except FileNotFoundError:
+        logger.warning("[DATASETS] agent_config v4 schema file not found")
+
+    agent.config = new_config
+    db.commit()
+    return {"agent_id": agent.id, "agent_name": agent.name, "tool": tool, "replaced": replaced}

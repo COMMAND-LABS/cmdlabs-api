@@ -2,10 +2,12 @@
 Upload router for Vector Stores module.
 Handles file uploads to cloud storage and triggers async processing via Pub/Sub.
 """
+import io
 import json
 import logging
 from fastapi import APIRouter, Request, UploadFile, File, HTTPException, Form
 from typing import Any, Dict, Optional
+from starlette.datastructures import Headers
 from src.deps import org_dependency, jwt_dependency, db_dependency, ensure_account, account_id_from_claims
 from src.services.vector_stores_upload_service import (
     QNA_INGEST_TOPIC,
@@ -39,14 +41,16 @@ def _authorize_upload(db, decoded_jwt, org, index_name: str, owner_account_id: O
 
 
 def _require_index_and_namespace(index_name: str, namespace: str) -> None:
-    """Validate index_name and namespace are provided."""
+    """Validate index_name is provided and namespace is present (it may be empty)."""
     if not index_name or not index_name.strip():
         raise HTTPException(
             status_code=400,
             detail="index_name is required"
         )
 
-    if not namespace or not namespace.strip():
+    # An empty namespace is Pinecone's default section (shown as "Main"), so it
+    # is a valid target. Only a missing value is rejected.
+    if namespace is None:
         raise HTTPException(
             status_code=400,
             detail="namespace is required"
@@ -134,7 +138,7 @@ async def _upload_and_log(
 async def upload_csv_file(
     file: UploadFile = File(..., description="CSV file to upload"),
     index_name: str = Form(..., description="Pinecone index name"),
-    namespace: str = Form(..., description="Pinecone namespace"),
+    namespace: str = Form("", description="Pinecone namespace (empty for the default \"Main\" section)"),
     comment: Optional[str] = Form(None, description="Optional comment for the ingestion log"),
     batch_number: Optional[str] = Form(None, description="Optional batch UUID for grouping related operations"),
     owner_account_id: Optional[int] = Form(None, description="Owner of a shared knowledge base to ingest into (requires write/admin access)"),
@@ -179,7 +183,7 @@ async def upload_csv_file(
 async def upload_pdf_faq(
     file: UploadFile = File(..., description="Original PDF to store as the source document"),
     index_name: str = Form(..., description="Pinecone index name"),
-    namespace: str = Form(..., description="Pinecone namespace"),
+    namespace: str = Form("", description="Pinecone namespace (empty for the default \"Main\" section)"),
     qna_pairs: str = Form(..., description="JSON array of reviewed Q&A pairs: [{\"q\": str, \"a\": str}]"),
     comment: Optional[str] = Form(None, description="Optional comment for the ingestion log"),
     batch_number: Optional[str] = Form(None, description="Optional batch UUID for grouping related operations"),
@@ -254,7 +258,7 @@ async def upload_pdf_faq(
 async def upload_text_file(
     file: UploadFile = File(..., description="Text file to upload (.txt or .md)"),
     index_name: str = Form(..., description="Pinecone index name"),
-    namespace: str = Form(..., description="Pinecone namespace"),
+    namespace: str = Form("", description="Pinecone namespace (empty for the default \"Main\" section)"),
     comment: Optional[str] = Form(None, description="Optional comment for the ingestion log"),
     batch_number: Optional[str] = Form(None, description="Optional batch UUID for grouping related operations"),
     owner_account_id: Optional[int] = Form(None, description="Owner of a shared knowledge base to ingest into (requires write/admin access)"),
@@ -295,4 +299,127 @@ async def upload_text_file(
         # not recognise this file at all.
         topic_name=TXT_INGEST_TOPIC,
         log_prefix="[UPLOAD TEXT]",
+    )
+
+
+# Documents are read in full to extract their text, so cap them the same way the
+# general file upload does.
+MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
+DOCUMENT_EXTENSIONS = (".pdf", ".docx", ".txt", ".md")
+NO_TEXT_FOUND = "We couldn't find any text in this file — is it a scanned image?"
+
+
+def _extract_pdf_text(data: bytes) -> str:
+    """Plain text of every page, in order. Pages with no text are skipped."""
+    import fitz  # PyMuPDF
+
+    parts = []
+    with fitz.open(stream=data, filetype="pdf") as doc:
+        for page in doc:
+            text = page.get_text("text")
+            if text and text.strip():
+                parts.append(text.strip())
+    return "\n\n".join(parts)
+
+
+def _extract_docx_text(data: bytes) -> str:
+    """Paragraph text followed by table cell text (one row per line)."""
+    import docx  # python-docx
+
+    document = docx.Document(io.BytesIO(data))
+    parts = [p.text for p in document.paragraphs if p.text and p.text.strip()]
+    for table in document.tables:
+        for row in table.rows:
+            cells = []
+            for cell in row.cells:
+                text = cell.text.strip()
+                # Merged cells repeat across the row; keep one copy.
+                if text and (not cells or cells[-1] != text):
+                    cells.append(text)
+            if cells:
+                parts.append(" | ".join(cells))
+    return "\n\n".join(parts)
+
+
+@router.post("/upload-document")
+@limiter.limit("100/minute")
+async def upload_document_file(
+    file: UploadFile = File(..., description="Document to upload (.pdf, .docx, .txt or .md)"),
+    index_name: str = Form(..., description="Pinecone index name"),
+    namespace: str = Form("", description="Pinecone namespace (empty for the default \"Main\" section)"),
+    comment: Optional[str] = Form(None, description="Optional comment for the ingestion log"),
+    batch_number: Optional[str] = Form(None, description="Optional batch UUID for grouping related operations"),
+    owner_account_id: Optional[int] = Form(None, description="Owner of a shared knowledge base to ingest into (requires write/admin access)"),
+    db: db_dependency = None,
+    decoded_jwt: jwt_dependency = None,
+    org: org_dependency = None,
+    request: Request = None
+):
+    """
+    Upload a document for free-text ingestion.
+
+    .txt and .md files are stored as-is (same as /upload-text). For .pdf and
+    .docx the text is extracted here and stored as "<name>.txt", so the TXT
+    ingest function chunks it exactly like an uploaded text file. The original
+    filename is recorded in the ingestion log comment.
+    """
+    account_id = _authorize_upload(db, decoded_jwt, org, index_name, owner_account_id)
+
+    filename = file.filename or ""
+    lower = filename.lower()
+    if not lower.endswith(DOCUMENT_EXTENSIONS):
+        raise HTTPException(
+            status_code=400,
+            detail="Only PDF (.pdf), Word (.docx), and text (.txt, .md) files are supported",
+        )
+
+    _require_index_and_namespace(index_name, namespace)
+
+    data = await file.read()
+    if len(data) > MAX_DOCUMENT_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File exceeds the {MAX_DOCUMENT_BYTES // (1024 * 1024)} MB limit",
+        )
+
+    if lower.endswith((".txt", ".md")):
+        if not data.strip():
+            raise HTTPException(status_code=400, detail=NO_TEXT_FOUND)
+        await file.seek(0)
+        upload = file
+        upload_comment = comment
+    else:
+        extractor = _extract_pdf_text if lower.endswith(".pdf") else _extract_docx_text
+        try:
+            text = extractor(data)
+        except Exception:
+            logger.exception("[UPLOAD DOCUMENT] Could not read %s", filename)
+            raise HTTPException(
+                status_code=400,
+                detail="We couldn't read this file. It may be damaged or password-protected.",
+            )
+        if not text.strip():
+            raise HTTPException(status_code=400, detail=NO_TEXT_FOUND)
+
+        stem = filename.rsplit(".", 1)[0] or "document"
+        upload = UploadFile(
+            file=io.BytesIO(text.encode("utf-8")),
+            filename=f"{stem}.txt",
+            headers=Headers({"content-type": "text/plain; charset=utf-8"}),
+        )
+        note = f"Text extracted from {filename}"
+        upload_comment = f"{comment.strip()} ({note})" if comment and comment.strip() else note
+
+    return await _upload_and_log(
+        file=upload,
+        account_id=account_id,
+        decoded_jwt=decoded_jwt,
+        index_name=index_name,
+        namespace=namespace,
+        comment=upload_comment,
+        batch_number=batch_number,
+        db=db,
+        request=request,
+        topic_name=TXT_INGEST_TOPIC,
+        log_prefix="[UPLOAD DOCUMENT]",
     )
