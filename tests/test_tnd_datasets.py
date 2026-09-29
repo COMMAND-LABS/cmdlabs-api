@@ -84,7 +84,7 @@ async def test_attach_appends_a_forecast_tool(authed_client, db: Session, test_o
     assert body["tool"] == {
         "type": "timeSeriesForecast", "name": "forecast_duty_spend",
         "dataset": {"gcsPath": "datasets/duty_spend.csv"},
-        "dateColumn": "month", "targetColumn": "import_value",
+        "dateColumn": "month", "targetColumn": "import_value", "currency": "USD",
         "rate": {"column": "duty_rate", "outputName": "duty_spend"}}
     db.refresh(agent)
     assert agent.config["data"]["tools"] == [body["tool"]]

@@ -137,6 +137,110 @@ async def test_cannot_review_another_orgs_measure(authed_client, db: Session):
     assert m.status == "proposed"
 
 
+async def _cards(client, status="proposed"):
+    resp = await client.get("/api/tariffs/measures", params={"status": status})
+    assert resp.status_code == 200, resp.text
+    return {x["id"]: x for x in resp.json()["measures"]}
+
+
+def _hts_doc(db, org, htsno, description, general="2.5%"):
+    doc = TndSourceDocument(org_id=org.id, source="hts", external_id=f"{htsno}|{general}",
+                            title=f"HTS {htsno}: {description}",
+                            url=f"https://hts.usitc.gov/search?query={htsno}")
+    db.add(doc)
+    db.flush()
+    return doc
+
+
+async def test_cards_show_the_rate_being_replaced(authed_client, db: Session, test_org):
+    # The approved 301 rate on the parent heading, for China, is what changes.
+    _measure(db, test_org, program="section_301", hts="8703", origin="CN", rate="0.075",
+             frm=D(2025, 1, 1))
+    # Not predecessors: another program, rejected, proposed, a later start,
+    # another origin, a more specific code the new measure doesn't cover.
+    _measure(db, test_org, program="mfn", hts="870323", rate="0.025", frm=D(2025, 1, 1))
+    _measure(db, test_org, program="section_301", hts="870323", origin="CN", rate="0.50",
+             status="rejected", frm=D(2025, 6, 1))
+    _measure(db, test_org, program="section_301", hts="870323", origin="CN", rate="0.40",
+             status="proposed", frm=D(2025, 6, 1))
+    _measure(db, test_org, program="section_301", hts="870323", origin="CN", rate="0.30",
+             frm=D(2027, 1, 1))
+    _measure(db, test_org, program="section_301", hts="870323", origin="MX", rate="0.20",
+             frm=D(2025, 1, 1))
+    _measure(db, test_org, program="section_301", hts="87032301", origin="CN", rate="0.35",
+             frm=D(2025, 1, 1))
+    new = _measure(db, test_org, program="section_301", hts="870323", origin="CN",
+                   rate="0.25", frm=D(2026, 9, 1), status="proposed")
+
+    prev = (await _cards(authed_client))[new.id]["previous_rate"]
+    assert prev["rate_type"] == "ad_valorem"
+    assert Decimal(prev["ad_valorem_rate"]) == Decimal("0.075")
+    assert prev["hts_code"] == "8703"
+    assert prev["effective_from"] == "2025-01-01"
+
+    # Once approved it doesn't count as its own predecessor, and a same-code
+    # predecessor beats the parent heading.
+    same = _measure(db, test_org, program="section_301", hts="870323", origin="CN",
+                    rate="0.10", frm=D(2026, 1, 1), to=D(2026, 9, 1))
+    new.status = "approved"
+    db.flush()
+    prev = (await _cards(authed_client, "approved"))[new.id]["previous_rate"]
+    assert Decimal(prev["ad_valorem_rate"]) == Decimal("0.10")
+    assert prev["hts_code"] == "870323"
+    assert (await _cards(authed_client, "approved"))[same.id]["previous_rate"]["hts_code"] == "8703"
+
+
+async def test_cards_resolve_the_product_description(authed_client, db: Session, test_org):
+    _hts_doc(db, test_org, "8544.30.00", "Ignition wiring sets and other wiring sets")
+    _hts_doc(db, test_org, "8703.23.01", "Motor cars, cylinder capacity 1,500-3,000 cc")
+    exact = _measure(db, test_org, hts="85443000", status="proposed")
+    child = _measure(db, test_org, hts="8544300010", status="proposed")      # nearest parent
+    parent = _measure(db, test_org, hts="8703", status="proposed")           # nearest child
+    own = _hts_doc(db, test_org, "9401.61.40", "Seats: upholstered, other")
+    from_doc = _measure(db, test_org, hts="9401", status="proposed", source_document_id=own.id)
+
+    cards = await _cards(authed_client)
+    assert cards[exact.id]["product_description"] == "Ignition wiring sets and other wiring sets"
+    assert cards[child.id]["product_description"] == "Ignition wiring sets and other wiring sets"
+    assert cards[parent.id]["product_description"].startswith("Motor cars")
+    assert cards[from_doc.id]["product_description"] == "Seats: upholstered, other"
+
+
+async def test_cards_have_nulls_when_nothing_matches(authed_client, db: Session, test_org):
+    _hts_doc(db, test_org, "8544.30.00", "Ignition wiring sets")
+    db.add(TndSourceDocument(org_id=test_org.id, source="federal_register",
+                             external_id="2026-1", title="HTS 6109.10.00: not an hts doc",
+                             url="https://example.gov"))
+    db.flush()
+    m = _measure(db, test_org, program="section_301", hts="610910", origin="CN",
+                 status="proposed")
+    everything = _measure(db, test_org, program="ieepa", hts=None, status="proposed")
+    cards = await _cards(authed_client)
+    assert cards[m.id]["previous_rate"] is None
+    assert cards[m.id]["product_description"] is None
+    assert cards[everything.id]["previous_rate"] is None
+    assert cards[everything.id]["product_description"] is None
+
+
+async def test_cards_never_use_another_orgs_rates_or_documents(authed_client, db: Session,
+                                                              test_org):
+    other = Organization(name="Other Co")
+    db.add(other)
+    db.flush()
+    _measure(db, other, program="section_301", hts="8703", origin="CN", rate="0.075",
+             frm=D(2025, 1, 1))
+    _hts_doc(db, other, "8703.23.01", "Other org's cars")
+    theirs = _measure(db, other, program="section_301", hts="870323", origin="CN",
+                      status="proposed")
+    m = _measure(db, test_org, program="section_301", hts="870323", origin="CN",
+                 rate="0.25", frm=D(2026, 9, 1), status="proposed")
+    cards = await _cards(authed_client)
+    assert list(cards) == [m.id]
+    assert theirs.id not in cards
+    assert cards[m.id]["previous_rate"] is None
+    assert cards[m.id]["product_description"] is None
+
+
 # ---------------------------------------------------------------------------
 # Upload Data: historical CSVs for the forecast tool
 # ---------------------------------------------------------------------------
@@ -154,7 +258,7 @@ def test_inspect_the_mock_dataset():
     assert tool_config("datasets/duty_spend.csv", info) == {
         "type": "timeSeriesForecast", "name": "forecast_duty_spend",
         "dataset": {"gcsPath": "datasets/duty_spend.csv"},
-        "dateColumn": "month", "targetColumn": "import_value",
+        "dateColumn": "month", "targetColumn": "import_value", "currency": "USD",
         "rate": {"column": "duty_rate", "outputName": "duty_spend"}}
 
 

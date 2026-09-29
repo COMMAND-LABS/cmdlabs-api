@@ -228,6 +228,12 @@
             "column": { "type": "string", "minLength": 1, "description": "Rate column in the dataset; its last value is the default rate." },
             "outputName": { "type": "string", "minLength": 1, "description": "Name of the derived series in the output, e.g. 'duty_spend'." }
           }
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^([A-Z]{3}|none)$",
+          "default": "USD",
+          "description": "ISO 4217 code the target (and derived series) are measured in, e.g. 'USD'. 'none' when the target is not money (units, kilograms). Omitted means USD. Returned with each forecast so readers see money as money."
         }
       }
     },

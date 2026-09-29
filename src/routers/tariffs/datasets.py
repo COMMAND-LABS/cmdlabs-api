@@ -118,6 +118,8 @@ def tool_config(gcs_path: str, info: dict) -> dict:
         "dataset": {"gcsPath": gcs_path},
         "dateColumn": info["date_column"],
         "targetColumn": info["suggested"]["target_column"],
+        # Duty data is import value and duty in dollars (see the template).
+        "currency": "USD",
     }
     if info["suggested"]["rate_column"]:
         cfg["rate"] = {"column": info["suggested"]["rate_column"], "outputName": "duty_spend"}

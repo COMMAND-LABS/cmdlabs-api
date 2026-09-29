@@ -8,6 +8,7 @@ them. This router is the human half: approve or reject each measure, and look
 up the duty an entry line would pay under the approved ones.
 """
 import datetime as dt
+import re
 from decimal import Decimal
 from typing import Literal
 
@@ -16,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
-from src.db.tnd_models import TndMeasure, TndResearchRun
+from src.db.tnd_models import TndMeasure, TndResearchRun, TndSourceDocument
 from src.deps import auth_dependency, db_dependency, org_dependency
 from src.rate_limit import limiter
 from src.services import tnd_rates
@@ -76,8 +77,25 @@ class MeasureResponse(BaseModel):
     source_document: SourceDocumentSummary | None
 
 
+class PreviousRate(BaseModel):
+    """The approved rate a measure changes (tnd_rates.previous_rate)."""
+    model_config = ConfigDict(from_attributes=True)
+    rate_type: str
+    ad_valorem_rate: Decimal | None
+    specific_rate: Decimal | None
+    specific_unit: str | None
+    hts_code: str | None
+    effective_from: dt.date
+
+
+class MeasureListItem(MeasureResponse):
+    # What changed and for which product, for the review cards.
+    previous_rate: PreviousRate | None = None
+    product_description: str | None = None
+
+
 class MeasureListResponse(BaseModel):
-    measures: list[MeasureResponse]
+    measures: list[MeasureListItem]
     total: int
     counts: dict[str, int]
 
@@ -118,7 +136,64 @@ async def list_measures(
     total = query.count()
     rows = (query.order_by(TndMeasure.effective_from.desc(), TndMeasure.id.desc())
             .offset(offset).limit(limit).all())
-    return MeasureListResponse(measures=rows, total=total, counts=counts)
+
+    # Context for the cards, one query each for the whole page (no N+1).
+    approved = base.filter(TndMeasure.status == "approved").all() if rows else []
+    products = _hts_descriptions(db, org) if rows else {}
+    items = []
+    for m in rows:
+        item = MeasureListItem.model_validate(m)
+        prev = tnd_rates.previous_rate(approved, m)
+        item.previous_rate = PreviousRate.model_validate(prev) if prev else None
+        item.product_description = _product_description(m, products)
+        items.append(item)
+    return MeasureListResponse(measures=items, total=total, counts=counts)
+
+
+_HTS_TITLE = re.compile(r"^\s*HTS\s+([\d.]+)\s*:\s*(.+)$", re.DOTALL)
+
+
+def _parse_hts_title(title: str | None) -> tuple[str, str] | None:
+    """'HTS 8544.30.00: Ignition wiring sets…' -> ('85443000', 'Ignition wiring sets…')."""
+    match = _HTS_TITLE.match(title or "")
+    if not match:
+        return None
+    code, text = tnd_rates.normalize_hts(match.group(1)), match.group(2).strip()
+    return (code, text) if code and text else None
+
+
+def _hts_descriptions(db, org) -> dict[str, str]:
+    """HTS number (digits) -> product description, from this org's 'hts'
+    source documents (the scraper titles them 'HTS <no>: <description>').
+    The newest document wins when a code was fetched more than once."""
+    out: dict[str, str] = {}
+    for (title,) in (db.query(TndSourceDocument.title)
+                     .filter(tenant_predicate(TndSourceDocument, org),
+                             TndSourceDocument.source == "hts")
+                     .order_by(TndSourceDocument.id).all()):
+        parsed = _parse_hts_title(title)
+        if parsed:
+            out[parsed[0]] = parsed[1]
+    return out
+
+
+def _product_description(m: TndMeasure, products: dict[str, str]) -> str | None:
+    """The measure's own HTS document if it came from one; else the code
+    itself, its nearest parent, or its nearest child (a base rate stored at
+    the parent level, e.g. '8703' found via 8703.23.01)."""
+    code = m.hts_code
+    if not code:
+        return None
+    doc = m.source_document
+    if doc is not None and doc.source == "hts" and doc.org_id == m.org_id:
+        parsed = _parse_hts_title(doc.title)
+        if parsed:
+            return parsed[1]
+    for n in range(len(code), 1, -1):
+        if code[:n] in products:
+            return products[code[:n]]
+    children = sorted((c for c in products if c.startswith(code)), key=lambda c: (len(c), c))
+    return products[children[0]] if children else None
 
 
 @router.post("/measures/{measure_id}/review", response_model=MeasureResponse)

@@ -50,6 +50,40 @@ def _specificity(m: TndMeasure) -> tuple:
     return (len(m.hts_code or ""), m.origin_country is not None, m.effective_from, m.id)
 
 
+def best_per_program(candidates, hts: str, origin: str | None) -> dict[str, TndMeasure]:
+    """The winning measure per program among `candidates` for this code and
+    origin (rules 1-3 above). Callers pass measures already filtered to
+    approved, in force and in the right jurisdiction."""
+    best: dict[str, TndMeasure] = {}
+    for m in candidates:
+        if not _matches(m, hts, origin):
+            continue
+        if m.program not in best or _specificity(m) > _specificity(best[m.program]):
+            best[m.program] = m
+    return best
+
+
+def previous_rate(approved: list[TndMeasure], measure: TndMeasure) -> TndMeasure | None:
+    """The approved measure this one changes: same jurisdiction and program,
+    the one that applies to the measure's code (or its nearest parent) and
+    origin under rules 1-3, among measures other than itself that started on
+    or before its effective_from and were still in force the day before
+    (a predecessor that ends the day this one starts still counts).
+
+    `approved` is the org's approved measures, loaded once by the caller."""
+    start = measure.effective_from
+    candidates = [
+        m for m in approved
+        if m.id != measure.id
+        and m.program == measure.program
+        and m.jurisdiction == measure.jurisdiction
+        and m.effective_from <= start
+        and (m.effective_to is None or m.effective_to >= start)
+    ]
+    return best_per_program(candidates, measure.hts_code or "",
+                            measure.origin_country).get(measure.program)
+
+
 def applicable_measures(db: Session, org_id: int, hts_code: str, origin: str | None,
                         on_date: dt.date, jurisdiction: str = "US") -> list[TndMeasure]:
     """One approved measure per program, in force on `on_date` for this line."""
@@ -66,12 +100,7 @@ def applicable_measures(db: Session, org_id: int, hts_code: str, origin: str | N
         )
         .all()
     )
-    best: dict[str, TndMeasure] = {}
-    for m in candidates:
-        if not _matches(m, hts, origin):
-            continue
-        if m.program not in best or _specificity(m) > _specificity(best[m.program]):
-            best[m.program] = m
+    best = best_per_program(candidates, hts, origin)
     # Base rate first, then the additional duties alphabetically: a stable
     # order for the breakdown people read.
     return sorted(best.values(), key=lambda m: (m.program != "mfn", m.program))

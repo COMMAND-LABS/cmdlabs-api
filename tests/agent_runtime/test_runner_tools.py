@@ -118,7 +118,16 @@ async def test_forecast_tool_shape_and_call(wired):
                     "rate_column": "duty_rate", "model": "random_forest", "rate_override": 0.1}
     assert out["dataset"] == "duty_spend.csv"
     assert out["rate"]["output_name"] == "duty_spend"
+    assert out["currency"] == "USD", "money unless the config says otherwise"
     assert wired == [(7, "datasets/duty_spend.csv")], "dataset read from the OWNER's bucket"
+
+
+@pytest.mark.parametrize("configured, returned", [("EUR", "EUR"), ("none", None)])
+async def test_forecast_reports_the_configured_currency(wired, configured, returned):
+    tool = await create_time_series_forecast_tool(
+        tool_config={**FORECAST_CFG, "currency": configured}, account_id=1, db=MagicMock(),
+        **_kwargs(FakeRunner()))
+    assert (await tool.coroutine())["currency"] == returned
 
 
 async def test_forecast_without_rate_offers_no_rate_argument(wired):
@@ -194,12 +203,15 @@ def _config(tools: list) -> dict:
 
 def test_schema_accepts_runner_backed_tools():
     validate_against_schema(_config([FORECAST_CFG, EXEC_CFG]), "agent_config", 4)
+    for currency in ("USD", "none"):
+        validate_against_schema(_config([{**FORECAST_CFG, "currency": currency}]), "agent_config", 4)
 
 
 @pytest.mark.parametrize("bad", [
     {"type": "timeSeriesForecast", "dateColumn": "m", "targetColumn": "t"},          # no dataset
     {**FORECAST_CFG, "name": "Forecast Duty"},                                        # bad tool name
     {**FORECAST_CFG, "rate": {"column": "duty_rate"}},                                # rate needs outputName
+    {**FORECAST_CFG, "currency": "usd"},                                              # ISO code, upper case
     {"type": "codeExecution", "timeoutSeconds": 600},                                 # over the cap
     {"type": "codeExecution", "datasets": [{"gcsPath": "x.csv", "filename": "../x"}]},  # path in filename
 ])

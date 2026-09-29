@@ -69,6 +69,10 @@ async def create_time_series_forecast_tool(
             raise ValueError(f"timeSeriesForecast: '{key}' is required")
     dataset = parse_dataset_ref(tool_config["dataset"])
     rate_cfg = tool_config.get("rate") or None
+    # What the numbers are measured in, so the chat shows "$1.2M" rather than
+    # "1,234,567.89" and the model says dollars. None = not money.
+    currency = tool_config.get("currency", "USD")
+    currency = None if currency == "none" else currency
 
     owner_account_id = kwargs.get("agent_owner_account_id", account_id)
     require_gcs_credential(db, owner_account_id)
@@ -93,6 +97,7 @@ async def create_time_series_forecast_tool(
         except RunnerError as exc:
             return {"error": exc.detail}
         result["dataset"] = dataset.filename
+        result["currency"] = currency
         if rate_cfg and "rate" in result:
             result["rate"]["output_name"] = rate_cfg["outputName"]
         return result
