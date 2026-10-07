@@ -71,7 +71,7 @@ class RoleSummary(BaseModel):
     role: str
     label: str
     module_count: int
-    # What the role opens, as display labels ("Agents", "Tariffs"), so a
+    # What the role opens, as display labels ("Agents", "Knowledge Bases"), so a
     # screen can say "Can use: Agents, Knowledge Bases…" instead of a count.
     # Home and Settings are left out: everybody has them.
     module_labels: List[str] = []

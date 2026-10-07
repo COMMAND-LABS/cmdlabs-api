@@ -81,7 +81,7 @@ async def test_platform_super_admin_do_not_get_the_owners_console(
 
 
 async def test_roles_say_what_they_open_by_name(db: Session, _override_db, team):
-    """A role reads as "Can use: Agents, Tariffs…", not "9 features"."""
+    """A role reads as "Can use: Agents, Knowledge Bases…", not "9 features"."""
     async with client_for(team) as c:
         resp = await c.get(_overview(team.org_id))
     assert resp.status_code == 200, resp.text

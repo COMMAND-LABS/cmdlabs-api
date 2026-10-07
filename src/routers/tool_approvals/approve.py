@@ -10,8 +10,6 @@ Handles:
                                    ingestion (see knowledge_write.py)
   - knowledgeDelete              — removes a document or passages from a KB
                                    (see knowledge_delete.py)
-  - tariffMeasureUpdate          — edits a tnd_measures row
-                                   (see tariff_measure_update.py)
 """
 import base64
 import email as email_lib
@@ -28,7 +26,6 @@ from .models import ApproveToolApprovalResponse
 from src.services.email_dispatch import inject_tracking_pixel, send_ses_html_email
 from .knowledge_delete import execute_knowledge_delete
 from .knowledge_write import execute_knowledge_write
-from .tariff_measure_update import execute_tariff_measure_update
 from ._shared import pending_approval_or_error
 
 logger = logging.getLogger(__name__)
@@ -197,9 +194,6 @@ async def approve_tool_approval(
     if approval.tool_type == "knowledgeDelete":
         message = await execute_knowledge_delete(
             db, approval, account_id=account_id, user_email=str(auth.get("email", "")))
-        return ApproveToolApprovalResponse(id=approval.id, status="approved", message=message)
-    if approval.tool_type == "tariffMeasureUpdate":
-        message = execute_tariff_measure_update(db, approval, account_id=account_id)
         return ApproveToolApprovalResponse(id=approval.id, status="approved", message=message)
 
     # ── Execute the tool ────────────────────────────────────────────────────

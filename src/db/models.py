@@ -1656,7 +1656,3 @@ class EmailCampaignRating(Base):
 # removed to simplify the platform. The separate module is worth recreating if
 # they return: everything in THIS file is either tenant data or org-confined,
 # and a container that belongs to no tenant should not be able to hide among it.
-
-# Tariff-and-duty research tables (migration c7a1d2e3f4b5). Separate module,
-# registered here for the same side-effect reason described above.
-from . import tnd_models  # noqa: E402,F401

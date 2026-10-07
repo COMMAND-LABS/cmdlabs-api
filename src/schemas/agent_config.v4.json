@@ -178,12 +178,6 @@
         },
         {
           "$ref": "#/$defs/knowledgeDeleteTool"
-        },
-        {
-          "$ref": "#/$defs/tariffMeasureSearchTool"
-        },
-        {
-          "$ref": "#/$defs/tariffMeasureUpdateTool"
         }
       ]
     },
@@ -299,26 +293,6 @@
         "provider": { "type": "string", "enum": ["pinecone"] },
         "index": { "type": "string", "minLength": 1 },
         "namespace": { "type": "string", "minLength": 1 },
-        "description": { "type": "string", "minLength": 1 }
-      }
-    },
-    "tariffMeasureSearchTool": {
-      "type": "object",
-      "description": "Read-only lookup of the organization's tariff measures (tnd_measures) by tariff code, origin, program, status or date. Needs the Tariffs module.",
-      "additionalProperties": false,
-      "required": ["type"],
-      "properties": {
-        "type": { "type": "string", "const": "tariffMeasureSearch" },
-        "description": { "type": "string", "minLength": 1 }
-      }
-    },
-    "tariffMeasureUpdateTool": {
-      "type": "object",
-      "description": "Propose an edit to one of the organization's tariff measures (rate, dates, tariff code, origin, description). Always queued for human approval; the measure keeps its review status. Needs the Tariffs module.",
-      "additionalProperties": false,
-      "required": ["type"],
-      "properties": {
-        "type": { "type": "string", "const": "tariffMeasureUpdate" },
         "description": { "type": "string", "minLength": 1 }
       }
     },

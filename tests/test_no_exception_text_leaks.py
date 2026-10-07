@@ -35,7 +35,7 @@ SAFE_EXCEPTION_TYPES = {
     "HTTPException",
     "AccountGcsCredentialMissing",
     "SkillMarkdownError",
-    "DatasetError",          # routers/tariffs/datasets: CSV checks, fixed messages
+    "DatasetError",          # routers/datasets: CSV checks, fixed messages
     "SesSendError",          # built from public_reason (services/email_dispatch)
     "MissingVariablesError",
     "RunnerError",           # runner_client: detail is the runner's own message
@@ -46,7 +46,6 @@ SAFE_EXCEPTION_TYPES = {
     "CredentialDecryptError",
     "LlmInitError",
     "CredentialError",
-    "MeasureEditError",      # services/tnd_measure_edits: edit checks, fixed messages
     "KnowledgeTargetError",  # tools/knowledge_delete: target lookup, fixed messages
 }
 

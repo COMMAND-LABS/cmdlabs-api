@@ -1,5 +1,8 @@
 """
-Historical duty data for the forecast tool: upload a CSV, list what is there.
+Monthly data files for the forecast and code-execution tools: upload a CSV,
+list what is there. Mounted at /api/datasets, gated by the `agents` module
+(modules_registry): uploading data is part of building an agent, and the
+attach route below edits an agent the caller owns.
 
 A CSV lands at datasets/<name>.csv in the UPLOADER's own GCS bucket, which is
 exactly where the timeSeriesForecast / codeExecution tools read an agent
@@ -11,9 +14,9 @@ Monthly data: one row per month, a date column and at least one numeric
 column. The runner needs MIN_ROWS rows to train (runner/runner/forecast.py).
 
 So nobody has to copy JSON or type a storage path, two more routes close the
-loop: GET /datasets/columns reads back a stored file's columns (for the
-forecast ability form's dropdowns), and POST /datasets/attach writes the
-forecast tool straight into an agent the caller owns.
+loop: GET /columns reads back a stored file's columns (for the forecast
+ability form's dropdowns), and POST /attach writes the forecast tool straight
+into an agent the caller owns.
 """
 import asyncio
 import copy
@@ -164,7 +167,7 @@ async def _stored_info(db, account_id: int, path: str) -> dict:
     return _inspect_or_400(data)
 
 
-@router.get("/datasets")
+@router.get("")
 @limiter.limit("30/minute")
 async def list_datasets(db: db_dependency, auth: auth_dependency, org: org_dependency,
                         request: Request):
@@ -175,7 +178,7 @@ async def list_datasets(db: db_dependency, auth: auth_dependency, org: org_depen
     return [o for o in objects if o["path"].lower().endswith(".csv")]
 
 
-@router.post("/datasets", status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED)
 @limiter.limit("20/minute")
 async def upload_dataset(
     db: db_dependency, auth: auth_dependency, org: org_dependency, request: Request,
@@ -208,7 +211,7 @@ async def upload_dataset(
             "tool_config": tool_config(path, info)}
 
 
-@router.get("/datasets/columns")
+@router.get("/columns")
 @limiter.limit("30/minute")
 async def dataset_columns(db: db_dependency, auth: auth_dependency, org: org_dependency,
                           request: Request, path: str = Query(...)):
@@ -225,7 +228,7 @@ class AttachRequest(BaseModel):
     name: str | None = Field(default=None, max_length=64)
 
 
-@router.post("/datasets/attach")
+@router.post("/attach")
 @limiter.limit("10/minute")
 async def attach_dataset(body: AttachRequest, db: db_dependency, auth: auth_dependency,
                          org: org_dependency, request: Request):

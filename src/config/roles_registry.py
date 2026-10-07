@@ -90,9 +90,6 @@ ROLE_LABELS = {
 #   skills      IN  — their own plus 'org'-visible ones. Unlike agents, anybody
 #                     who can see an 'org'-visible skill may edit or delete it
 #                     (routers/skills/update.py).
-#   tariffs     IN  — community members review the duty & tariff research
-#                     agent's findings. That includes APPROVING rates, which
-#                     then drive this org's duty calculations.
 #   courses     IN  — published material is what "serving people" means here
 #   credentials IN  — their OWN API keys (account-scoped: the credentials API
 #                     only ever lists a person's own keys and ones explicitly
@@ -105,7 +102,7 @@ ROLE_LABELS = {
 # `access`, `analytics`, `email_*` may not appear here: those modules show
 # EVERY row in the org (see WHAT THIS FILE CANNOT DO above).
 COMMUNITY_MODULES = ("home", "courses", "agent_chat", "agents", "knowledge_bases",
-                     "prompts", "skills", "tariffs", "credentials")
+                     "prompts", "skills", "credentials")
 
 
 def is_valid(role: str) -> bool:

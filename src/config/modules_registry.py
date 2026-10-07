@@ -62,7 +62,10 @@ MODULES = (
     # it is agent-scoped by construction. Classifying it under knowledge_bases
     # took chat file upload and citation links away from anybody with Agents
     # but not Knowledge Bases.
-    Module("agents", "Agents", ("/api/agents", "/api/tool-approvals", "/api/files")),
+    # /api/datasets is the data files agents read (forecast, code execution)
+    # and the route that attaches one to an agent you own (routers/datasets).
+    Module("agents", "Agents", ("/api/agents", "/api/tool-approvals", "/api/files",
+                                "/api/datasets")),
     # Agent Chat is USING agents someone configured, so it needs the same read
     # and run surface as Agents: listing and reading the agents it may use,
     # streaming a turn (/api/agents/{id}/stream), approving that agent's
@@ -79,9 +82,6 @@ MODULES = (
     Module("contact_lists", "Contact Lists", ("/api/contact-lists",)),
     Module("companies", "Companies", ("/api/companies",)),
     Module("deals", "Deals", ("/api/deals",)),
-    # Duty & tariff updates found by the research agent, their review, and
-    # duty calculated from the approved ones (routers/tariffs).
-    Module("tariffs", "Tariff Updates", ("/api/tariffs",)),
     Module("prompts", "Prompts", ("/api/prompts",)),
     # Agent Skills: SKILL.md-style instruction packages agents load on demand.
     # This key gates the CRUD surface; the runtime side (the system-prompt

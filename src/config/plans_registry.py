@@ -118,7 +118,7 @@ PLAN_MODULES = {
     # user could never add the key a shared agent may ask them for.
     PLAN_FREE: ("home", "courses", "prompts", "credentials", "settings"),
     PLAN_PREMIUM: ("home", "agents", "agent_chat", "contacts", "contact_lists",
-                   "companies", "deals", "tariffs", "prompts", "skills", "knowledge_bases", "access",
+                   "companies", "deals", "prompts", "skills", "knowledge_bases", "access",
                    "credentials", "email_templates", "email_campaigns",
                    "courses", "analytics", "settings"),
 }
