@@ -57,6 +57,10 @@ ORG_CEILING_CHANGE = "org.ceiling_change"
 ORG_RENAME = "org.rename"
 # The owner handed the org to another member. `detail` names both parties.
 ORG_OWNER_TRANSFER = "org.owner_transfer"
+# The org's public sign-in address was set, changed or cleared. `detail`
+# records before -> after. Shown to people who have not signed in, so a change
+# is worth a line, like a rename.
+ORG_SLUG_CHANGE = "org.slug_change"
 
 # Platform super admins joining a tenant in order to read its data. This is
 # what makes "our super admins cannot read your data without appearing in your

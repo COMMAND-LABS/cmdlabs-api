@@ -2,7 +2,9 @@ from datetime import timedelta, datetime, timezone
 import hashlib
 import logging
 import random
+from typing import Optional
 from fastapi import APIRouter, HTTPException, status, Header, Response, BackgroundTasks, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 from jose import jwt
 import os
@@ -11,6 +13,7 @@ from src.routers.auth.background_tasks.record_login import record_login
 from src.routers.auth.background_tasks.send_login_code_email_ses import send_login_code_email_ses
 from src.deps import db_dependency, jwt_dependency
 
+from src.services import organizations as organizations_service
 from src.services.organizations import ensure_membership
 from src.rate_limit import limiter
 
@@ -44,11 +47,36 @@ class RequestCodeBody(BaseModel):
 class VerifyCodeBody(BaseModel):
     email: str
     code: str
+    # The org whose sign-in page (/org/<slug>/login) this came from, if any.
+    # Decides where the session LANDS, never whether it belongs anywhere: see
+    # verify_login_code.
+    org_slug: Optional[str] = None
 
     @field_validator("email")
     @classmethod
     def _normalize_email(cls, v: str) -> str:
         return _canonical_email(v)
+
+    @field_validator("org_slug")
+    @classmethod
+    def _normalize_slug(cls, v: Optional[str]) -> Optional[str]:
+        return organizations_service.normalize_slug(v)
+
+
+class RequestedOrg(BaseModel):
+    """The org named by `org_slug`, and whether this account is in it."""
+    slug: str
+    name: str
+    is_member: bool
+
+
+class VerifyCodeResponse(BaseModel):
+    ok: bool = True
+    # The org the session should act in, set ONLY when they are a member of
+    # the requested org. The UI writes it to the org cookie alongside the jwt.
+    landing_org_id: Optional[int] = None
+    # None when no slug was sent or no org has that address.
+    requested_org: Optional[RequestedOrg] = None
 
 OTP_TTL_MINUTES = 10
 
@@ -184,10 +212,42 @@ async def verify_login_code(body: VerifyCodeBody, db: db_dependency, request: Re
         db.rollback()
         logger.exception("[VERIFY CODE] Could not ensure org membership for account %s", account.id)
 
+    # The org whose sign-in page they used, if any. This decides where they
+    # LAND, never whether they belong: a member is sent into the org and it
+    # becomes their default; anybody else is told so and lands in their own
+    # default. Nothing here joins anyone to anything — that is what
+    # invitations are for.
+    #
+    # Non-fatal, like the membership step above: an address that has since
+    # been cleared must not cost a login the email has just proven.
+    landing_org_id: int | None = None
+    requested_org: RequestedOrg | None = None
+    if body.org_slug:
+        try:
+            org, is_member = organizations_service.membership_for_slug(
+                db, account.id, body.org_slug)
+            if org is not None:
+                requested_org = RequestedOrg(slug=org.slug, name=org.name,
+                                             is_member=is_member)
+                if is_member:
+                    landing_org_id = org.id
+                    if account.default_org_id != org.id:
+                        account.default_org_id = org.id
+                        db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("[VERIFY CODE] Could not resolve org %r for account %s",
+                             body.org_slug, account.id)
+
     ip_address = request.client.host
     token = create_access_token(account.email, account.id, timedelta(days=7))
     background_tasks.add_task(record_login, account.id, ip_address)
 
-    response = Response()
+    # A JSON body rather than the empty Response this used to return: the
+    # org-aware sign-in needs to know where it landed. Every existing caller
+    # ignored the body, so the empty case is a superset.
+    response = JSONResponse(content=VerifyCodeResponse(
+        landing_org_id=landing_org_id, requested_org=requested_org,
+    ).model_dump())
     return _issue_jwt_cookie(response, token)
 

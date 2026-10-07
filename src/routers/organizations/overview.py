@@ -82,6 +82,8 @@ class OrganizationOverviewResponse(BaseModel):
     # --- Identity -------------------------------------------------------
     org_id: int
     name: str
+    # Public sign-in address (/org/<slug>/login), or null when none is set.
+    slug: Optional[str] = None
     is_personal: bool
     created_at: Optional[datetime] = None
 
@@ -164,6 +166,7 @@ def _overview_payload(db, org) -> OrganizationOverviewResponse:
     return OrganizationOverviewResponse(
         org_id=organization.id,
         name=organization.name,
+        slug=organization.slug,
         is_personal=(member_count == 1),
         created_at=organization.created_at,
         read_only=entitlement.read_only,

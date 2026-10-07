@@ -83,7 +83,16 @@ class Account(Base):
     subscription_lapsed_at = Column(DateTime(timezone=True), nullable=True)
     login_otp = Column(String, nullable=True)
     login_otp_expires_at = Column(DateTime(timezone=True), nullable=True)
-    # Which org this account lands in when no active-org cookie is present.
+    # Which org this account lands in when no active-org cookie is present:
+    # THE ORG THEY LAST CHOSE. Written by the switcher (PUT
+    # /organizations/{id}/active), by signing in through an org's own
+    # /org/<slug>/login, and first set by ensure_membership.
+    #
+    # It used to be written only when NULL, which pinned every account to the
+    # first org it ever joined. Switching was a cookie that login clears, so
+    # anyone who worked in a second org was dropped back into the first one at
+    # every sign-in with no way to change it.
+    #
     # Nullable only so the schema tolerates an account created before its
     # membership exists (see services/organizations.ensure_membership).
     default_org_id = Column(Integer, ForeignKey('organizations.id', ondelete='SET NULL'),
@@ -139,15 +148,20 @@ class Organization(Base):
     reason visibility depended on anything besides org_id. Migration
     e3f4a5b6c7d8 split the orgs apart and f4a5b6c7d8e9 dropped the column.
 
-    NO SLUG, AND NO SPECIAL ORG. Organizations used to carry an immutable
-    public `slug`, and the one whose slug was 'root' was the platform's own —
-    the home of catalog content and the org super admins had to be placed in to
-    work. Both jobs are gone: super admins bypass the module ceiling wherever
-    they are, and publishing became a Space (itself since removed). An id
-    identifies an org in every
-    route, so the slug was a permanent public name carrying squatting and
-    link-stability consequences that nothing needed. Cheap to reintroduce;
-    impossible to withdraw once links point at it.
+    NO SPECIAL ORG. Organizations used to carry an immutable public `slug`,
+    and the one whose slug was 'root' was the platform's own — the home of
+    catalog content and the org super admins had to be placed in to work. Both
+    jobs are gone: super admins bypass the module ceiling wherever they are,
+    and publishing became a Space (itself since removed). An id identifies an
+    org in every route, and migration f4a5b6c7d8f0 dropped that slug.
+
+    THE SLUG THAT EXISTS NOW IS AN ADDRESS, NOT AN IDENTITY. `slug` is
+    optional, owner-chosen and mutable (migration a7c3e9f1b2d4). It exists so
+    an org can hand its people /org/<slug>/login: a sign-in page that shows
+    the org's name and lands a MEMBER in it. Nothing else resolves it.
+    Personal workspaces are never assigned one, `is_personal` does not depend
+    on it, and every route still keys on `id` — so changing or clearing it
+    breaks links and nothing else. Rules: services/organizations.set_slug.
 
     THE CEILING IS ALWAYS A PLAN, and `pinned_plan` is the only thing stored
     about it. Which modules this org may use at all is
@@ -162,6 +176,9 @@ class Organization(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
+    # Public sign-in address, or NULL. See the docstring; the rules live in
+    # services/organizations (SLUG_RE, RESERVED_SLUGS, set_slug).
+    slug = Column(String(63), nullable=True)
     owner_account_id = Column(Integer, ForeignKey('accounts.id', ondelete='SET NULL'),
                               nullable=True, index=True)
     # The plan this org gets NO MATTER WHAT ITS OWNER PAYS. NULL — the normal
@@ -196,6 +213,7 @@ class Organization(Base):
         # without a sentinel value standing in for it.
         CheckConstraint("pinned_plan IN ('free','premium')",
                         name='ck_org_pinned_plan'),
+        UniqueConstraint('slug', name='uq_organizations_slug'),
     )
 
     owner = relationship('Account', foreign_keys=[owner_account_id])

@@ -38,6 +38,7 @@ fails.
 
 """
 import logging
+import re
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -275,3 +276,128 @@ def _create_personal_org(db: Session, account: Account) -> Organization:
 
 
 
+
+
+# ---------------------------------------------------------------------------
+# Public address (slug)
+# ---------------------------------------------------------------------------
+#
+# An org MAY have a slug, so that /org/<slug>/login can show its name and land
+# a member in it. It is an address and nothing more: every route still keys on
+# the id, personal workspaces are never assigned one, and the owner can change
+# or clear it. The earlier, immutable slug and why it went: migration
+# f4a5b6c7d8f0.
+
+SLUG_MIN_LEN = 3
+SLUG_MAX_LEN = 63
+# Lowercase letters, digits and hyphens, never a hyphen at either end.
+SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$")
+
+# Route segments and words that would mislead as an org's public address.
+# Reserved outright, because the address is shown to people who have not
+# signed in and have no other way to tell our pages from an org's.
+RESERVED_SLUGS = frozenset({
+    "login", "signup", "sign-in", "sign-up", "logout", "register",
+    "admin", "api", "app", "dashboard", "invite", "invitations",
+    "org", "orgs", "organization", "organizations",
+    "pricing", "settings", "billing", "account", "accounts", "me", "mine",
+    "new", "by-slug", "www", "support", "help", "docs", "blog", "about",
+    "resources", "static", "public", "root",
+    "cmdlabs", "command-labs", "commandlabs",
+})
+
+
+class SlugError(ValueError):
+    """An address the owner may not have. The message is written for them."""
+
+
+class SlugTakenError(SlugError):
+    """Another org already holds this address."""
+
+
+def normalize_slug(raw: str | None) -> str | None:
+    """Trim and lowercase; an empty value means "no address"."""
+    if raw is None:
+        return None
+    value = raw.strip().lower()
+    return value or None
+
+
+def validate_slug(slug: str) -> None:
+    """Raise SlugError unless `slug` (already normalized) is one we allow."""
+    if len(slug) < SLUG_MIN_LEN:
+        raise SlugError(
+            f"That address is too short ({SLUG_MIN_LEN} characters minimum).")
+    if len(slug) > SLUG_MAX_LEN:
+        raise SlugError(
+            f"That address is too long ({SLUG_MAX_LEN} characters max).")
+    if not SLUG_RE.fullmatch(slug):
+        raise SlugError("Use lowercase letters, digits and hyphens, starting "
+                        "and ending with a letter or digit.")
+    if slug.isdigit():
+        # An all-digit address reads as an id, and ids are how every other
+        # route names an org.
+        raise SlugError("An address needs at least one letter.")
+    if slug in RESERVED_SLUGS:
+        raise SlugError("That address is reserved.")
+
+
+def find_by_slug(db: Session, slug: str) -> Organization | None:
+    return db.query(Organization).filter(Organization.slug == slug).first()
+
+
+def set_slug(db: Session, org: Organization, slug: str | None, *,
+             actor_account_id: int) -> Organization:
+    """Set, change or clear an org's public address. Commits.
+
+    Raises SlugError for anything the owner can fix — shape, reserved words —
+    and SlugTakenError when another org already holds the address.
+    """
+    slug = normalize_slug(slug)
+    if slug is not None:
+        validate_slug(slug)
+        taken = (db.query(Organization.id)
+                   .filter(Organization.slug == slug,
+                           Organization.id != org.id)
+                   .first())
+        if taken:
+            raise SlugTakenError("That address is already taken.")
+
+    before = org.slug
+    if before == slug:
+        return org
+
+    org.slug = slug
+    audit.record_org_change(
+        db, event_type=audit.ORG_SLUG_CHANGE, org_id=org.id,
+        detail=f"{before!r} -> {slug!r}",
+        actor_account_id=actor_account_id,
+    )
+    try:
+        db.commit()
+    except IntegrityError:
+        # Two owners raced for the same address between the check above and
+        # the commit; uq_organizations_slug picked a winner and this one lost.
+        db.rollback()
+        raise SlugTakenError("That address is already taken.")
+    db.refresh(org)
+    return org
+
+
+def membership_for_slug(db: Session, account_id: int,
+                        slug: str) -> tuple[Organization | None, bool]:
+    """The org at `slug`, and whether `account_id` is a member of it.
+
+    (None, False) when no org has that address. Membership is the ONLY
+    question asked here; nothing joins anybody to anything.
+    """
+    org = find_by_slug(db, slug)
+    if org is None:
+        return None, False
+    is_member = (
+        db.query(OrganizationMember.id)
+          .filter(OrganizationMember.org_id == org.id,
+                  OrganizationMember.account_id == account_id)
+          .first()
+    ) is not None
+    return org, is_member

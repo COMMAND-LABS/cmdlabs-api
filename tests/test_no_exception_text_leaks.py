@@ -47,6 +47,8 @@ SAFE_EXCEPTION_TYPES = {
     "LlmInitError",
     "CredentialError",
     "KnowledgeTargetError",  # tools/knowledge_delete: target lookup, fixed messages
+    "SlugError",             # services/organizations: address rules, fixed messages
+    "SlugTakenError",        # ditto; the subclass raised for a 409
 }
 
 
