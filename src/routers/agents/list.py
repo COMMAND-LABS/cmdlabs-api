@@ -8,7 +8,7 @@ so nothing appears in the list that then 404s when opened.
 """
 from fastapi import APIRouter, Request
 from typing import List
-from src.deps import org_dependency, db_dependency, jwt_dependency, account_id_from_claims
+from src.deps import org_dependency, db_dependency, auth_dependency, account_id_from_claims
 from sqlalchemy import or_
 from src.db.models import Agent
 from src.services.agent_access import get_accessible_agent_ids
@@ -21,7 +21,7 @@ router = APIRouter()
 @limiter.limit("30/minute")
 async def list_agents(
     db: db_dependency,
-    jwt: jwt_dependency,
+    auth: auth_dependency,
     org: org_dependency,
     request: Request
 ):
@@ -30,7 +30,7 @@ async def list_agents(
     Each item carries ``is_owner`` so the UI can offer edit/delete/share on
     owned agents only.
     """
-    account_id = account_id_from_claims(jwt)
+    account_id = account_id_from_claims(auth)
     shared_ids = get_accessible_agent_ids(db, account_id, org_id=org.org_id)
 
     agents = (
