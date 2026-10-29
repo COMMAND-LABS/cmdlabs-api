@@ -24,6 +24,8 @@ async def fetch_embedding(token: str, prompt: str):
         async with session.post(
             url, json=payload, headers=headers, cookies=cookies
         ) as response:
+            # Fail loudly on 401s etc. instead of a KeyError on 'embedding'.
+            response.raise_for_status()
             result = await response.json()
             embedding = result['embedding']
 
